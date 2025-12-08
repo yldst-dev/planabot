@@ -1,0 +1,297 @@
+use crate::bot::HandlerResult;
+use crate::urlchanger::link_utils::{
+    contains_instagram_link, contains_music_link, contains_x_link, convert_instagram_links,
+    convert_x_links, extract_music_links,
+};
+use log::{error, warn};
+use teloxide::dispatching::DpHandlerDescription;
+use teloxide::prelude::*;
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+
+pub fn url_handlers<B>() -> Handler<'static, DependencyMap, HandlerResult, DpHandlerDescription>
+where
+    B: Requester + Clone + Send + Sync + 'static,
+    B::Err: Send + Sync + 'static,
+    <B as Requester>::GetUpdates: Send,
+    <B as Requester>::GetChatMember: Send,
+{
+    Update::filter_message()
+        .branch(
+            dptree::filter(|msg: Message| {
+                msg.text().is_some() && contains_music_link(msg.text().unwrap())
+            })
+            .endpoint(handle_music_links::<B>),
+        )
+        .branch(
+            dptree::filter(|msg: Message| {
+                msg.text().is_some() && contains_x_link(msg.text().unwrap())
+            })
+            .endpoint(handle_x_links::<B>),
+        )
+        .branch(
+            dptree::filter(|msg: Message| {
+                msg.text().is_some() && contains_instagram_link(msg.text().unwrap())
+            })
+            .endpoint(handle_instagram_links::<B>),
+        )
+}
+
+pub async fn handle_music_links<B>(bot: B, msg: Message) -> HandlerResult
+where
+    B: Requester + Send + Sync + 'static,
+    B::Err: Send + Sync + 'static,
+    <B as Requester>::GetChatMember: Send,
+{
+    let text = msg.text().unwrap_or("");
+    let links = extract_music_links(text);
+
+    if links.is_empty() {
+        return Ok(());
+    }
+
+    let chat_member = match bot
+        .get_chat_member(msg.chat.id, bot.get_me().await?.id)
+        .await
+    {
+        Ok(member) => member,
+        Err(e) => {
+            error!("관리자 권한 확인 중 오류 발생: {:?}", e);
+            return handle_without_admin_rights(&bot, &msg, &links).await;
+        }
+    };
+
+    if chat_member.kind.is_privileged() {
+        handle_with_admin_rights(&bot, &msg, &links).await
+    } else {
+        handle_without_admin_rights(&bot, &msg, &links).await
+    }
+}
+
+async fn handle_with_admin_rights<B>(
+    bot: &B,
+    msg: &Message,
+    links: &[(String, String)],
+) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: Send + Sync + 'static,
+{
+    if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
+        warn!("메시지 삭제 실패: {:?}", e);
+        return handle_without_admin_rights(bot, msg, links).await;
+    }
+
+    let username = display_name(msg);
+    let mut cleaned_text = msg.text().unwrap_or("").to_string();
+
+    for (original, cleaned) in links {
+        cleaned_text = cleaned_text.replace(original, cleaned);
+    }
+
+    bot.send_message(msg.chat.id, format!("{}: {}", username, cleaned_text))
+        .await?;
+
+    Ok(())
+}
+
+async fn handle_without_admin_rights<B>(
+    bot: &B,
+    msg: &Message,
+    links: &[(String, String)],
+) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: Send + Sync + 'static,
+{
+    let mut keyboard = Vec::new();
+
+    for (i, (_, cleaned)) in links.iter().enumerate() {
+        match reqwest::Url::parse(cleaned) {
+            Ok(url) => {
+                let row = vec![InlineKeyboardButton::url(
+                    format!("정리된 링크 #{}", i + 1),
+                    url,
+                )];
+                keyboard.push(row);
+            }
+            Err(e) => warn!("URL 파싱 오류: {}, URL: {}", e, cleaned),
+        }
+    }
+
+    if keyboard.is_empty() {
+        return Ok(());
+    }
+
+    let markup = InlineKeyboardMarkup::new(keyboard);
+
+    bot.send_message(msg.chat.id, "추적 파라미터가 제거된 링크:")
+        .reply_to_message_id(msg.id)
+        .reply_markup(markup)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn handle_x_links<B>(bot: B, msg: Message) -> HandlerResult
+where
+    B: Requester + Send + Sync + 'static,
+    B::Err: Send + Sync + 'static,
+    <B as Requester>::GetChatMember: Send,
+{
+    let text = msg.text().unwrap_or("");
+    let links = convert_x_links(text);
+
+    if links.is_empty() {
+        return Ok(());
+    }
+
+    let chat_member = match bot
+        .get_chat_member(msg.chat.id, bot.get_me().await?.id)
+        .await
+    {
+        Ok(member) => member,
+        Err(e) => {
+            error!("관리자 권한 확인 중 오류 발생(X): {:?}", e);
+            return handle_x_without_admin(&bot, &msg, &links).await;
+        }
+    };
+
+    if chat_member.kind.is_privileged() {
+        handle_x_with_admin(&bot, &msg, &links).await
+    } else {
+        handle_x_without_admin(&bot, &msg, &links).await
+    }
+}
+
+async fn handle_x_with_admin<B>(bot: &B, msg: &Message, links: &[(String, String)]) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: Send + Sync + 'static,
+{
+    if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
+        warn!("X 메시지 삭제 실패: {:?}", e);
+        return handle_x_without_admin(bot, msg, links).await;
+    }
+
+    let username = display_name(msg);
+    let mut converted_text = msg.text().unwrap_or("").to_string();
+    for (original, converted) in links {
+        converted_text = converted_text.replace(original, converted);
+    }
+
+    bot.send_message(msg.chat.id, format!("{}: {}", username, converted_text))
+        .await?;
+
+    Ok(())
+}
+
+async fn handle_x_without_admin<B>(
+    bot: &B,
+    msg: &Message,
+    links: &[(String, String)],
+) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: Send + Sync + 'static,
+{
+    let mut converted_text = msg.text().unwrap_or("").to_string();
+    for (original, converted) in links {
+        converted_text = converted_text.replace(original, converted);
+    }
+
+    bot.send_message(msg.chat.id, format!("임베드용 링크:\n{}", converted_text))
+        .reply_to_message_id(msg.id)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn handle_instagram_links<B>(bot: B, msg: Message) -> HandlerResult
+where
+    B: Requester + Send + Sync + 'static,
+    B::Err: Send + Sync + 'static,
+    <B as Requester>::GetChatMember: Send,
+{
+    let text = msg.text().unwrap_or("");
+    let links = convert_instagram_links(text);
+
+    if links.is_empty() {
+        return Ok(());
+    }
+
+    let chat_member = match bot
+        .get_chat_member(msg.chat.id, bot.get_me().await?.id)
+        .await
+    {
+        Ok(member) => member,
+        Err(e) => {
+            error!("관리자 권한 확인 중 오류 발생(Instagram): {:?}", e);
+            return handle_instagram_without_admin(&bot, &msg, &links).await;
+        }
+    };
+
+    if chat_member.kind.is_privileged() {
+        handle_instagram_with_admin(&bot, &msg, &links).await
+    } else {
+        handle_instagram_without_admin(&bot, &msg, &links).await
+    }
+}
+
+async fn handle_instagram_with_admin<B>(
+    bot: &B,
+    msg: &Message,
+    links: &[(String, String)],
+) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: Send + Sync + 'static,
+{
+    if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
+        warn!("Instagram 메시지 삭제 실패: {:?}", e);
+        return handle_instagram_without_admin(bot, msg, links).await;
+    }
+
+    let username = display_name(msg);
+    let mut converted_text = msg.text().unwrap_or("").to_string();
+    for (original, converted) in links {
+        converted_text = converted_text.replace(original, converted);
+    }
+
+    bot.send_message(msg.chat.id, format!("{}: {}", username, converted_text))
+        .await?;
+
+    Ok(())
+}
+
+async fn handle_instagram_without_admin<B>(
+    bot: &B,
+    msg: &Message,
+    links: &[(String, String)],
+) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: Send + Sync + 'static,
+{
+    let mut converted_text = msg.text().unwrap_or("").to_string();
+    for (original, converted) in links {
+        converted_text = converted_text.replace(original, converted);
+    }
+
+    bot.send_message(msg.chat.id, format!("임베드용 링크:\n{}", converted_text))
+        .reply_to_message_id(msg.id)
+        .await?;
+
+    Ok(())
+}
+
+fn display_name(msg: &Message) -> String {
+    if let Some(user) = msg.from() {
+        if let Some(username) = &user.username {
+            username.to_string()
+        } else {
+            user.first_name.clone()
+        }
+    } else {
+        "Unknown".to_string()
+    }
+}

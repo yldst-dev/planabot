@@ -1,0 +1,13 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Artifacts
+Cargo.lock
+*.log
+
+# Env / secrets
+.env
+
+# OS
+.DS_Store

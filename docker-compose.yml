@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  planabot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: planabot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./.env:/app/.env:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
