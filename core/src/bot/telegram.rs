@@ -70,7 +70,7 @@ where
             Ok(fallback.await?)
         }
         Err(err) if err.to_string().to_lowercase().contains("message thread not found") => {
-            let fallback = apply_send_options::<B>(reply_in_chat(bot, msg, text), &opts);
+            let fallback = apply_send_options::<B>(reply_in_chat(bot, msg, text.clone()), &opts);
             match fallback.await {
                 Ok(message) => Ok(message),
                 Err(err) if err.to_string().contains("message to be replied not found") => {
