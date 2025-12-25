@@ -3,15 +3,19 @@ name = "planabot"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "planabot"
+path = "core/src/main.rs"
+
 [dependencies]
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.11", default-features = false, features = ["json", "gzip", "brotli", "deflate", "rustls-tls"] }
-teloxide = { version = "0.12", default-features = false, features = ["macros", "ctrlc_handler", "rustls"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "gzip", "brotli", "deflate", "rustls-tls"] }
+teloxide = { version = "0.17", default-features = false, features = ["macros", "ctrlc_handler", "rustls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs"] }
 regex = "1"
 once_cell = "1"
 dotenvy = "0.15"

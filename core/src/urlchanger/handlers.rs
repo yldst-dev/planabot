@@ -1,17 +1,18 @@
-use crate::bot::HandlerResult;
+use crate::bot::{HandlerResult, SendOptions, send_reply_with_fallback, send_in_thread};
 use crate::urlchanger::link_utils::{
-    contains_instagram_link, contains_music_link, contains_x_link, convert_instagram_links,
-    convert_x_links, extract_music_links,
+    LinkConversion, contains_instagram_link, contains_music_link, contains_x_link,
+    convert_instagram_links, convert_x_links, extract_music_links,
 };
 use log::{error, warn};
 use teloxide::dispatching::DpHandlerDescription;
 use teloxide::prelude::*;
+use teloxide::sugar::request::RequestLinkPreviewExt;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
 
-pub fn url_handlers<B>() -> Handler<'static, DependencyMap, HandlerResult, DpHandlerDescription>
+pub fn url_handlers<B>() -> Handler<'static, HandlerResult, DpHandlerDescription>
 where
     B: Requester + Clone + Send + Sync + 'static,
-    B::Err: Send + Sync + 'static,
+    B::Err: std::error::Error + Send + Sync + 'static,
     <B as Requester>::GetUpdates: Send,
     <B as Requester>::GetChatMember: Send,
 {
@@ -39,7 +40,7 @@ where
 pub async fn handle_music_links<B>(bot: B, msg: Message) -> HandlerResult
 where
     B: Requester + Send + Sync + 'static,
-    B::Err: Send + Sync + 'static,
+    B::Err: std::error::Error + Send + Sync + 'static,
     <B as Requester>::GetChatMember: Send,
 {
     let text = msg.text().unwrap_or("");
@@ -88,8 +89,7 @@ where
         cleaned_text = cleaned_text.replace(original, cleaned);
     }
 
-    bot.send_message(msg.chat.id, format!("{}: {}", username, cleaned_text))
-        .await?;
+    send_in_thread(bot, msg, format!("{}: {}", username, cleaned_text)).await?;
 
     Ok(())
 }
@@ -124,10 +124,16 @@ where
 
     let markup = InlineKeyboardMarkup::new(keyboard);
 
-    bot.send_message(msg.chat.id, "추적 파라미터가 제거된 링크:")
-        .reply_to_message_id(msg.id)
-        .reply_markup(markup)
-        .await?;
+    send_reply_with_fallback(
+        bot,
+        msg,
+        "추적 파라미터가 제거된 링크:",
+        SendOptions {
+            reply_markup: Some(markup),
+            ..SendOptions::default()
+        },
+    )
+    .await?;
 
     Ok(())
 }
@@ -135,7 +141,7 @@ where
 pub async fn handle_x_links<B>(bot: B, msg: Message) -> HandlerResult
 where
     B: Requester + Send + Sync + 'static,
-    B::Err: Send + Sync + 'static,
+    B::Err: std::error::Error + Send + Sync + 'static,
     <B as Requester>::GetChatMember: Send,
 {
     let text = msg.text().unwrap_or("");
@@ -163,7 +169,7 @@ where
     }
 }
 
-async fn handle_x_with_admin<B>(bot: &B, msg: &Message, links: &[(String, String)]) -> HandlerResult
+async fn handle_x_with_admin<B>(bot: &B, msg: &Message, links: &[LinkConversion]) -> HandlerResult
 where
     B: Requester + ?Sized,
     B::Err: Send + Sync + 'static,
@@ -175,11 +181,14 @@ where
 
     let username = display_name(msg);
     let mut converted_text = msg.text().unwrap_or("").to_string();
-    for (original, converted) in links {
-        converted_text = converted_text.replace(original, converted);
+    for link in links {
+        converted_text = converted_text.replace(&link.original, &link.converted);
     }
 
-    bot.send_message(msg.chat.id, format!("{}: {}", username, converted_text))
+    let disable_preview = links.iter().any(|l| l.disable_preview);
+
+    send_in_thread(bot, msg, format!("{}: {}", username, converted_text))
+        .disable_link_preview(disable_preview)
         .await?;
 
     Ok(())
@@ -188,20 +197,29 @@ where
 async fn handle_x_without_admin<B>(
     bot: &B,
     msg: &Message,
-    links: &[(String, String)],
+    links: &[LinkConversion],
 ) -> HandlerResult
 where
     B: Requester + ?Sized,
     B::Err: Send + Sync + 'static,
 {
     let mut converted_text = msg.text().unwrap_or("").to_string();
-    for (original, converted) in links {
-        converted_text = converted_text.replace(original, converted);
+    for link in links {
+        converted_text = converted_text.replace(&link.original, &link.converted);
     }
 
-    bot.send_message(msg.chat.id, format!("임베드용 링크:\n{}", converted_text))
-        .reply_to_message_id(msg.id)
-        .await?;
+    let disable_preview = links.iter().any(|l| l.disable_preview);
+
+    send_reply_with_fallback(
+        bot,
+        msg,
+        format!("임베드용 링크:\n{}", converted_text),
+        SendOptions {
+            disable_preview: Some(disable_preview),
+            ..SendOptions::default()
+        },
+    )
+    .await?;
 
     Ok(())
 }
@@ -209,7 +227,7 @@ where
 pub async fn handle_instagram_links<B>(bot: B, msg: Message) -> HandlerResult
 where
     B: Requester + Send + Sync + 'static,
-    B::Err: Send + Sync + 'static,
+    B::Err: std::error::Error + Send + Sync + 'static,
     <B as Requester>::GetChatMember: Send,
 {
     let text = msg.text().unwrap_or("");
@@ -257,8 +275,7 @@ where
         converted_text = converted_text.replace(original, converted);
     }
 
-    bot.send_message(msg.chat.id, format!("{}: {}", username, converted_text))
-        .await?;
+    send_in_thread(bot, msg, format!("{}: {}", username, converted_text)).await?;
 
     Ok(())
 }
@@ -277,15 +294,19 @@ where
         converted_text = converted_text.replace(original, converted);
     }
 
-    bot.send_message(msg.chat.id, format!("임베드용 링크:\n{}", converted_text))
-        .reply_to_message_id(msg.id)
-        .await?;
+    send_reply_with_fallback(
+        bot,
+        msg,
+        format!("임베드용 링크:\n{}", converted_text),
+        SendOptions::default(),
+    )
+    .await?;
 
     Ok(())
 }
 
 fn display_name(msg: &Message) -> String {
-    if let Some(user) = msg.from() {
+    if let Some(user) = msg.from.as_ref() {
         if let Some(username) = &user.username {
             username.to_string()
         } else {

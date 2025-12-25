@@ -7,7 +7,7 @@ WORKDIR /app
 
 # 캐시 최적화를 위해 먼저 manifest 복사
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+COPY core/src ./core/src
 
 # 릴리즈 빌드
 RUN cargo build --release

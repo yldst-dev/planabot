@@ -1,5 +1,6 @@
 # Rust
 /target
+/core/target
 **/*.rs.bk
 
 # Artifacts
@@ -8,6 +9,13 @@ Cargo.lock
 
 # Env / secrets
 .env
+
+# planabrain data
+/planabrain/.planabrain
+
+# planabrain build/deps
+/planabrain/dist
+/planabrain/node_modules
 
 # OS
 .DS_Store

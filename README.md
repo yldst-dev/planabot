@@ -11,7 +11,7 @@ TELEGRAM_API_TOKEN=123456:ABC-YourRealToken
 
 2) 실행
 ```bash
-cd eyetracker-rs
+cd planabot
 cargo run --release
 ```
 

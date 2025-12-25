@@ -2,6 +2,13 @@ use log::warn;
 use regex::Regex;
 use url::Url;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkConversion {
+    pub original: String,
+    pub converted: String,
+    pub disable_preview: bool,
+}
+
 pub fn contains_music_link(text: &str) -> bool {
     let patterns = [
         r"https?://(?:www\.)?youtu(?:\.be|be\.com)/\S+",
@@ -17,7 +24,7 @@ pub fn contains_music_link(text: &str) -> bool {
 }
 
 pub fn contains_x_link(text: &str) -> bool {
-    let pattern = r"https?://(?:www\.)?(?:x|twitter)\.com/\S+";
+    let pattern = r"\.?https?://(?:www\.)?(?:x|twitter)\.com/\S+";
     Regex::new(pattern)
         .map(|re| re.is_match(text))
         .unwrap_or(false)
@@ -95,20 +102,31 @@ pub fn extract_music_links(text: &str) -> Vec<(String, String)> {
     links
 }
 
-pub fn convert_x_links(text: &str) -> Vec<(String, String)> {
-    let pattern = r"(https?://(?:www\.)?(?:x|twitter)\.com/\S+)";
+pub fn convert_x_links(text: &str) -> Vec<LinkConversion> {
+    // capture optional dot prefix to allow opt-out of previews (e.g., ".https://x.com/...")
+    let pattern = r"(\.?)(https?://(?:www\.)?(?:x|twitter)\.com/\S+)";
     let mut links = Vec::new();
 
     if let Ok(re) = Regex::new(pattern) {
         for cap in re.captures_iter(text) {
-            if let Some(m) = cap.get(1) {
-                let original_url = m.as_str();
+            let dot_prefix = cap.get(1).map(|m| m.as_str() == ".").unwrap_or(false);
+            if let Some(url_match) = cap.get(2) {
+                let original_url = url_match.as_str();
                 match Url::parse(original_url) {
                     Ok(mut parsed) => {
                         parsed.set_host(Some("fxtwitter.com")).ok();
                         parsed.set_query(None);
                         parsed.set_fragment(None);
-                        links.push((original_url.to_string(), parsed.to_string()));
+                        let original_in_text = if dot_prefix {
+                            format!(".{}", original_url)
+                        } else {
+                            original_url.to_string()
+                        };
+                        links.push(LinkConversion {
+                            original: original_in_text,
+                            converted: parsed.to_string(),
+                            disable_preview: dot_prefix,
+                        });
                     }
                     Err(e) => warn!("X 링크 파싱 실패: {}", e),
                 }
@@ -181,9 +199,27 @@ mod tests {
         let pairs = convert_x_links(text);
         assert_eq!(pairs.len(), 1);
         assert_eq!(
-            pairs[0].1,
+            pairs[0].converted,
             "https://fxtwitter.com/lettuce9094/status/1997610286262718819"
         );
+        assert!(!pairs[0].disable_preview);
+        assert_eq!(
+            pairs[0].original,
+            "https://x.com/lettuce9094/status/1997610286262718819?s=20"
+        );
+    }
+
+    #[test]
+    fn test_convert_x_links_with_dot_prefix_disables_preview_and_strips_dot() {
+        let text = ".https://x.com/user/status/12345?s=99";
+        let pairs = convert_x_links(text);
+        assert_eq!(pairs.len(), 1);
+        assert!(pairs[0].disable_preview);
+        assert_eq!(
+            pairs[0].converted,
+            "https://fxtwitter.com/user/status/12345"
+        );
+        assert_eq!(pairs[0].original, ".https://x.com/user/status/12345?s=99");
     }
 
     #[test]

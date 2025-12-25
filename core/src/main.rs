@@ -1,6 +1,7 @@
 mod bot;
 mod config;
 mod hitomi;
+mod planabrain;
 mod urlchanger;
 
 use anyhow::Result;
