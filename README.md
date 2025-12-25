@@ -45,6 +45,7 @@ cargo run --release
 - `PLANABRAIN_GEMINI_EMBEDDING_MODEL` (기본 `gemini-embedding-001`)
 - `PLANABRAIN_INDEX_PATH` (기본 `.planabrain/index.json`)
 - `PLANABOT_GROUPS_PATH` (기본 `.planabot/groups.json`): 봇이 참여한 그룹 채팅 ID 저장 경로
+- `PLANABOT_PLANABRAIN_REPLIES_PATH` (기본 `.planabot/planabrain_replies.json`): planabrain 답변 ID 저장 경로
 
 ## 빌드 산출물
 - 릴리즈 바이너리: `target/release/planabot`

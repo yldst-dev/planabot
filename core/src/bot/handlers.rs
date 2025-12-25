@@ -152,7 +152,7 @@ where
             SendOptions::default(),
         )
         .await?;
-        state.record_planabrain_reply(&sent);
+        state.record_planabrain_reply(&sent).await;
         return Ok(());
     }
 
@@ -182,7 +182,7 @@ where
             let reply = planabrain::truncate_message(answer.trim(), 4000);
             let sent =
                 send_reply_with_fallback(&bot, &msg, reply, SendOptions::default()).await?;
-            state.record_planabrain_reply(&sent);
+            state.record_planabrain_reply(&sent).await;
         }
         Err(err) => {
             error!("planabrain 응답 실패: {}", err);
@@ -193,7 +193,7 @@ where
                 SendOptions::default(),
             )
             .await?;
-            state.record_planabrain_reply(&sent);
+            state.record_planabrain_reply(&sent).await;
         }
     }
 

@@ -4,6 +4,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::warn;
+use serde::{Deserialize, Serialize};
 use teloxide::types::{ChatId, ChatKind, Message, MessageId, PublicChatKind};
 use tokio::fs;
 
@@ -43,6 +44,33 @@ impl PlanabrainReplyTracker {
             self.items.pop_front();
         }
     }
+
+    fn from_records(max: usize, records: Vec<PlanabrainReplyRecord>) -> Self {
+        let mut items = VecDeque::new();
+        for record in records {
+            items.push_back((ChatId(record.chat_id), MessageId(record.message_id)));
+        }
+        while items.len() > max {
+            items.pop_front();
+        }
+        Self { max, items }
+    }
+
+    fn records(&self) -> Vec<PlanabrainReplyRecord> {
+        self.items
+            .iter()
+            .map(|(chat_id, message_id)| PlanabrainReplyRecord {
+                chat_id: chat_id.0,
+                message_id: message_id.0,
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanabrainReplyRecord {
+    chat_id: i64,
+    message_id: i32,
 }
 
 #[derive(Clone)]
@@ -51,6 +79,7 @@ pub struct AppState {
     pub gallery_client: GalleryClient,
     booted_at: i64,
     planabrain_replies: Arc<RwLock<PlanabrainReplyTracker>>,
+    planabrain_replies_path: PathBuf,
     group_registry: Arc<RwLock<HashSet<ChatId>>>,
     group_registry_path: PathBuf,
 }
@@ -64,12 +93,15 @@ impl AppState {
 
         let group_registry_path = resolve_group_registry_path();
         let group_registry = load_group_registry(&group_registry_path);
+        let planabrain_replies_path = resolve_planabrain_replies_path();
+        let planabrain_replies = load_planabrain_replies(&planabrain_replies_path);
 
         Self {
             bot_username,
             gallery_client,
             booted_at,
-            planabrain_replies: Arc::new(RwLock::new(PlanabrainReplyTracker::new(200))),
+            planabrain_replies: Arc::new(RwLock::new(planabrain_replies)),
+            planabrain_replies_path,
             group_registry: Arc::new(RwLock::new(group_registry)),
             group_registry_path,
         }
@@ -89,9 +121,20 @@ impl AppState {
             .is_some_and(|t| t.contains(reply.chat.id, reply.id))
     }
 
-    pub(crate) fn record_planabrain_reply(&self, msg: &Message) {
-        if let Ok(mut tracker) = self.planabrain_replies.write() {
+    pub(crate) async fn record_planabrain_reply(&self, msg: &Message) {
+        let snapshot = {
+            let mut tracker = match self.planabrain_replies.write() {
+                Ok(tracker) => tracker,
+                Err(_) => return,
+            };
             tracker.insert(msg.chat.id, msg.id);
+            tracker.records()
+        };
+
+        if let Err(err) =
+            persist_planabrain_replies(&self.planabrain_replies_path, &snapshot).await
+        {
+            warn!("planabrain 응답 기록 저장 실패: {}", err);
         }
     }
 
@@ -151,6 +194,19 @@ fn resolve_group_registry_path() -> PathBuf {
     }
 }
 
+fn resolve_planabrain_replies_path() -> PathBuf {
+    let raw = std::env::var("PLANABOT_PLANABRAIN_REPLIES_PATH")
+        .unwrap_or_else(|_| ".planabot/planabrain_replies.json".to_string());
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    }
+}
+
 fn load_group_registry(path: &Path) -> HashSet<ChatId> {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return HashSet::new();
@@ -161,6 +217,16 @@ fn load_group_registry(path: &Path) -> HashSet<ChatId> {
     ids.into_iter().map(ChatId).collect()
 }
 
+fn load_planabrain_replies(path: &Path) -> PlanabrainReplyTracker {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return PlanabrainReplyTracker::new(200);
+    };
+    let Ok(records) = serde_json::from_str::<Vec<PlanabrainReplyRecord>>(&raw) else {
+        return PlanabrainReplyTracker::new(200);
+    };
+    PlanabrainReplyTracker::from_records(200, records)
+}
+
 async fn persist_group_registry(path: &Path, ids: &[i64]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).await?;
@@ -169,5 +235,17 @@ async fn persist_group_registry(path: &Path, ids: &[i64]) -> std::io::Result<()>
     sorted.sort_unstable();
     sorted.dedup();
     let payload = serde_json::to_string_pretty(&sorted).unwrap_or_else(|_| "[]".to_string());
+    fs::write(path, payload).await
+}
+
+async fn persist_planabrain_replies(
+    path: &Path,
+    records: &[PlanabrainReplyRecord],
+) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+    let payload =
+        serde_json::to_string_pretty(records).unwrap_or_else(|_| "[]".to_string());
     fs::write(path, payload).await
 }
