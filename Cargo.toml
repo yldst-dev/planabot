@@ -1,5 +1,3 @@
-cargo-features = ["edition2024"]
-
 [package]
 name = "planabot"
 version = "0.1.0"
@@ -22,3 +20,4 @@ regex = "1"
 once_cell = "1"
 dotenvy = "0.15"
 url = "2"
+chrono = { version = "0.4", features = ["clock"] }

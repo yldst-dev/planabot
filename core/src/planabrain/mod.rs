@@ -43,11 +43,17 @@ pub(crate) async fn reset_user_memory(user_id: &str) -> Result<bool> {
     }
 }
 
-pub(crate) fn is_planabrain_allowed(chat_id: i64) -> bool {
-    if ALLOWED_CHAT_IDS.is_empty() {
+pub(crate) fn is_planabrain_allowed(chat_id: i64, user_id: Option<i64>, is_private: bool) -> bool {
+    if ALLOWED_CHAT_IDS.contains(&chat_id) {
+        return true;
+    }
+    if !is_private {
         return false;
     }
-    ALLOWED_CHAT_IDS.contains(&chat_id)
+    let Some(user_id) = user_id else {
+        return false;
+    };
+    ALLOWED_USER_IDS.contains(&user_id)
 }
 
 pub(crate) fn truncate_message(text: &str, limit: usize) -> String {
@@ -136,6 +142,20 @@ fn safe_user_id(raw: &str) -> String {
 
 static ALLOWED_CHAT_IDS: Lazy<HashSet<i64>> = Lazy::new(|| {
     let raw = std::env::var("PLANABRAIN_ALLOWED_CHAT_IDS").unwrap_or_default();
+    raw.split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace())
+        .filter_map(|item| {
+            let trimmed = item.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                trimmed.parse::<i64>().ok()
+            }
+        })
+        .collect()
+});
+
+static ALLOWED_USER_IDS: Lazy<HashSet<i64>> = Lazy::new(|| {
+    let raw = std::env::var("PLANABRAIN_ALLOWED_USER_IDS").unwrap_or_default();
     raw.split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace())
         .filter_map(|item| {
             let trimmed = item.trim();

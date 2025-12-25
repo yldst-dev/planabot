@@ -9,6 +9,8 @@ TELEGRAM_API_TOKEN=123456:ABC-YourRealToken
 GOOGLE_API_KEY=YOUR_API_KEY_HERE
 # 베타 AI 기능을 허용할 채팅 ID (쉼표/공백/세미콜론 구분 가능)
 PLANABRAIN_ALLOWED_CHAT_IDS=-1001234567890,-1009876543210
+# 베타 AI 기능을 허용할 사용자 ID (1:1 대화용)
+PLANABRAIN_ALLOWED_USER_IDS=123456789,987654321
 ```
 토큰이 없으면 실행 시 `.env`가 자동 생성되고 경고 후 종료합니다.
 
@@ -29,7 +31,7 @@ cargo run --release
 - 봇이 재시작된 이후의 메시지만 처리합니다. (`/ping`은 예외)
 - 봇 재시작 시, 이전에 기록된 그룹 채팅에 시작 안내 메시지를 전송합니다.
 - 베타 AI 호출: `프라나야`로 시작하는 메시지
-  - `PLANABRAIN_ALLOWED_CHAT_IDS`에 포함된 채팅에서만 동작
+  - `PLANABRAIN_ALLOWED_CHAT_IDS`에 포함된 채팅 또는 `PLANABRAIN_ALLOWED_USER_IDS`에 포함된 1:1 사용자만 동작
 
 ## planabrain (TypeScript CLI)
 - 위치: `planabrain/`
@@ -41,6 +43,7 @@ cargo run --release
 - `TELEGRAM_API_TOKEN`: 텔레그램 봇 토큰
 - `GOOGLE_API_KEY` (또는 `GEMINI_API_KEY`): Gemini API 키
 - `PLANABRAIN_ALLOWED_CHAT_IDS`: 베타 AI 허용 채팅 ID 목록
+- `PLANABRAIN_ALLOWED_USER_IDS`: 베타 AI 허용 사용자 ID 목록 (1:1 대화)
 - `PLANABRAIN_GEMINI_MODEL` (기본 `gemini-3-flash-preview`)
 - `PLANABRAIN_GEMINI_EMBEDDING_MODEL` (기본 `gemini-embedding-001`)
 - `PLANABRAIN_INDEX_PATH` (기본 `.planabrain/index.json`)

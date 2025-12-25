@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use chrono::{Datelike, Local, Timelike, Weekday};
 use log::error;
 use teloxide::prelude::*;
 use teloxide::types::{CallbackQuery, ChatAction, Message, ParseMode};
@@ -132,11 +133,16 @@ where
         return Ok(());
     }
 
-    if !planabrain::is_planabrain_allowed(msg.chat.id.0) {
+    let user_id = msg
+        .from
+        .as_ref()
+        .and_then(|user| i64::try_from(user.id.0).ok());
+    let is_private = msg.chat.is_private();
+    if !planabrain::is_planabrain_allowed(msg.chat.id.0, user_id, is_private) {
         send_reply_with_fallback(
             &bot,
             &msg,
-            "선생님, 프라나 AI 기능은 현재 베타이며 지정된 그룹에서만 제공됩니다.",
+            "선생님, 프라나 AI 기능은 현재 베타이며 지정된 그룹 또는 사용자에게만 제공됩니다.",
             SendOptions::default(),
         )
         .await?;
@@ -162,7 +168,9 @@ where
         .map(|user| user.id.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let mut typing_interval = time::interval(Duration::from_secs(4));
+    let question = format_question_with_timestamp(&question);
+    send_typing_in_thread(&bot, &msg).await;
+    let mut typing_interval = time::interval(Duration::from_secs(3));
     let ask_fut = planabrain::run_planabrain_ask(&question, &user_id);
     tokio::pin!(ask_fut);
 
@@ -351,4 +359,28 @@ where
         req = req.message_thread_id(thread_id);
     }
     let _ = req.await;
+}
+
+fn format_question_with_timestamp(question: &str) -> String {
+    let now = Local::now();
+    let weekday = match now.weekday() {
+        Weekday::Mon => "월",
+        Weekday::Tue => "화",
+        Weekday::Wed => "수",
+        Weekday::Thu => "목",
+        Weekday::Fri => "금",
+        Weekday::Sat => "토",
+        Weekday::Sun => "일",
+    };
+    let timestamp = format!(
+        "{:04}-{:02}-{:02} ({}) {:02}:{:02}:{:02}",
+        now.year(),
+        now.month(),
+        now.day(),
+        weekday,
+        now.hour(),
+        now.minute(),
+        now.second()
+    );
+    format!("현재 시각: {}\n\n{}", timestamp, question)
 }
