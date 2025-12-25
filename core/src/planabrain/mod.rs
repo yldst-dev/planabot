@@ -8,7 +8,7 @@ use tokio::task;
 
 pub(crate) fn extract_plana_question(text: &str) -> Option<String> {
     let trimmed = text.trim_start();
-    let prefixes = ["프라나야", "프라나쨩", "프라나"];
+    let prefixes = ["프라나야"];
 
     for prefix in prefixes {
         if let Some(rest) = trimmed.strip_prefix(prefix) {

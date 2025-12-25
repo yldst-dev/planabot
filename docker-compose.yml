@@ -8,6 +8,7 @@ services:
       args:
         RUST_IMAGE: ${PLANABOT_RUST_IMAGE:-rustlang/rust:nightly-slim}
         RUNTIME_IMAGE: ${PLANABOT_RUNTIME_IMAGE:-debian:bookworm-slim}
+        NODE_IMAGE: ${PLANABOT_NODE_IMAGE:-node:20-bookworm-slim}
         RUSTUP_TOOLCHAIN: ${PLANABOT_RUSTUP_TOOLCHAIN:-nightly}
     container_name: planabot
     restart: unless-stopped

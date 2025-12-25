@@ -12,8 +12,14 @@ esac
 
 export PLANABOT_RUNTIME_IMAGE="debian:${debian_release}-slim"
 export PLANABOT_RUST_IMAGE="${PLANABOT_RUST_IMAGE:-rustlang/rust:nightly-${debian_release}}"
+case "$debian_release" in
+  buster) PLANABOT_NODE_IMAGE="${PLANABOT_NODE_IMAGE:-node:18-buster-slim}" ;;
+  bullseye) PLANABOT_NODE_IMAGE="${PLANABOT_NODE_IMAGE:-node:20-bullseye-slim}" ;;
+  bookworm) PLANABOT_NODE_IMAGE="${PLANABOT_NODE_IMAGE:-node:20-bookworm-slim}" ;;
+esac
 
 echo "glibc ${glibc_version:-unknown} -> ${PLANABOT_RUNTIME_IMAGE}"
 echo "builder image: ${PLANABOT_RUST_IMAGE}"
+echo "node image: ${PLANABOT_NODE_IMAGE}"
 
 exec docker compose up --build -d "$@"

@@ -2,6 +2,7 @@
 
 ARG RUST_IMAGE=rustlang/rust:nightly-slim
 ARG RUNTIME_IMAGE=debian:bookworm-slim
+ARG NODE_IMAGE=node:20-bookworm-slim
 ARG RUSTUP_TOOLCHAIN=nightly
 
 ## Build stage
@@ -18,6 +19,18 @@ COPY core/src ./core/src
 
 # 릴리즈 빌드
 RUN cargo build --release
+
+## Planabrain build stage
+FROM ${NODE_IMAGE} AS planabrain-builder
+
+WORKDIR /app/planabrain
+
+COPY planabrain/package.json planabrain/package-lock.json ./
+RUN npm ci
+
+COPY planabrain/tsconfig.json ./
+COPY planabrain/src ./src
+RUN npm run build && npm prune --omit=dev
 
 ## Runtime stage
 FROM ${RUNTIME_IMAGE}
@@ -39,5 +52,9 @@ RUN if grep -q "VERSION_CODENAME=buster" /etc/os-release; then \
 WORKDIR /app
 
 COPY --from=builder /app/target/release/planabot /usr/local/bin/planabot
+COPY --from=planabrain-builder /usr/local/ /usr/local/
+COPY --from=planabrain-builder /app/planabrain/package.json /app/planabrain/package.json
+COPY --from=planabrain-builder /app/planabrain/node_modules /app/planabrain/node_modules
+COPY --from=planabrain-builder /app/planabrain/dist /app/planabrain/dist
 
 CMD ["/usr/local/bin/planabot"]

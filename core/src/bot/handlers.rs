@@ -20,6 +20,10 @@ where
     B: Requester + Send + Sync + 'static,
     B::Err: std::error::Error + Send + Sync + 'static,
 {
+    if cmd != Command::Ping && !state.is_after_boot(&msg) {
+        return Ok(());
+    }
+
     match cmd {
         Command::Start => {
             let mut text = String::from(
@@ -106,6 +110,10 @@ where
     B::Err: std::error::Error + Send + Sync + 'static,
     B::SendChatAction: Send,
 {
+    if !state.is_after_boot(&msg) {
+        return Ok(());
+    }
+
     let Some(text) = msg.text() else {
         return Ok(());
     };
@@ -193,6 +201,10 @@ where
     B: Requester + Send + Sync + 'static,
     B::Err: std::error::Error + Send + Sync + 'static,
 {
+    if !state.is_after_boot(&msg) {
+        return Ok(());
+    }
+
     let text = match msg.text() {
         Some(t) => t.trim(),
         None => return Ok(()),

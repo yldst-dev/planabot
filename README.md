@@ -26,7 +26,8 @@ cargo run --release
   - X/Twitter 링크 → `fxtwitter.com`으로 변환
   - Instagram 링크 → `kkinstagram.com`으로 변환
   관리자인 경우 원본 메시지를 삭제하고 정리된 링크로 재전송, 아니면 인라인 버튼/텍스트로 대체 링크 제공
-- 베타 AI 호출: `프라나야`, `프라나`, `프라나쨩`으로 시작하는 메시지
+- 봇이 재시작된 이후의 메시지만 처리합니다. (`/ping`은 예외)
+- 베타 AI 호출: `프라나야`로 시작하는 메시지
   - `PLANABRAIN_ALLOWED_CHAT_IDS`에 포함된 채팅에서만 동작
 
 ## planabrain (TypeScript CLI)
@@ -50,4 +51,4 @@ cargo run --release
 - 호스트 glibc 버전에 맞춰 이미지를 선택하려면:
   - `./scripts/compose-up.sh`
 - 직접 지정하려면:
-  - `PLANABOT_RUNTIME_IMAGE=debian:buster-slim PLANABOT_RUST_IMAGE=rustlang/rust:nightly-buster docker compose up --build -d`
+  - `PLANABOT_RUNTIME_IMAGE=debian:buster-slim PLANABOT_RUST_IMAGE=rustlang/rust:nightly-buster PLANABOT_NODE_IMAGE=node:18-buster-slim docker compose up --build -d`

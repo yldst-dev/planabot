@@ -1,4 +1,4 @@
-use crate::bot::{HandlerResult, SendOptions, send_reply_with_fallback, send_in_thread};
+use crate::bot::{AppState, HandlerResult, SendOptions, send_reply_with_fallback, send_in_thread};
 use crate::urlchanger::link_utils::{
     LinkConversion, contains_instagram_link, contains_music_link, contains_x_link,
     convert_instagram_links, convert_x_links, extract_music_links,
@@ -18,22 +18,25 @@ where
 {
     Update::filter_message()
         .branch(
-            dptree::filter(|msg: Message| {
-                msg.text().is_some() && contains_music_link(msg.text().unwrap())
-            })
-            .endpoint(handle_music_links::<B>),
-        )
-        .branch(
-            dptree::filter(|msg: Message| {
-                msg.text().is_some() && contains_x_link(msg.text().unwrap())
-            })
-            .endpoint(handle_x_links::<B>),
-        )
-        .branch(
-            dptree::filter(|msg: Message| {
-                msg.text().is_some() && contains_instagram_link(msg.text().unwrap())
-            })
-            .endpoint(handle_instagram_links::<B>),
+            dptree::filter(|msg: Message, state: AppState| state.is_after_boot(&msg))
+                .branch(
+                    dptree::filter(|msg: Message| {
+                        msg.text().is_some() && contains_music_link(msg.text().unwrap())
+                    })
+                    .endpoint(handle_music_links::<B>),
+                )
+                .branch(
+                    dptree::filter(|msg: Message| {
+                        msg.text().is_some() && contains_x_link(msg.text().unwrap())
+                    })
+                    .endpoint(handle_x_links::<B>),
+                )
+                .branch(
+                    dptree::filter(|msg: Message| {
+                        msg.text().is_some() && contains_instagram_link(msg.text().unwrap())
+                    })
+                    .endpoint(handle_instagram_links::<B>),
+                ),
         )
 }
 
