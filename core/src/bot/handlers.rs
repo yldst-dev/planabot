@@ -120,6 +120,17 @@ where
         return Ok(());
     }
 
+    if !planabrain::is_planabrain_allowed(msg.chat.id.0) {
+        send_reply_with_fallback(
+            &bot,
+            &msg,
+            "선생님, 프라나 AI 기능은 현재 베타이며 지정된 그룹에서만 제공됩니다.",
+            SendOptions::default(),
+        )
+        .await?;
+        return Ok(());
+    }
+
     let question = question.trim().to_string();
     if question.is_empty() {
         let sent = send_reply_with_fallback(

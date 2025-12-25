@@ -1,7 +1,9 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 use anyhow::{Context, Result, anyhow};
+use once_cell::sync::Lazy;
 use tokio::task;
 
 pub(crate) fn extract_plana_question(text: &str) -> Option<String> {
@@ -39,6 +41,13 @@ pub(crate) async fn reset_user_memory(user_id: &str) -> Result<bool> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(err) => Err(err.into()),
     }
+}
+
+pub(crate) fn is_planabrain_allowed(chat_id: i64) -> bool {
+    if ALLOWED_CHAT_IDS.is_empty() {
+        return false;
+    }
+    ALLOWED_CHAT_IDS.contains(&chat_id)
 }
 
 pub(crate) fn truncate_message(text: &str, limit: usize) -> String {
@@ -124,6 +133,20 @@ fn safe_user_id(raw: &str) -> String {
         out
     }
 }
+
+static ALLOWED_CHAT_IDS: Lazy<HashSet<i64>> = Lazy::new(|| {
+    let raw = std::env::var("PLANABRAIN_ALLOWED_CHAT_IDS").unwrap_or_default();
+    raw.split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace())
+        .filter_map(|item| {
+            let trimmed = item.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                trimmed.parse::<i64>().ok()
+            }
+        })
+        .collect()
+});
 fn run_planabrain_ask_blocking(question: &str, user_id: &str) -> Result<String> {
     let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
 
