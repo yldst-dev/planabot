@@ -38,6 +38,18 @@ where
     req
 }
 
+pub(crate) fn reply_in_chat<B>(
+    bot: &B,
+    msg: &Message,
+    text: impl Into<String>,
+) -> B::SendMessage
+where
+    B: Requester + ?Sized,
+{
+    bot.send_message(msg.chat.id, text.into())
+        .reply_parameters(ReplyParameters::new(msg.id).allow_sending_without_reply())
+}
+
 pub(crate) async fn send_reply_with_fallback<B>(
     bot: &B,
     msg: &Message,
@@ -56,6 +68,17 @@ where
         Err(err) if err.to_string().contains("message to be replied not found") => {
             let fallback = apply_send_options::<B>(send_in_thread(bot, msg, text), &opts);
             Ok(fallback.await?)
+        }
+        Err(err) if err.to_string().to_lowercase().contains("message thread not found") => {
+            let fallback = apply_send_options::<B>(reply_in_chat(bot, msg, text), &opts);
+            match fallback.await {
+                Ok(message) => Ok(message),
+                Err(err) if err.to_string().contains("message to be replied not found") => {
+                    let fallback = apply_send_options::<B>(send_in_thread(bot, msg, text), &opts);
+                    Ok(fallback.await?)
+                }
+                Err(err) => Err(err.into()),
+            }
         }
         Err(err) => Err(err.into()),
     }
