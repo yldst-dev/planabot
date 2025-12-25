@@ -1,11 +1,14 @@
 # planabot
 
-Hitomi.la 갤러리 정보 조회 + URL 정리(YouTube/Spotify si 제거, X→fxtwitter, Instagram→kkinstagram 변환)를 한 번에 처리하는 텔레그램 봇입니다. 기존 Node.js 버전을 Rust로 재작성하고, URL 체인저 기능을 통합했습니다.
+Hitomi.la 갤러리 정보 조회 + URL 정리(YouTube/Spotify si 제거, X→fxtwitter, Instagram→kkinstagram 변환)를 한 번에 처리하는 텔레그램 봇입니다. 기존 Node.js 버전을 Rust로 재작성하고, URL 체인저 기능을 통합했습니다. 추가로 planabrain(TypeScript CLI)을 통해 베타 AI 응답 기능을 제공합니다.
 
 ## 빠른 시작
 1) Rust stable 설치 후 프로젝트 루트에서 `.env` 생성/수정:
 ```
 TELEGRAM_API_TOKEN=123456:ABC-YourRealToken
+GOOGLE_API_KEY=YOUR_API_KEY_HERE
+# 베타 AI 기능을 허용할 채팅 ID (쉼표/공백/세미콜론 구분 가능)
+PLANABRAIN_ALLOWED_CHAT_IDS=-1001234567890,-1009876543210
 ```
 토큰이 없으면 실행 시 `.env`가 자동 생성되고 경고 후 종료합니다.
 
@@ -23,6 +26,22 @@ cargo run --release
   - X/Twitter 링크 → `fxtwitter.com`으로 변환
   - Instagram 링크 → `kkinstagram.com`으로 변환
   관리자인 경우 원본 메시지를 삭제하고 정리된 링크로 재전송, 아니면 인라인 버튼/텍스트로 대체 링크 제공
+- 베타 AI 호출: `프라나야`, `프라나`, `프라나쨩`으로 시작하는 메시지
+  - `PLANABRAIN_ALLOWED_CHAT_IDS`에 포함된 채팅에서만 동작
+
+## planabrain (TypeScript CLI)
+- 위치: `planabrain/`
+- 개발 실행: `npm run dev`
+- 타입 체크: `npm run typecheck`
+- 빌드: `npm run build`
+
+## 환경변수
+- `TELEGRAM_API_TOKEN`: 텔레그램 봇 토큰
+- `GOOGLE_API_KEY` (또는 `GEMINI_API_KEY`): Gemini API 키
+- `PLANABRAIN_ALLOWED_CHAT_IDS`: 베타 AI 허용 채팅 ID 목록
+- `PLANABRAIN_GEMINI_MODEL` (기본 `gemini-3-flash-preview`)
+- `PLANABRAIN_GEMINI_EMBEDDING_MODEL` (기본 `gemini-embedding-001`)
+- `PLANABRAIN_INDEX_PATH` (기본 `.planabrain/index.json`)
 
 ## 빌드 산출물
 - 릴리즈 바이너리: `target/release/planabot`
