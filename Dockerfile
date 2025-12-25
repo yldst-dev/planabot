@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1.7
 
-## Build stage
 ARG RUST_IMAGE=rustlang/rust:nightly-slim
+ARG RUNTIME_IMAGE=debian:bookworm-slim
+
+## Build stage
 FROM ${RUST_IMAGE} AS builder
 
 WORKDIR /app
@@ -14,7 +16,6 @@ COPY core/src ./core/src
 RUN cargo build --release
 
 ## Runtime stage
-ARG RUNTIME_IMAGE=debian:bookworm-slim
 FROM ${RUNTIME_IMAGE}
 
 ENV RUST_LOG=info \
