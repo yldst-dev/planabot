@@ -45,3 +45,9 @@ cargo run --release
 
 ## 빌드 산출물
 - 릴리즈 바이너리: `target/release/planabot`
+
+## Docker 실행 (glibc 맞춤 빌드)
+- 호스트 glibc 버전에 맞춰 이미지를 선택하려면:
+  - `./scripts/compose-up.sh`
+- 직접 지정하려면:
+  - `PLANABOT_RUNTIME_IMAGE=debian:buster-slim PLANABOT_RUST_IMAGE=rustlang/rust:nightly-buster docker compose up --build -d`

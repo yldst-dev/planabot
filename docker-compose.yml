@@ -5,6 +5,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        RUST_IMAGE: ${PLANABOT_RUST_IMAGE:-rustlang/rust:nightly-slim}
+        RUNTIME_IMAGE: ${PLANABOT_RUNTIME_IMAGE:-debian:bookworm-slim}
     container_name: planabot
     restart: unless-stopped
     env_file:
