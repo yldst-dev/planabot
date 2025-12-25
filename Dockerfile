@@ -21,7 +21,14 @@ FROM ${RUNTIME_IMAGE}
 ENV RUST_LOG=info \
     RUST_BACKTRACE=1
 
-RUN apt-get update && \
+RUN if grep -q "VERSION_CODENAME=buster" /etc/os-release; then \
+        sed -i 's|deb.debian.org/debian|archive.debian.org/debian|g' /etc/apt/sources.list && \
+        sed -i 's|security.debian.org/debian-security|archive.debian.org/debian-security|g' /etc/apt/sources.list && \
+        sed -i '/buster-updates/d' /etc/apt/sources.list && \
+        apt-get -o Acquire::Check-Valid-Until=false update; \
+    else \
+        apt-get update; \
+    fi && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
