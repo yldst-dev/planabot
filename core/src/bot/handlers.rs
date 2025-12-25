@@ -24,6 +24,8 @@ where
         return Ok(());
     }
 
+    state.record_group_chat(&msg).await;
+
     match cmd {
         Command::Start => {
             let mut text = String::from(
@@ -113,6 +115,8 @@ where
     if !state.is_after_boot(&msg) {
         return Ok(());
     }
+
+    state.record_group_chat(&msg).await;
 
     let Some(text) = msg.text() else {
         return Ok(());
@@ -204,6 +208,8 @@ where
     if !state.is_after_boot(&msg) {
         return Ok(());
     }
+
+    state.record_group_chat(&msg).await;
 
     let text = match msg.text() {
         Some(t) => t.trim(),

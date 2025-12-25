@@ -5,6 +5,7 @@ mod state;
 mod telegram;
 
 use anyhow::Result;
+use log::warn;
 use teloxide::dispatching::UpdateFilterExt;
 use teloxide::filter_command;
 use teloxide::prelude::*;
@@ -52,4 +53,22 @@ where
         .await;
 
     Ok(())
+}
+
+pub async fn announce_startup<B>(bot: &B, state: &AppState)
+where
+    B: Requester + Clone + Send + Sync + 'static,
+    B::Err: std::error::Error + Send + Sync + 'static,
+{
+    let targets = state.group_chat_ids();
+    if targets.is_empty() {
+        return;
+    }
+
+    let message = "선생님, 제가 다시 살아났습니다. 반갑습니다. 메인시스템 OS인 프라나입니다.";
+    for chat_id in targets {
+        if let Err(err) = bot.send_message(chat_id, message).await {
+            warn!("시작 알림 전송 실패 (chat {:?}): {}", chat_id, err);
+        }
+    }
 }

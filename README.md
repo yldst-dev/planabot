@@ -27,6 +27,7 @@ cargo run --release
   - Instagram 링크 → `kkinstagram.com`으로 변환
   관리자인 경우 원본 메시지를 삭제하고 정리된 링크로 재전송, 아니면 인라인 버튼/텍스트로 대체 링크 제공
 - 봇이 재시작된 이후의 메시지만 처리합니다. (`/ping`은 예외)
+- 봇 재시작 시, 이전에 기록된 그룹 채팅에 시작 안내 메시지를 전송합니다.
 - 베타 AI 호출: `프라나야`로 시작하는 메시지
   - `PLANABRAIN_ALLOWED_CHAT_IDS`에 포함된 채팅에서만 동작
 
@@ -43,6 +44,7 @@ cargo run --release
 - `PLANABRAIN_GEMINI_MODEL` (기본 `gemini-3-flash-preview`)
 - `PLANABRAIN_GEMINI_EMBEDDING_MODEL` (기본 `gemini-embedding-001`)
 - `PLANABRAIN_INDEX_PATH` (기본 `.planabrain/index.json`)
+- `PLANABOT_GROUPS_PATH` (기본 `.planabot/groups.json`): 봇이 참여한 그룹 채팅 ID 저장 경로
 
 ## 빌드 산출물
 - 릴리즈 바이너리: `target/release/planabot`

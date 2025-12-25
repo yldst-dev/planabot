@@ -25,5 +25,6 @@ async fn main() -> Result<()> {
 
     let state = AppState::new(bot_username, GalleryClient::new());
 
+    bot::announce_startup(&bot, &state).await;
     bot::run(bot, state).await
 }

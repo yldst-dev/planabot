@@ -40,12 +40,14 @@ where
         )
 }
 
-pub async fn handle_music_links<B>(bot: B, msg: Message) -> HandlerResult
+pub async fn handle_music_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
 where
     B: Requester + Send + Sync + 'static,
     B::Err: std::error::Error + Send + Sync + 'static,
     <B as Requester>::GetChatMember: Send,
 {
+    state.record_group_chat(&msg).await;
+
     let text = msg.text().unwrap_or("");
     let links = extract_music_links(text);
 
@@ -141,12 +143,14 @@ where
     Ok(())
 }
 
-pub async fn handle_x_links<B>(bot: B, msg: Message) -> HandlerResult
+pub async fn handle_x_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
 where
     B: Requester + Send + Sync + 'static,
     B::Err: std::error::Error + Send + Sync + 'static,
     <B as Requester>::GetChatMember: Send,
 {
+    state.record_group_chat(&msg).await;
+
     let text = msg.text().unwrap_or("");
     let links = convert_x_links(text);
 
@@ -227,12 +231,14 @@ where
     Ok(())
 }
 
-pub async fn handle_instagram_links<B>(bot: B, msg: Message) -> HandlerResult
+pub async fn handle_instagram_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
 where
     B: Requester + Send + Sync + 'static,
     B::Err: std::error::Error + Send + Sync + 'static,
     <B as Requester>::GetChatMember: Send,
 {
+    state.record_group_chat(&msg).await;
+
     let text = msg.text().unwrap_or("");
     let links = convert_instagram_links(text);
 

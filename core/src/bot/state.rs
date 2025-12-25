@@ -1,8 +1,11 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use teloxide::types::{ChatId, Message, MessageId};
+use log::warn;
+use teloxide::types::{ChatId, ChatKind, Message, MessageId, PublicChatKind};
+use tokio::fs;
 
 use crate::hitomi::GalleryClient;
 
@@ -48,6 +51,8 @@ pub struct AppState {
     pub gallery_client: GalleryClient,
     booted_at: i64,
     planabrain_replies: Arc<RwLock<PlanabrainReplyTracker>>,
+    group_registry: Arc<RwLock<HashSet<ChatId>>>,
+    group_registry_path: PathBuf,
 }
 
 impl AppState {
@@ -57,11 +62,16 @@ impl AppState {
             .unwrap_or_default()
             .as_secs() as i64;
 
+        let group_registry_path = resolve_group_registry_path();
+        let group_registry = load_group_registry(&group_registry_path);
+
         Self {
             bot_username,
             gallery_client,
             booted_at,
             planabrain_replies: Arc::new(RwLock::new(PlanabrainReplyTracker::new(200))),
+            group_registry: Arc::new(RwLock::new(group_registry)),
+            group_registry_path,
         }
     }
 
@@ -84,4 +94,80 @@ impl AppState {
             tracker.insert(msg.chat.id, msg.id);
         }
     }
+
+    pub(crate) fn group_chat_ids(&self) -> Vec<ChatId> {
+        let registry = self.group_registry.read().ok();
+        registry
+            .as_ref()
+            .map(|set| set.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    pub(crate) async fn record_group_chat(&self, msg: &Message) {
+        if !is_group_chat(msg) {
+            return;
+        }
+
+        let chat_id = msg.chat.id;
+        let snapshot = {
+            let mut registry = match self.group_registry.write() {
+                Ok(registry) => registry,
+                Err(_) => return,
+            };
+
+            if !registry.insert(chat_id) {
+                return;
+            }
+
+            registry.iter().map(|id| id.0).collect::<Vec<_>>()
+        };
+
+        if let Err(err) = persist_group_registry(&self.group_registry_path, &snapshot).await {
+            warn!("그룹 목록 저장 실패: {}", err);
+        }
+    }
+}
+
+fn is_group_chat(msg: &Message) -> bool {
+    match &msg.chat.kind {
+        ChatKind::Public(public) => matches!(
+            public.kind,
+            PublicChatKind::Group | PublicChatKind::Supergroup(_)
+        ),
+        _ => false,
+    }
+}
+
+fn resolve_group_registry_path() -> PathBuf {
+    let raw = std::env::var("PLANABOT_GROUPS_PATH")
+        .unwrap_or_else(|_| ".planabot/groups.json".to_string());
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    }
+}
+
+fn load_group_registry(path: &Path) -> HashSet<ChatId> {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return HashSet::new();
+    };
+    let Ok(ids) = serde_json::from_str::<Vec<i64>>(&raw) else {
+        return HashSet::new();
+    };
+    ids.into_iter().map(ChatId).collect()
+}
+
+async fn persist_group_registry(path: &Path, ids: &[i64]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+    let mut sorted = ids.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let payload = serde_json::to_string_pretty(&sorted).unwrap_or_else(|_| "[]".to_string());
+    fs::write(path, payload).await
 }
