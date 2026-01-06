@@ -14,8 +14,8 @@ use teloxide::utils::command::BotCommands;
 
 use crate::urlchanger;
 
-pub(crate) use telegram::{send_in_thread, send_reply_with_fallback, SendOptions};
 pub use state::AppState;
+pub(crate) use telegram::{SendOptions, send_in_thread, send_reply_with_fallback};
 
 pub type HandlerResult = Result<()>;
 
@@ -26,13 +26,18 @@ where
     B::SendChatAction: Send,
     <B as Requester>::GetUpdates: Send,
     <B as Requester>::GetChatMember: Send,
+    <B as Requester>::CopyMessage: Send,
 {
-    bot.set_my_commands(commands::Command::bot_commands()).await?;
+    bot.set_my_commands(commands::Command::bot_commands())
+        .await?;
 
     let handler = dptree::entry()
         .branch(
             Update::filter_message()
-                .branch(filter_command::<commands::Command, _>().endpoint(handlers::handle_command::<B>))
+                .branch(
+                    filter_command::<commands::Command, _>()
+                        .endpoint(handlers::handle_command::<B>),
+                )
                 .branch(
                     dptree::filter(|msg: Message, state: AppState| {
                         handlers::is_plana_trigger(&msg, &state)
@@ -42,11 +47,13 @@ where
                 .branch(urlchanger::url_handlers::<B>())
                 .branch(dptree::endpoint(handlers::handle_message::<B>)),
         )
+        .branch(Update::filter_channel_post().endpoint(handlers::handle_notice_post::<B>))
         .branch(Update::filter_callback_query().endpoint(handlers::handle_callback::<B>));
 
     Dispatcher::builder(bot, handler)
         .dependencies(dptree::deps![state])
         .enable_ctrlc_handler()
+        .distribution_function(|upd| upd.from().map(|user| user.id))
         .default_handler(|_| async move {})
         .build()
         .dispatch()

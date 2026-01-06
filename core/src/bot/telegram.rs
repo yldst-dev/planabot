@@ -21,28 +21,27 @@ where
     req
 }
 
-pub(crate) fn reply_in_thread<B>(
-    bot: &B,
-    msg: &Message,
-    text: impl Into<String>,
-) -> B::SendMessage
+pub(crate) fn send_in_chat<B>(bot: &B, msg: &Message, text: impl Into<String>) -> B::SendMessage
 where
     B: Requester + ?Sized,
 {
-    let mut req = bot.send_message(msg.chat.id, text.into()).reply_parameters(
-        ReplyParameters::new(msg.id).allow_sending_without_reply(),
-    );
+    bot.send_message(msg.chat.id, text.into())
+}
+
+pub(crate) fn reply_in_thread<B>(bot: &B, msg: &Message, text: impl Into<String>) -> B::SendMessage
+where
+    B: Requester + ?Sized,
+{
+    let mut req = bot
+        .send_message(msg.chat.id, text.into())
+        .reply_parameters(ReplyParameters::new(msg.id).allow_sending_without_reply());
     if let Some(thread_id) = msg.thread_id {
         req = req.message_thread_id(thread_id);
     }
     req
 }
 
-pub(crate) fn reply_in_chat<B>(
-    bot: &B,
-    msg: &Message,
-    text: impl Into<String>,
-) -> B::SendMessage
+pub(crate) fn reply_in_chat<B>(bot: &B, msg: &Message, text: impl Into<String>) -> B::SendMessage
 where
     B: Requester + ?Sized,
 {
@@ -65,22 +64,36 @@ where
 
     match request.await {
         Ok(message) => Ok(message),
-        Err(err) if err.to_string().contains("message to be replied not found") => {
-            let fallback = apply_send_options::<B>(send_in_thread(bot, msg, text), &opts);
-            Ok(fallback.await?)
-        }
-        Err(err) if err.to_string().to_lowercase().contains("message thread not found") => {
-            let fallback = apply_send_options::<B>(reply_in_chat(bot, msg, text.clone()), &opts);
-            match fallback.await {
-                Ok(message) => Ok(message),
-                Err(err) if err.to_string().contains("message to be replied not found") => {
-                    let fallback = apply_send_options::<B>(send_in_thread(bot, msg, text), &opts);
-                    Ok(fallback.await?)
-                }
-                Err(err) => Err(err.into()),
+        Err(err) => {
+            let err_text = err.to_string().to_lowercase();
+            if err_text.contains("message thread not found") {
+                let fallback =
+                    apply_send_options::<B>(reply_in_chat(bot, msg, text.clone()), &opts);
+                return match fallback.await {
+                    Ok(message) => Ok(message),
+                    Err(err) => {
+                        if err
+                            .to_string()
+                            .to_lowercase()
+                            .contains("message to be replied not found")
+                        {
+                            let fallback =
+                                apply_send_options::<B>(send_in_chat(bot, msg, text), &opts);
+                            Ok(fallback.await?)
+                        } else {
+                            Err(err.into())
+                        }
+                    }
+                };
             }
+
+            if err_text.contains("message to be replied not found") {
+                let fallback = apply_send_options::<B>(send_in_thread(bot, msg, text), &opts);
+                return Ok(fallback.await?);
+            }
+
+            Err(err.into())
         }
-        Err(err) => Err(err.into()),
     }
 }
 

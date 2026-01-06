@@ -1,6 +1,28 @@
 use log::warn;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use url::Url;
+
+static MUSIC_YOUTUBE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"https?://(?:www\.)?youtu(?:\.be|be\.com)/\S+").unwrap());
+static MUSIC_YOUTUBE_MUSIC_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"https?://(?:www\.)?music\.youtube\.com/\S+").unwrap());
+static MUSIC_SPOTIFY_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"https?://(?:www\.)?open\.spotify\.com/\S+").unwrap());
+static MUSIC_YOUTUBE_CAPTURE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(https?://(?:www\.)?youtu(?:\.be|be\.com)/\S+)").unwrap());
+static MUSIC_YOUTUBE_MUSIC_CAPTURE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(https?://(?:www\.)?music\.youtube\.com/\S+)").unwrap());
+static MUSIC_SPOTIFY_CAPTURE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(https?://(?:www\.)?open\.spotify\.com/\S+)").unwrap());
+static X_LINK_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\.?https?://(?:www\.)?(?:x|twitter)\.com/\S+").unwrap());
+static X_LINK_CAPTURE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(\.?)(https?://(?:www\.)?(?:x|twitter)\.com/\S+)").unwrap());
+static INSTAGRAM_LINK_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"https?://(?:www\.)?instagram\.com/\S+").unwrap());
+static INSTAGRAM_CAPTURE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(https?://(?:www\.)?instagram\.com/\S+)").unwrap());
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkConversion {
@@ -10,31 +32,17 @@ pub struct LinkConversion {
 }
 
 pub fn contains_music_link(text: &str) -> bool {
-    let patterns = [
-        r"https?://(?:www\.)?youtu(?:\.be|be\.com)/\S+",
-        r"https?://(?:www\.)?music\.youtube\.com/\S+",
-        r"https?://(?:www\.)?open\.spotify\.com/\S+",
-    ];
-
-    patterns.iter().any(|pattern| {
-        Regex::new(pattern)
-            .map(|re| re.is_match(text))
-            .unwrap_or(false)
-    })
+    MUSIC_YOUTUBE_RE.is_match(text)
+        || MUSIC_YOUTUBE_MUSIC_RE.is_match(text)
+        || MUSIC_SPOTIFY_RE.is_match(text)
 }
 
 pub fn contains_x_link(text: &str) -> bool {
-    let pattern = r"\.?https?://(?:www\.)?(?:x|twitter)\.com/\S+";
-    Regex::new(pattern)
-        .map(|re| re.is_match(text))
-        .unwrap_or(false)
+    X_LINK_RE.is_match(text)
 }
 
 pub fn contains_instagram_link(text: &str) -> bool {
-    let pattern = r"https?://(?:www\.)?instagram\.com/\S+";
-    Regex::new(pattern)
-        .map(|re| re.is_match(text))
-        .unwrap_or(false)
+    INSTAGRAM_LINK_RE.is_match(text)
 }
 
 pub fn remove_si_parameter(url_str: &str) -> String {
@@ -76,25 +84,37 @@ pub fn remove_si_parameter(url_str: &str) -> String {
 }
 
 pub fn extract_music_links(text: &str) -> Vec<(String, String)> {
-    let patterns = [
-        r"(https?://(?:www\.)?youtu(?:\.be|be\.com)/\S+)",
-        r"(https?://(?:www\.)?music\.youtube\.com/\S+)",
-        r"(https?://(?:www\.)?open\.spotify\.com/\S+)",
-    ];
-
     let mut links = Vec::new();
 
-    for pattern in patterns {
-        if let Ok(re) = Regex::new(pattern) {
-            for cap in re.captures_iter(text) {
-                if let Some(m) = cap.get(1) {
-                    let original_url = m.as_str();
-                    let cleaned_url = remove_si_parameter(original_url);
+    for cap in MUSIC_YOUTUBE_CAPTURE_RE.captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            let original_url = m.as_str();
+            let cleaned_url = remove_si_parameter(original_url);
 
-                    if original_url != cleaned_url {
-                        links.push((original_url.to_string(), cleaned_url));
-                    }
-                }
+            if original_url != cleaned_url {
+                links.push((original_url.to_string(), cleaned_url));
+            }
+        }
+    }
+
+    for cap in MUSIC_YOUTUBE_MUSIC_CAPTURE_RE.captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            let original_url = m.as_str();
+            let cleaned_url = remove_si_parameter(original_url);
+
+            if original_url != cleaned_url {
+                links.push((original_url.to_string(), cleaned_url));
+            }
+        }
+    }
+
+    for cap in MUSIC_SPOTIFY_CAPTURE_RE.captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            let original_url = m.as_str();
+            let cleaned_url = remove_si_parameter(original_url);
+
+            if original_url != cleaned_url {
+                links.push((original_url.to_string(), cleaned_url));
             }
         }
     }
@@ -104,32 +124,29 @@ pub fn extract_music_links(text: &str) -> Vec<(String, String)> {
 
 pub fn convert_x_links(text: &str) -> Vec<LinkConversion> {
     // capture optional dot prefix to allow opt-out of previews (e.g., ".https://x.com/...")
-    let pattern = r"(\.?)(https?://(?:www\.)?(?:x|twitter)\.com/\S+)";
     let mut links = Vec::new();
 
-    if let Ok(re) = Regex::new(pattern) {
-        for cap in re.captures_iter(text) {
-            let dot_prefix = cap.get(1).map(|m| m.as_str() == ".").unwrap_or(false);
-            if let Some(url_match) = cap.get(2) {
-                let original_url = url_match.as_str();
-                match Url::parse(original_url) {
-                    Ok(mut parsed) => {
-                        parsed.set_host(Some("fxtwitter.com")).ok();
-                        parsed.set_query(None);
-                        parsed.set_fragment(None);
-                        let original_in_text = if dot_prefix {
-                            format!(".{}", original_url)
-                        } else {
-                            original_url.to_string()
-                        };
-                        links.push(LinkConversion {
-                            original: original_in_text,
-                            converted: parsed.to_string(),
-                            disable_preview: dot_prefix,
-                        });
-                    }
-                    Err(e) => warn!("X 링크 파싱 실패: {}", e),
+    for cap in X_LINK_CAPTURE_RE.captures_iter(text) {
+        let dot_prefix = cap.get(1).map(|m| m.as_str() == ".").unwrap_or(false);
+        if let Some(url_match) = cap.get(2) {
+            let original_url = url_match.as_str();
+            match Url::parse(original_url) {
+                Ok(mut parsed) => {
+                    parsed.set_host(Some("fxtwitter.com")).ok();
+                    parsed.set_query(None);
+                    parsed.set_fragment(None);
+                    let original_in_text = if dot_prefix {
+                        format!(".{}", original_url)
+                    } else {
+                        original_url.to_string()
+                    };
+                    links.push(LinkConversion {
+                        original: original_in_text,
+                        converted: parsed.to_string(),
+                        disable_preview: dot_prefix,
+                    });
                 }
+                Err(e) => warn!("X 링크 파싱 실패: {}", e),
             }
         }
     }
@@ -138,22 +155,19 @@ pub fn convert_x_links(text: &str) -> Vec<LinkConversion> {
 }
 
 pub fn convert_instagram_links(text: &str) -> Vec<(String, String)> {
-    let pattern = r"(https?://(?:www\.)?instagram\.com/\S+)";
     let mut links = Vec::new();
 
-    if let Ok(re) = Regex::new(pattern) {
-        for cap in re.captures_iter(text) {
-            if let Some(m) = cap.get(1) {
-                let original_url = m.as_str();
-                match Url::parse(original_url) {
-                    Ok(mut parsed) => {
-                        parsed.set_host(Some("www.kkinstagram.com")).ok();
-                        parsed.set_query(None);
-                        parsed.set_fragment(None);
-                        links.push((original_url.to_string(), parsed.to_string()));
-                    }
-                    Err(e) => warn!("Instagram 링크 파싱 실패: {}", e),
+    for cap in INSTAGRAM_CAPTURE_RE.captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            let original_url = m.as_str();
+            match Url::parse(original_url) {
+                Ok(mut parsed) => {
+                    parsed.set_host(Some("www.kkinstagram.com")).ok();
+                    parsed.set_query(None);
+                    parsed.set_fragment(None);
+                    links.push((original_url.to_string(), parsed.to_string()));
                 }
+                Err(e) => warn!("Instagram 링크 파싱 실패: {}", e),
             }
         }
     }

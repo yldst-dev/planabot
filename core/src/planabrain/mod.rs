@@ -75,14 +75,9 @@ pub(crate) fn truncate_message(text: &str, limit: usize) -> String {
 fn find_planabrain_root() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     let candidates = [cwd.join("planabrain"), cwd.join("..").join("planabrain")];
-
-    for candidate in candidates {
-        if candidate.join("package.json").exists() {
-            return Some(candidate);
-        }
-    }
-
-    None
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.join("package.json").exists())
 }
 
 fn planabrain_memory_file(planabrain_root: &Path, user_id: &str) -> Result<PathBuf> {
@@ -191,7 +186,9 @@ fn run_planabrain_ask_blocking(question: &str, user_id: &str) -> Result<String> 
     let repo_root = root.parent().unwrap_or(&root);
     let dotenv_path = repo_root.join(".env");
 
-    let command = command.current_dir(&root).env("PLANABRAIN_USER_ID", user_id);
+    let command = command
+        .current_dir(&root)
+        .env("PLANABRAIN_USER_ID", user_id);
     if dotenv_path.exists() {
         command.env("DOTENV_CONFIG_PATH", dotenv_path);
     }

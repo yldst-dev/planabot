@@ -1,22 +1,31 @@
 use std::time::Instant;
 
 use chrono::{Datelike, Local, Timelike, Weekday};
-use log::error;
+use log::{error, warn};
 use teloxide::prelude::*;
-use teloxide::types::{CallbackQuery, ChatAction, Message, ParseMode};
+use teloxide::types::{
+    CallbackQuery, ChatAction, InlineKeyboardButton, InlineKeyboardMarkup, Message, ParseMode,
+};
 use teloxide::utils::html;
 use tokio::time::{self, Duration};
+use url::Url;
 
 use crate::planabrain;
 
 use super::commands::Command;
 use super::gallery::{
-    build_gallery_keyboard, extract_gallery_id, is_private_chat, render_gallery_message,
+    GalleryIdSource, build_gallery_keyboard, extract_gallery_id, is_private_chat,
+    render_gallery_message, render_gallery_message_for_user,
 };
-use super::telegram::{send_reply_with_fallback, SendOptions};
+use super::telegram::{SendOptions, send_reply_with_fallback};
 use super::{AppState, HandlerResult};
 
-pub(crate) async fn handle_command<B>(bot: B, msg: Message, cmd: Command, state: AppState) -> HandlerResult
+pub(crate) async fn handle_command<B>(
+    bot: B,
+    msg: Message,
+    cmd: Command,
+    state: AppState,
+) -> HandlerResult
 where
     B: Requester + Send + Sync + 'static,
     B::Err: std::error::Error + Send + Sync + 'static,
@@ -30,7 +39,7 @@ where
     match cmd {
         Command::Start => {
             let mut text = String::from(
-                "선생님, 반갑습니다. 저는 선생님의 Hitomi.la 갤러리 정보 검색 요청을 지원하는 Bot, 프라나입니다.\n\n명령어 프로토콜 안내\n- 개인 채널: 숫자 ID 직접 입력 (예시: 12345)\n- 모든 채널: 접두사 !와 ID 입력 (예시: !12345)\n",
+                "선생님, 반갑습니다. 저는 다양한 기능을 통합해 선생님의 요청을 돕는 에이전트, 프라나입니다.\n\n지원 기능\n- 갤러리 검색: Hitomi.la ID 조회\n- 링크 정리: 유튜브/인스타그램/X 추적 파라미터 제거 및 임베딩 링크 제공\n- AI 채팅 에이전트: 베타 기능\n\n사용 안내\n- 갤러리 검색: 개인 채널은 숫자 ID 직접 입력 (예시: 12345)\n- 갤러리 검색: 모든 채널은 접두사 !와 ID 입력 (예시: !12345)\n",
             );
 
             if state.bot_username.is_empty() {
@@ -44,9 +53,16 @@ where
 
             text.push_str("\n분석이 필요한 ID를 입력해주십시오, 선생님.");
 
-            bot.send_message(msg.chat.id, html::escape(&text))
-                .parse_mode(ParseMode::Html)
-                .await?;
+            let _ = send_reply_with_fallback(
+                &bot,
+                &msg,
+                html::escape(&text),
+                SendOptions {
+                    reply_markup: build_notice_keyboard(&state),
+                    ..SendOptions::default()
+                },
+            )
+            .await?;
         }
         Command::Ping => {
             let started = Instant::now();
@@ -188,8 +204,7 @@ where
     match answer {
         Ok(answer) => {
             let reply = planabrain::truncate_message(answer.trim(), 4000);
-            let sent =
-                send_reply_with_fallback(&bot, &msg, reply, SendOptions::default()).await?;
+            let sent = send_reply_with_fallback(&bot, &msg, reply, SendOptions::default()).await?;
             state.record_planabrain_reply(&sent).await;
         }
         Err(err) => {
@@ -224,9 +239,29 @@ where
         None => return Ok(()),
     };
 
-    let Some(gallery_id) = extract_gallery_id(text, &msg, &state.bot_username) else {
+    let Some(gallery_match) = extract_gallery_id(text, &msg, &state.bot_username) else {
         return Ok(());
     };
+
+    let gallery_id = gallery_match.id.clone();
+
+    let mut use_user_header = false;
+    if gallery_match.source == GalleryIdSource::Url && !is_private_chat(&msg) {
+        match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
+            Ok(chat_member) => {
+                if chat_member.kind.is_privileged() {
+                    if let Err(err) = bot.delete_message(msg.chat.id, msg.id).await {
+                        warn!("갤러리 URL 메시지 삭제 실패: {:?}", err);
+                    } else {
+                        use_user_header = true;
+                    }
+                }
+            }
+            Err(err) => {
+                error!("관리자 권한 확인 중 오류 발생 (갤러리 URL): {:?}", err);
+            }
+        }
+    }
 
     let chat_id = msg.chat.id;
     let initial = send_reply_with_fallback(
@@ -243,11 +278,37 @@ where
     )
     .await?;
 
-    let info = state.gallery_client.get_gallery_info(&gallery_id).await?;
+    let info = match state.gallery_client.get_gallery_info(&gallery_id).await {
+        Ok(info) => info,
+        Err(err) => {
+            error!("갤러리 조회 실패 (ID {}): {}", gallery_id, err);
+            let _ = bot
+                .edit_message_text(
+                    chat_id,
+                    initial.id,
+                    "선생님, 갤러리 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주십시오.",
+                )
+                .await;
+            return Ok(());
+        }
+    };
 
     match info {
         Some(info) => {
-            let response = render_gallery_message(&info, false);
+            let response = if use_user_header {
+                msg.from
+                    .as_ref()
+                    .map(|user| {
+                        let display = user
+                            .username
+                            .clone()
+                            .unwrap_or_else(|| user.first_name.clone());
+                        render_gallery_message_for_user(&info, false, &display)
+                    })
+                    .unwrap_or_else(|| render_gallery_message(&info, false))
+            } else {
+                render_gallery_message(&info, false)
+            };
             let keyboard = build_gallery_keyboard(&info, !is_private_chat(&msg));
 
             if let Err(err) = bot
@@ -274,7 +335,50 @@ where
     Ok(())
 }
 
-pub(crate) async fn handle_callback<B>(bot: B, query: CallbackQuery, state: AppState) -> HandlerResult
+pub(crate) async fn handle_notice_post<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
+where
+    B: Requester + Send + Sync + 'static,
+    B::Err: std::error::Error + Send + Sync + 'static,
+    B::CopyMessage: Send,
+{
+    if !state.is_after_boot(&msg) {
+        return Ok(());
+    }
+
+    let Some(notice_chat_id) = state.notice_chat_id else {
+        return Ok(());
+    };
+
+    if msg.chat.id != notice_chat_id {
+        return Ok(());
+    }
+
+    let Some(markup) = build_notice_keyboard(&state) else {
+        return Ok(());
+    };
+
+    let targets = state.group_chat_ids();
+    if targets.is_empty() {
+        return Ok(());
+    }
+
+    for chat_id in targets {
+        let mut request = bot.copy_message(chat_id, msg.chat.id, msg.id);
+        request = request.reply_markup(markup.clone());
+
+        if let Err(err) = request.await {
+            warn!("공지 전달 실패 (chat {:?}): {}", chat_id, err);
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn handle_callback<B>(
+    bot: B,
+    query: CallbackQuery,
+    state: AppState,
+) -> HandlerResult
 where
     B: Requester + Send + Sync + 'static,
     B::Err: std::error::Error + Send + Sync + 'static,
@@ -285,7 +389,20 @@ where
     };
 
     if let Some(gallery_id) = data.strip_prefix("save_") {
-        let info = state.gallery_client.get_gallery_info(gallery_id).await?;
+        let info = match state.gallery_client.get_gallery_info(gallery_id).await {
+            Ok(info) => info,
+            Err(err) => {
+                error!("갤러리 조회 실패 (callback, ID {}): {}", gallery_id, err);
+                let _ = bot
+                    .answer_callback_query(query.id)
+                    .text(
+                        "선생님, 갤러리 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주십시오.",
+                    )
+                    .show_alert(true)
+                    .await;
+                return Ok(());
+            }
+        };
 
         match info {
             Some(info) => {
@@ -330,6 +447,13 @@ where
     }
 
     Ok(())
+}
+
+fn build_notice_keyboard(state: &AppState) -> Option<InlineKeyboardMarkup> {
+    let url = Url::parse(state.notice_url.as_deref()?).ok()?;
+    Some(InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::url("공지방 참여하기", url),
+    ]]))
 }
 
 pub(crate) fn is_plana_trigger(msg: &Message, state: &AppState) -> bool {

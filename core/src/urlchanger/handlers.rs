@@ -1,4 +1,4 @@
-use crate::bot::{AppState, HandlerResult, SendOptions, send_reply_with_fallback, send_in_thread};
+use crate::bot::{AppState, HandlerResult, SendOptions, send_in_thread, send_reply_with_fallback};
 use crate::urlchanger::link_utils::{
     LinkConversion, contains_instagram_link, contains_music_link, contains_x_link,
     convert_instagram_links, convert_x_links, extract_music_links,
@@ -16,28 +16,27 @@ where
     <B as Requester>::GetUpdates: Send,
     <B as Requester>::GetChatMember: Send,
 {
-    Update::filter_message()
-        .branch(
-            dptree::filter(|msg: Message, state: AppState| state.is_after_boot(&msg))
-                .branch(
-                    dptree::filter(|msg: Message| {
-                        msg.text().is_some() && contains_music_link(msg.text().unwrap())
-                    })
-                    .endpoint(handle_music_links::<B>),
-                )
-                .branch(
-                    dptree::filter(|msg: Message| {
-                        msg.text().is_some() && contains_x_link(msg.text().unwrap())
-                    })
-                    .endpoint(handle_x_links::<B>),
-                )
-                .branch(
-                    dptree::filter(|msg: Message| {
-                        msg.text().is_some() && contains_instagram_link(msg.text().unwrap())
-                    })
-                    .endpoint(handle_instagram_links::<B>),
-                ),
-        )
+    Update::filter_message().branch(
+        dptree::filter(|msg: Message, state: AppState| state.is_after_boot(&msg))
+            .branch(
+                dptree::filter(|msg: Message| {
+                    msg.text().is_some() && contains_music_link(msg.text().unwrap())
+                })
+                .endpoint(handle_music_links::<B>),
+            )
+            .branch(
+                dptree::filter(|msg: Message| {
+                    msg.text().is_some() && contains_x_link(msg.text().unwrap())
+                })
+                .endpoint(handle_x_links::<B>),
+            )
+            .branch(
+                dptree::filter(|msg: Message| {
+                    msg.text().is_some() && contains_instagram_link(msg.text().unwrap())
+                })
+                .endpoint(handle_instagram_links::<B>),
+            ),
+    )
 }
 
 pub async fn handle_music_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
@@ -55,10 +54,7 @@ where
         return Ok(());
     }
 
-    let chat_member = match bot
-        .get_chat_member(msg.chat.id, bot.get_me().await?.id)
-        .await
-    {
+    let chat_member = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
         Ok(member) => member,
         Err(e) => {
             error!("관리자 권한 확인 중 오류 발생: {:?}", e);
@@ -158,10 +154,7 @@ where
         return Ok(());
     }
 
-    let chat_member = match bot
-        .get_chat_member(msg.chat.id, bot.get_me().await?.id)
-        .await
-    {
+    let chat_member = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
         Ok(member) => member,
         Err(e) => {
             error!("관리자 권한 확인 중 오류 발생(X): {:?}", e);
@@ -246,10 +239,7 @@ where
         return Ok(());
     }
 
-    let chat_member = match bot
-        .get_chat_member(msg.chat.id, bot.get_me().await?.id)
-        .await
-    {
+    let chat_member = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
         Ok(member) => member,
         Err(e) => {
             error!("관리자 권한 확인 중 오류 발생(Instagram): {:?}", e);

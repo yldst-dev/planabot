@@ -38,7 +38,12 @@ export async function loadUserMemory(params: {
     throw err;
   }
 
-  const parsed = JSON.parse(raw) as Partial<StoredChatFile>;
+  let parsed: Partial<StoredChatFile>;
+  try {
+    parsed = JSON.parse(raw) as Partial<StoredChatFile>;
+  } catch {
+    return [];
+  }
   const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
 
   const normalized: StoredChatMessage[] = messages

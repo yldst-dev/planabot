@@ -7,6 +7,8 @@ use dotenvy::dotenv;
 #[derive(Debug, Clone)]
 pub struct Config {
     pub telegram_api_token: String,
+    pub notice_chat_id: Option<i64>,
+    pub notice_url: String,
 }
 
 impl Config {
@@ -17,6 +19,13 @@ impl Config {
         match std::env::var("TELEGRAM_API_TOKEN") {
             Ok(token) if is_valid(&token) => Ok(Self {
                 telegram_api_token: token,
+                notice_chat_id: std::env::var("PLANABOT_NOTICE_CHAT_ID")
+                    .ok()
+                    .and_then(|raw| raw.trim().parse::<i64>().ok()),
+                notice_url: std::env::var("PLANABOT_NOTICE_URL")
+                    .ok()
+                    .filter(|raw| !raw.trim().is_empty())
+                    .unwrap_or_else(|| "https://t.me/planabot_noti".to_string()),
             }),
             _ => {
                 ensure_env_exists()?;

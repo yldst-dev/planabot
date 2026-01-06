@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::warn;
 use serde::{Deserialize, Serialize};
-use teloxide::types::{ChatId, ChatKind, Message, MessageId, PublicChatKind};
+use teloxide::types::{ChatId, ChatKind, Message, MessageId, PublicChatKind, UserId};
 use tokio::fs;
 
 use crate::hitomi::GalleryClient;
@@ -76,7 +76,10 @@ struct PlanabrainReplyRecord {
 #[derive(Clone)]
 pub struct AppState {
     pub bot_username: String,
+    pub bot_user_id: UserId,
     pub gallery_client: GalleryClient,
+    pub notice_chat_id: Option<ChatId>,
+    pub notice_url: Option<String>,
     booted_at: i64,
     planabrain_replies: Arc<RwLock<PlanabrainReplyTracker>>,
     planabrain_replies_path: PathBuf,
@@ -85,7 +88,13 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(bot_username: String, gallery_client: GalleryClient) -> Self {
+    pub fn new(
+        bot_username: String,
+        bot_user_id: UserId,
+        gallery_client: GalleryClient,
+        notice_chat_id: Option<ChatId>,
+        notice_url: Option<String>,
+    ) -> Self {
         let booted_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -98,7 +107,10 @@ impl AppState {
 
         Self {
             bot_username,
+            bot_user_id,
             gallery_client,
+            notice_chat_id,
+            notice_url,
             booted_at,
             planabrain_replies: Arc::new(RwLock::new(planabrain_replies)),
             planabrain_replies_path,
@@ -131,8 +143,7 @@ impl AppState {
             tracker.records()
         };
 
-        if let Err(err) =
-            persist_planabrain_replies(&self.planabrain_replies_path, &snapshot).await
+        if let Err(err) = persist_planabrain_replies(&self.planabrain_replies_path, &snapshot).await
         {
             warn!("planabrain 응답 기록 저장 실패: {}", err);
         }
@@ -245,7 +256,6 @@ async fn persist_planabrain_replies(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).await?;
     }
-    let payload =
-        serde_json::to_string_pretty(records).unwrap_or_else(|_| "[]".to_string());
+    let payload = serde_json::to_string_pretty(records).unwrap_or_else(|_| "[]".to_string());
     fs::write(path, payload).await
 }
