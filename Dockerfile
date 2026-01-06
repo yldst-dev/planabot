@@ -4,14 +4,18 @@ ARG RUST_IMAGE=rustlang/rust:nightly-slim
 ARG RUNTIME_IMAGE=debian:bookworm-slim
 ARG NODE_IMAGE=node:20-bookworm-slim
 ARG RUSTUP_TOOLCHAIN=nightly
+ARG RUSTUP_UPDATE=0
 
 ## Build stage
 FROM ${RUST_IMAGE} AS builder
 
 WORKDIR /app
 
-# Ensure toolchain is new enough for current dependencies.
-RUN rustup update ${RUSTUP_TOOLCHAIN} && rustup default ${RUSTUP_TOOLCHAIN}
+# Ensure toolchain is set; update is optional to avoid rustup fs errors in some environments.
+RUN if [ "${RUSTUP_UPDATE}" = "1" ]; then \
+        rustup update ${RUSTUP_TOOLCHAIN}; \
+    fi && \
+    rustup default ${RUSTUP_TOOLCHAIN}
 
 # 캐시 최적화를 위해 먼저 manifest 복사
 COPY Cargo.toml Cargo.lock ./
