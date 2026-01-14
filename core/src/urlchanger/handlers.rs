@@ -1,8 +1,9 @@
 use crate::bot::{AppState, HandlerResult, SendOptions, send_in_thread, send_reply_with_fallback};
 use crate::urlchanger::link_utils::{
-    LinkConversion, contains_instagram_link, contains_music_link, contains_x_link,
+    LinkConversion, MusicPlatform, contains_instagram_link, contains_music_link, contains_x_link,
     convert_instagram_links, convert_x_links, extract_music_links,
 };
+use crate::urlchanger::music_resolver::{ResolvedMusicLink, music_http, resolve_music_links};
 use log::{error, warn};
 use teloxide::dispatching::DpHandlerDescription;
 use teloxide::prelude::*;
@@ -15,6 +16,8 @@ where
     B::Err: std::error::Error + Send + Sync + 'static,
     <B as Requester>::GetUpdates: Send,
     <B as Requester>::GetChatMember: Send,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
 {
     Update::filter_message().branch(
         dptree::filter(|msg: Message, state: AppState| state.is_after_boot(&msg))
@@ -41,9 +44,11 @@ where
 
 pub async fn handle_music_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
 where
-    B: Requester + Send + Sync + 'static,
+    B: Requester + Clone + Send + Sync + 'static,
     B::Err: std::error::Error + Send + Sync + 'static,
     <B as Requester>::GetChatMember: Send,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
 {
     state.record_group_chat(&msg).await;
 
@@ -54,29 +59,33 @@ where
         return Ok(());
     }
 
+    let resolved_links = resolve_music_links(music_http(), &links).await;
+
     let chat_member = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
         Ok(member) => member,
         Err(e) => {
             error!("관리자 권한 확인 중 오류 발생: {:?}", e);
-            return handle_without_admin_rights(&bot, &msg, &links).await;
+            return handle_without_admin_rights(&bot, &msg, &resolved_links).await;
         }
     };
 
     if chat_member.kind.is_privileged() {
-        handle_with_admin_rights(&bot, &msg, &links).await
+        handle_with_admin_rights(&bot, &msg, &resolved_links).await
     } else {
-        handle_without_admin_rights(&bot, &msg, &links).await
+        handle_without_admin_rights(&bot, &msg, &resolved_links).await
     }
 }
 
 async fn handle_with_admin_rights<B>(
     bot: &B,
     msg: &Message,
-    links: &[(String, String)],
+    links: &[ResolvedMusicLink],
 ) -> HandlerResult
 where
     B: Requester + ?Sized,
     B::Err: Send + Sync + 'static,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
 {
     if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
         warn!("메시지 삭제 실패: {:?}", e);
@@ -86,11 +95,18 @@ where
     let username = display_name(msg);
     let mut cleaned_text = msg.text().unwrap_or("").to_string();
 
-    for (original, cleaned) in links {
-        cleaned_text = cleaned_text.replace(original, cleaned);
+    for link in links {
+        cleaned_text = cleaned_text.replace(&link.original, &link.cleaned);
     }
 
-    send_in_thread(bot, msg, format!("{}: {}", username, cleaned_text)).await?;
+    let message = format!("{}: {}", username, cleaned_text);
+    let reply_markup = build_music_keyboard(links);
+
+    let mut request = send_in_thread(bot, msg, message);
+    if let Some(markup) = reply_markup {
+        request = request.reply_markup(markup);
+    }
+    request.await?;
 
     Ok(())
 }
@@ -98,39 +114,22 @@ where
 async fn handle_without_admin_rights<B>(
     bot: &B,
     msg: &Message,
-    links: &[(String, String)],
+    links: &[ResolvedMusicLink],
 ) -> HandlerResult
 where
     B: Requester + ?Sized,
     B::Err: Send + Sync + 'static,
+    <B as Requester>::SendMessage: Send,
 {
-    let mut keyboard = Vec::new();
-
-    for (i, (_, cleaned)) in links.iter().enumerate() {
-        match reqwest::Url::parse(cleaned) {
-            Ok(url) => {
-                let row = vec![InlineKeyboardButton::url(
-                    format!("정리된 링크 #{}", i + 1),
-                    url,
-                )];
-                keyboard.push(row);
-            }
-            Err(e) => warn!("URL 파싱 오류: {}, URL: {}", e, cleaned),
-        }
-    }
-
-    if keyboard.is_empty() {
-        return Ok(());
-    }
-
-    let markup = InlineKeyboardMarkup::new(keyboard);
+    let text = build_cleaned_links_text(links);
+    let markup = build_music_keyboard(links);
 
     send_reply_with_fallback(
         bot,
         msg,
-        "추적 파라미터가 제거된 링크:",
+        text,
         SendOptions {
-            reply_markup: Some(markup),
+            reply_markup: markup,
             ..SendOptions::default()
         },
     )
@@ -139,11 +138,89 @@ where
     Ok(())
 }
 
+fn build_cleaned_links_text(links: &[ResolvedMusicLink]) -> String {
+    if links.is_empty() {
+        return "정리된 링크가 없습니다.".to_string();
+    }
+
+    if links.len() == 1 {
+        format!("정리된 링크:\n{}", links[0].cleaned)
+    } else {
+        let mut lines = Vec::with_capacity(links.len());
+        for (idx, link) in links.iter().enumerate() {
+            lines.push(format!("{}. {}", idx + 1, link.cleaned));
+        }
+        format!("정리된 링크:\n{}", lines.join("\n"))
+    }
+}
+
+fn build_music_keyboard(links: &[ResolvedMusicLink]) -> Option<InlineKeyboardMarkup> {
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    let multi = links.len() > 1;
+
+    for (idx, link) in links.iter().enumerate() {
+        let suffix = if multi {
+            format!(" #{}", idx + 1)
+        } else {
+            String::new()
+        };
+        let mut current_row: Vec<InlineKeyboardButton> = Vec::new();
+        for platform in music_platform_order() {
+            if platform == link.platform {
+                continue;
+            }
+            let Some(url) = link.platform_links.get(&platform) else {
+                continue;
+            };
+            match reqwest::Url::parse(url) {
+                Ok(parsed) => {
+                    let label = format!("{}{}", platform_label(platform), suffix);
+                    current_row.push(InlineKeyboardButton::url(label, parsed));
+                    if current_row.len() == 2 {
+                        rows.push(current_row);
+                        current_row = Vec::new();
+                    }
+                }
+                Err(e) => warn!("플랫폼 URL 파싱 오류: {}, URL: {}", e, url),
+            }
+        }
+        if !current_row.is_empty() {
+            rows.push(current_row);
+        }
+    }
+
+    if rows.is_empty() {
+        None
+    } else {
+        Some(InlineKeyboardMarkup::new(rows))
+    }
+}
+
+fn music_platform_order() -> [MusicPlatform; 4] {
+    [
+        MusicPlatform::Spotify,
+        MusicPlatform::YouTubeMusic,
+        MusicPlatform::YouTube,
+        MusicPlatform::AppleMusic,
+    ]
+}
+
+fn platform_label(platform: MusicPlatform) -> &'static str {
+    match platform {
+        MusicPlatform::Spotify => "스포티파이",
+        MusicPlatform::YouTubeMusic => "유튜브 뮤직",
+        MusicPlatform::YouTube => "유튜브",
+        MusicPlatform::AppleMusic => "애플 뮤직",
+    }
+}
+
 pub async fn handle_x_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
 where
-    B: Requester + Send + Sync + 'static,
+    B: Requester + Clone + Send + Sync + 'static,
     B::Err: std::error::Error + Send + Sync + 'static,
     <B as Requester>::GetChatMember: Send,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
 {
     state.record_group_chat(&msg).await;
 
@@ -173,6 +250,8 @@ async fn handle_x_with_admin<B>(bot: &B, msg: &Message, links: &[LinkConversion]
 where
     B: Requester + ?Sized,
     B::Err: Send + Sync + 'static,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
 {
     if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
         warn!("X 메시지 삭제 실패: {:?}", e);
@@ -202,6 +281,7 @@ async fn handle_x_without_admin<B>(
 where
     B: Requester + ?Sized,
     B::Err: Send + Sync + 'static,
+    <B as Requester>::SendMessage: Send,
 {
     let mut converted_text = msg.text().unwrap_or("").to_string();
     for link in links {
@@ -226,9 +306,11 @@ where
 
 pub async fn handle_instagram_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
 where
-    B: Requester + Send + Sync + 'static,
+    B: Requester + Clone + Send + Sync + 'static,
     B::Err: std::error::Error + Send + Sync + 'static,
     <B as Requester>::GetChatMember: Send,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
 {
     state.record_group_chat(&msg).await;
 
@@ -262,6 +344,8 @@ async fn handle_instagram_with_admin<B>(
 where
     B: Requester + ?Sized,
     B::Err: Send + Sync + 'static,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
 {
     if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
         warn!("Instagram 메시지 삭제 실패: {:?}", e);
@@ -287,6 +371,7 @@ async fn handle_instagram_without_admin<B>(
 where
     B: Requester + ?Sized,
     B::Err: Send + Sync + 'static,
+    <B as Requester>::SendMessage: Send,
 {
     let mut converted_text = msg.text().unwrap_or("").to_string();
     for (original, converted) in links {

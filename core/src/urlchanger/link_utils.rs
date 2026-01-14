@@ -9,12 +9,16 @@ static MUSIC_YOUTUBE_MUSIC_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"https?://(?:www\.)?music\.youtube\.com/\S+").unwrap());
 static MUSIC_SPOTIFY_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"https?://(?:www\.)?open\.spotify\.com/\S+").unwrap());
+static MUSIC_APPLE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"https?://(?:www\.)?music\.apple\.com/\S+").unwrap());
 static MUSIC_YOUTUBE_CAPTURE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(https?://(?:www\.)?youtu(?:\.be|be\.com)/\S+)").unwrap());
 static MUSIC_YOUTUBE_MUSIC_CAPTURE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(https?://(?:www\.)?music\.youtube\.com/\S+)").unwrap());
 static MUSIC_SPOTIFY_CAPTURE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(https?://(?:www\.)?open\.spotify\.com/\S+)").unwrap());
+static MUSIC_APPLE_CAPTURE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(https?://(?:www\.)?music\.apple\.com/\S+)").unwrap());
 static X_LINK_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\.?https?://(?:www\.)?(?:x|twitter)\.com/\S+").unwrap());
 static X_LINK_CAPTURE_RE: Lazy<Regex> =
@@ -31,10 +35,26 @@ pub struct LinkConversion {
     pub disable_preview: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MusicPlatform {
+    Spotify,
+    YouTubeMusic,
+    YouTube,
+    AppleMusic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MusicLink {
+    pub original: String,
+    pub cleaned: String,
+    pub platform: MusicPlatform,
+}
+
 pub fn contains_music_link(text: &str) -> bool {
     MUSIC_YOUTUBE_RE.is_match(text)
         || MUSIC_YOUTUBE_MUSIC_RE.is_match(text)
         || MUSIC_SPOTIFY_RE.is_match(text)
+        || MUSIC_APPLE_RE.is_match(text)
 }
 
 pub fn contains_x_link(text: &str) -> bool {
@@ -45,26 +65,22 @@ pub fn contains_instagram_link(text: &str) -> bool {
     INSTAGRAM_LINK_RE.is_match(text)
 }
 
-pub fn remove_si_parameter(url_str: &str) -> String {
+pub fn clean_music_url(url_str: &str) -> String {
     if let Ok(mut url) = Url::parse(url_str) {
         if url.query().is_some() {
             let query_pairs: Vec<(String, String)> = url
                 .query_pairs()
-                .filter(|(k, _)| k != "si")
+                .filter(|(k, _)| !is_tracking_param(k))
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect();
 
-            url.set_query(None);
-
-            if !query_pairs.is_empty() {
-                let query = query_pairs
-                    .iter()
-                    .map(|(k, v)| format!("{}={}", k, v))
-                    .collect::<Vec<String>>()
-                    .join("&");
-
-                if !query.is_empty() {
-                    url.set_query(Some(&query));
+            if query_pairs.is_empty() {
+                url.set_query(None);
+            } else {
+                let mut pairs = url.query_pairs_mut();
+                pairs.clear();
+                for (key, value) in query_pairs {
+                    pairs.append_pair(&key, &value);
                 }
             }
         }
@@ -83,16 +99,14 @@ pub fn remove_si_parameter(url_str: &str) -> String {
     url_str.to_string()
 }
 
-pub fn extract_music_links(text: &str) -> Vec<(String, String)> {
+pub fn extract_music_links(text: &str) -> Vec<MusicLink> {
     let mut links = Vec::new();
 
     for cap in MUSIC_YOUTUBE_CAPTURE_RE.captures_iter(text) {
         if let Some(m) = cap.get(1) {
             let original_url = m.as_str();
-            let cleaned_url = remove_si_parameter(original_url);
-
-            if original_url != cleaned_url {
-                links.push((original_url.to_string(), cleaned_url));
+            if let Some(link) = build_music_link(original_url) {
+                links.push(link);
             }
         }
     }
@@ -100,10 +114,8 @@ pub fn extract_music_links(text: &str) -> Vec<(String, String)> {
     for cap in MUSIC_YOUTUBE_MUSIC_CAPTURE_RE.captures_iter(text) {
         if let Some(m) = cap.get(1) {
             let original_url = m.as_str();
-            let cleaned_url = remove_si_parameter(original_url);
-
-            if original_url != cleaned_url {
-                links.push((original_url.to_string(), cleaned_url));
+            if let Some(link) = build_music_link(original_url) {
+                links.push(link);
             }
         }
     }
@@ -111,15 +123,63 @@ pub fn extract_music_links(text: &str) -> Vec<(String, String)> {
     for cap in MUSIC_SPOTIFY_CAPTURE_RE.captures_iter(text) {
         if let Some(m) = cap.get(1) {
             let original_url = m.as_str();
-            let cleaned_url = remove_si_parameter(original_url);
+            if let Some(link) = build_music_link(original_url) {
+                links.push(link);
+            }
+        }
+    }
 
-            if original_url != cleaned_url {
-                links.push((original_url.to_string(), cleaned_url));
+    for cap in MUSIC_APPLE_CAPTURE_RE.captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            let original_url = m.as_str();
+            if let Some(link) = build_music_link(original_url) {
+                links.push(link);
             }
         }
     }
 
     links
+}
+
+fn build_music_link(original_url: &str) -> Option<MusicLink> {
+    let parsed = Url::parse(original_url).ok()?;
+    let platform = detect_music_platform(&parsed)?;
+    let cleaned = clean_music_url(original_url);
+    Some(MusicLink {
+        original: original_url.to_string(),
+        cleaned,
+        platform,
+    })
+}
+
+fn detect_music_platform(url: &Url) -> Option<MusicPlatform> {
+    match url.host_str()? {
+        "open.spotify.com" => Some(MusicPlatform::Spotify),
+        "music.youtube.com" => Some(MusicPlatform::YouTubeMusic),
+        "youtube.com" | "www.youtube.com" | "m.youtube.com" | "youtu.be" => {
+            Some(MusicPlatform::YouTube)
+        }
+        "music.apple.com" => Some(MusicPlatform::AppleMusic),
+        _ => None,
+    }
+}
+
+fn is_tracking_param(key: &str) -> bool {
+    matches!(
+        key,
+        "si" | "fbclid"
+            | "igshid"
+            | "gclid"
+            | "wbraid"
+            | "gbraid"
+            | "msclkid"
+            | "at"
+            | "ct"
+            | "itscg"
+            | "itsct"
+            | "ls"
+            | "uo"
+    ) || key.starts_with("utm_")
 }
 
 pub fn convert_x_links(text: &str) -> Vec<LinkConversion> {
@@ -183,28 +243,36 @@ mod tests {
     fn test_remove_si_parameter_youtube() {
         let original = "https://youtu.be/Vc-ByDGOuQE?si=qIy-ihfrRKmDAPZP";
         let expected = "https://youtu.be/Vc-ByDGOuQE";
-        assert_eq!(remove_si_parameter(original), expected);
+        assert_eq!(clean_music_url(original), expected);
     }
 
     #[test]
     fn test_remove_si_parameter_youtube_music() {
         let original = "https://music.youtube.com/watch?v=nmYDYalgb5w&si=GGi18ac_fxnx4F1b";
         let expected = "https://music.youtube.com/watch?v=nmYDYalgb5w";
-        assert_eq!(remove_si_parameter(original), expected);
+        assert_eq!(clean_music_url(original), expected);
     }
 
     #[test]
     fn test_remove_si_parameter_spotify() {
         let original = "https://open.spotify.com/track/1FYWnRofuIgJf62AnX8i5S?si=bf00147df50f4141";
         let expected = "https://open.spotify.com/track/1FYWnRofuIgJf62AnX8i5S";
-        assert_eq!(remove_si_parameter(original), expected);
+        assert_eq!(clean_music_url(original), expected);
     }
 
     #[test]
     fn test_remove_si_parameter_with_multiple_params() {
         let original = "https://music.youtube.com/watch?v=nmYDYalgb5w&si=GGi18ac_fxnx4F1b&list=RDAMVMnmYDYalgb5w";
         let expected = "https://music.youtube.com/watch?v=nmYDYalgb5w&list=RDAMVMnmYDYalgb5w";
-        assert_eq!(remove_si_parameter(original), expected);
+        assert_eq!(clean_music_url(original), expected);
+    }
+
+    #[test]
+    fn test_clean_music_url_keeps_apple_track_id() {
+        let original =
+            "https://music.apple.com/kr/album/foo/123456789?i=987654321&ls=1&itsct=abc123";
+        let expected = "https://music.apple.com/kr/album/foo/123456789?i=987654321";
+        assert_eq!(clean_music_url(original), expected);
     }
 
     #[test]

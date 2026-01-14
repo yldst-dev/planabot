@@ -374,6 +374,26 @@ where
     Ok(())
 }
 
+pub(crate) async fn handle_notice_edit<B>(_bot: B, msg: Message, state: AppState) -> HandlerResult
+where
+    B: Requester + Send + Sync + 'static,
+    B::Err: std::error::Error + Send + Sync + 'static,
+{
+    if !state.is_after_boot(&msg) {
+        return Ok(());
+    }
+
+    let Some(notice_chat_id) = state.notice_chat_id else {
+        return Ok(());
+    };
+
+    if msg.chat.id != notice_chat_id {
+        return Ok(());
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn handle_callback<B>(
     bot: B,
     query: CallbackQuery,

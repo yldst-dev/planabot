@@ -24,12 +24,16 @@ cargo run --release
 - Hitomi 조회: `!<ID>` (모든 채팅), `<ID>` (개인 채팅), `@봇계정 <ID>` (그룹)
 - 명령어: `/start`, `/ping`
 - URL 정리: 메시지에 포함된
-  - YouTube/YouTube Music/Spotify 링크 → `si` 파라미터 제거
+  - YouTube/YouTube Music/Spotify/Apple Music 링크 → 추적 파라미터 제거
   - X/Twitter 링크 → `fxtwitter.com`으로 변환
   - Instagram 링크 → `kkinstagram.com`으로 변환
   관리자인 경우 원본 메시지를 삭제하고 정리된 링크로 재전송, 아니면 인라인 버튼/텍스트로 대체 링크 제공
+- 음악 링크가 포함된 메시지에서는 정리된 링크를 제공하고, 같은 곡의
+  스포티파이/유튜브 뮤직/유튜브/애플 뮤직 링크를 인라인 버튼으로 제공합니다
+  (원본 플랫폼 버튼은 제외). 매핑 실패 시 정리된 링크만 전송합니다.
 - 봇이 재시작된 이후의 메시지만 처리합니다. (`/ping`은 예외)
-- 봇 재시작 시, 이전에 기록된 그룹 채팅에 시작 안내 메시지를 전송합니다.
+- 봇은 KST 자정(00:00)에만 재시동되며 재시동 기록은 터미널 로그에만 남습니다.
+- 텔레그램 통신 불능 오류나 치명적 패닉이 발생하면 즉시 재시동합니다.
 - 베타 AI 호출: `프라나야`로 시작하는 메시지
   - `PLANABRAIN_ALLOWED_CHAT_IDS`에 포함된 채팅 또는 `PLANABRAIN_ALLOWED_USER_IDS`에 포함된 1:1 사용자만 동작
 
@@ -49,6 +53,12 @@ cargo run --release
 - `PLANABRAIN_INDEX_PATH` (기본 `.planabrain/index.json`)
 - `PLANABOT_GROUPS_PATH` (기본 `.planabot/groups.json`): 봇이 참여한 그룹 채팅 ID 저장 경로
 - `PLANABOT_PLANABRAIN_REPLIES_PATH` (기본 `.planabot/planabrain_replies.json`): planabrain 답변 ID 저장 경로
+- `WEBSHARE_API_KEY`: Webshare 프록시 API 키 (song.link 매핑에 프록시 사용 시)
+- `WEBSHARE_MODE` (기본 `direct`): `direct` 또는 `backbone`
+- `WEBSHARE_COUNTRY_CODES`: 국가 코드 필터 (예: `US,KR`)
+- `WEBSHARE_PLAN_ID`: 특정 플랜 ID 필터
+- `WEBSHARE_PAGE_SIZE` (기본 `25`)
+- `SONGLINK_DIRECT_FALLBACK` (기본 `false`): 프록시 전부 rate limit일 때 direct 요청 허용
 
 ## 빌드 산출물
 - 릴리즈 바이너리: `target/release/planabot`
@@ -58,3 +68,6 @@ cargo run --release
   - `./scripts/compose-up.sh`
 - 직접 지정하려면:
   - `PLANABOT_RUNTIME_IMAGE=debian:buster-slim PLANABOT_RUST_IMAGE=rustlang/rust:nightly-buster PLANABOT_NODE_IMAGE=node:18-buster-slim docker compose up --build -d`
+
+## Todo
+- AI가 미디어의 이해와 설명을 하는 기능 추가 예정
