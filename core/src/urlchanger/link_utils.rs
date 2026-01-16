@@ -48,6 +48,7 @@ pub struct MusicLink {
     pub original: String,
     pub cleaned: String,
     pub platform: MusicPlatform,
+    pub had_tracking: bool,
 }
 
 pub fn contains_music_link(text: &str) -> bool {
@@ -145,10 +146,12 @@ fn build_music_link(original_url: &str) -> Option<MusicLink> {
     let parsed = Url::parse(original_url).ok()?;
     let platform = detect_music_platform(&parsed)?;
     let cleaned = clean_music_url(original_url);
+    let had_tracking = has_tracking_params(&parsed, original_url);
     Some(MusicLink {
         original: original_url.to_string(),
         cleaned,
         platform,
+        had_tracking,
     })
 }
 
@@ -180,6 +183,19 @@ fn is_tracking_param(key: &str) -> bool {
             | "ls"
             | "uo"
     ) || key.starts_with("utm_")
+}
+
+fn has_tracking_params(url: &Url, raw: &str) -> bool {
+    if url
+        .query_pairs()
+        .any(|(key, _)| is_tracking_param(key.as_ref()))
+    {
+        return true;
+    }
+    if url.host_str() == Some("youtu.be") && raw.contains("si=") {
+        return true;
+    }
+    false
 }
 
 pub fn convert_x_links(text: &str) -> Vec<LinkConversion> {
@@ -265,6 +281,17 @@ mod tests {
         let original = "https://music.youtube.com/watch?v=nmYDYalgb5w&si=GGi18ac_fxnx4F1b&list=RDAMVMnmYDYalgb5w";
         let expected = "https://music.youtube.com/watch?v=nmYDYalgb5w&list=RDAMVMnmYDYalgb5w";
         assert_eq!(clean_music_url(original), expected);
+    }
+
+    #[test]
+    fn test_music_link_tracking_flag() {
+        let with_tracking =
+            "https://music.youtube.com/watch?v=_F6lmHi7R7s&si=3S6ssv34qqXqffvK";
+        let without_tracking = "https://music.youtube.com/watch?v=_F6lmHi7R7s";
+        let links = extract_music_links(&format!("{with_tracking} {without_tracking}"));
+        assert_eq!(links.len(), 2);
+        assert!(links[0].had_tracking);
+        assert!(!links[1].had_tracking);
     }
 
     #[test]

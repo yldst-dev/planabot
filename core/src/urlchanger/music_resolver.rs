@@ -26,6 +26,7 @@ pub struct ResolvedMusicLink {
     pub cleaned: String,
     pub platform: MusicPlatform,
     pub platform_links: HashMap<MusicPlatform, String>,
+    pub had_tracking: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -193,12 +194,16 @@ pub async fn resolve_music_links(http: &MusicHttp, links: &[MusicLink]) -> Vec<R
         if link.platform == MusicPlatform::YouTube {
             platform_links.insert(MusicPlatform::YouTube, link.cleaned.clone());
         }
+        if link.platform == MusicPlatform::YouTubeMusic {
+            platform_links.insert(MusicPlatform::YouTubeMusic, link.cleaned.clone());
+        }
 
         resolved.push(ResolvedMusicLink {
             original: link.original.clone(),
             cleaned: link.cleaned.clone(),
             platform: link.platform,
             platform_links,
+            had_tracking: link.had_tracking,
         });
     }
 

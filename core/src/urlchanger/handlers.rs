@@ -61,6 +61,9 @@ where
 
     let resolved_links = resolve_music_links(music_http(), &links).await;
     let youtube_only = is_youtube_only(&resolved_links);
+    let youtube_music_only = is_youtube_music_only(&resolved_links);
+    let youtube_music_had_tracking = youtube_music_only
+        && resolved_links.iter().any(|link| link.had_tracking);
 
     let chat_member = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
         Ok(member) => member,
@@ -75,6 +78,24 @@ where
     }
     if youtube_only {
         return handle_youtube_without_admin_rights(&bot, &msg, &resolved_links).await;
+    }
+    if youtube_music_only && chat_member.kind.is_privileged() {
+        return handle_youtube_music_with_admin_rights(
+            &bot,
+            &msg,
+            &resolved_links,
+            youtube_music_had_tracking,
+        )
+        .await;
+    }
+    if youtube_music_only {
+        return handle_youtube_music_without_admin_rights(
+            &bot,
+            &msg,
+            &resolved_links,
+            youtube_music_had_tracking,
+        )
+        .await;
     }
 
     if chat_member.kind.is_privileged() {
@@ -103,7 +124,7 @@ where
     let username = display_name(msg);
     let cleaned_text = build_cleaned_message_text(msg.text().unwrap_or(""), links);
     let message = format!("{}: {}", username, cleaned_text);
-    let reply_markup = build_music_keyboard(links);
+    let reply_markup = build_music_keyboard(links, false);
 
     let mut request = send_in_thread(bot, msg, message);
     if let Some(markup) = reply_markup {
@@ -142,6 +163,41 @@ where
     Ok(())
 }
 
+async fn handle_youtube_music_with_admin_rights<B>(
+    bot: &B,
+    msg: &Message,
+    links: &[ResolvedMusicLink],
+    had_tracking: bool,
+) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: Send + Sync + 'static,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
+{
+    if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
+        warn!("메시지 삭제 실패(유튜브 뮤직): {:?}", e);
+        return handle_youtube_music_without_admin_rights(bot, msg, links, had_tracking).await;
+    }
+
+    let username = display_name(msg);
+    let cleaned_text = youtube_cleaned_text(links);
+    let message = if cleaned_text.contains('\n') {
+        format!("{}:\n{}", username, cleaned_text)
+    } else {
+        format!("{}: {}", username, cleaned_text)
+    };
+    let reply_markup = build_music_keyboard(links, true);
+
+    let mut request = send_in_thread(bot, msg, message);
+    if let Some(markup) = reply_markup {
+        request = request.reply_markup(markup);
+    }
+    request.await?;
+
+    Ok(())
+}
+
 async fn handle_without_admin_rights<B>(
     bot: &B,
     msg: &Message,
@@ -153,7 +209,7 @@ where
     <B as Requester>::SendMessage: Send,
 {
     let text = build_cleaned_links_text(links);
-    let markup = build_music_keyboard(links);
+    let markup = build_music_keyboard(links, false);
 
     send_reply_with_fallback(
         bot,
@@ -194,6 +250,37 @@ where
     Ok(())
 }
 
+async fn handle_youtube_music_without_admin_rights<B>(
+    bot: &B,
+    msg: &Message,
+    links: &[ResolvedMusicLink],
+    had_tracking: bool,
+) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: Send + Sync + 'static,
+    <B as Requester>::SendMessage: Send,
+{
+    let text = if had_tracking {
+        "추적 파라미터가 제거되었습니다."
+    } else {
+        "음악 플랫폼 링크입니다."
+    };
+    let markup = build_music_keyboard(links, true);
+    send_reply_with_fallback(
+        bot,
+        msg,
+        text,
+        SendOptions {
+            reply_markup: markup,
+            ..SendOptions::default()
+        },
+    )
+    .await?;
+
+    Ok(())
+}
+
 fn build_cleaned_links_text(links: &[ResolvedMusicLink]) -> String {
     if links.is_empty() {
         return "정리된 링크가 없습니다.".to_string();
@@ -210,7 +297,10 @@ fn build_cleaned_links_text(links: &[ResolvedMusicLink]) -> String {
     }
 }
 
-fn build_music_keyboard(links: &[ResolvedMusicLink]) -> Option<InlineKeyboardMarkup> {
+fn build_music_keyboard(
+    links: &[ResolvedMusicLink],
+    include_original: bool,
+) -> Option<InlineKeyboardMarkup> {
     let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
     let multi = links.len() > 1;
 
@@ -222,7 +312,7 @@ fn build_music_keyboard(links: &[ResolvedMusicLink]) -> Option<InlineKeyboardMar
         };
         let mut current_row: Vec<InlineKeyboardButton> = Vec::new();
         for platform in music_platform_order() {
-            if platform == link.platform {
+            if !include_original && platform == link.platform {
                 continue;
             }
             let Some(url) = link.platform_links.get(&platform) else {
@@ -329,6 +419,13 @@ fn is_youtube_only(links: &[ResolvedMusicLink]) -> bool {
         && links
             .iter()
             .all(|link| link.platform == MusicPlatform::YouTube)
+}
+
+fn is_youtube_music_only(links: &[ResolvedMusicLink]) -> bool {
+    !links.is_empty()
+        && links
+            .iter()
+            .all(|link| link.platform == MusicPlatform::YouTubeMusic)
 }
 
 pub async fn handle_x_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
