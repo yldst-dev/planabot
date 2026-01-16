@@ -93,13 +93,12 @@ where
     }
 
     let username = display_name(msg);
-    let mut cleaned_text = msg.text().unwrap_or("").to_string();
-
-    for link in links {
-        cleaned_text = cleaned_text.replace(&link.original, &link.cleaned);
-    }
-
-    let message = format!("{}: {}", username, cleaned_text);
+    let cleaned_text = build_cleaned_message_text(msg.text().unwrap_or(""), links);
+    let message = if cleaned_text.is_empty() {
+        format!("{}: 유튜브 영상 링크", username)
+    } else {
+        format!("{}: {}", username, cleaned_text)
+    };
     let reply_markup = build_music_keyboard(links);
 
     let mut request = send_in_thread(bot, msg, message);
@@ -139,15 +138,20 @@ where
 }
 
 fn build_cleaned_links_text(links: &[ResolvedMusicLink]) -> String {
-    if links.is_empty() {
-        return "정리된 링크가 없습니다.".to_string();
+    let filtered: Vec<&ResolvedMusicLink> = links
+        .iter()
+        .filter(|link| link.platform != MusicPlatform::YouTube)
+        .collect();
+
+    if filtered.is_empty() {
+        return "유튜브 영상 링크 버튼만 제공합니다.".to_string();
     }
 
-    if links.len() == 1 {
-        format!("정리된 링크:\n{}", links[0].cleaned)
+    if filtered.len() == 1 {
+        format!("정리된 링크:\n{}", filtered[0].cleaned)
     } else {
-        let mut lines = Vec::with_capacity(links.len());
-        for (idx, link) in links.iter().enumerate() {
+        let mut lines = Vec::with_capacity(filtered.len());
+        for (idx, link) in filtered.iter().enumerate() {
             lines.push(format!("{}. {}", idx + 1, link.cleaned));
         }
         format!("정리된 링크:\n{}", lines.join("\n"))
@@ -166,7 +170,7 @@ fn build_music_keyboard(links: &[ResolvedMusicLink]) -> Option<InlineKeyboardMar
         };
         let mut current_row: Vec<InlineKeyboardButton> = Vec::new();
         for platform in music_platform_order() {
-            if platform == link.platform {
+            if platform == link.platform && platform != MusicPlatform::YouTube {
                 continue;
             }
             let Some(url) = link.platform_links.get(&platform) else {
@@ -212,6 +216,22 @@ fn platform_label(platform: MusicPlatform) -> &'static str {
         MusicPlatform::YouTube => "유튜브",
         MusicPlatform::AppleMusic => "애플 뮤직",
     }
+}
+
+fn build_cleaned_message_text(original: &str, links: &[ResolvedMusicLink]) -> String {
+    let mut text = original.to_string();
+    for link in links {
+        if link.platform == MusicPlatform::YouTube {
+            text = text.replace(&link.original, "");
+        } else {
+            text = text.replace(&link.original, &link.cleaned);
+        }
+    }
+    normalize_whitespace(&text)
+}
+
+fn normalize_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub async fn handle_x_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult

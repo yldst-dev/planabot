@@ -160,7 +160,7 @@ pub async fn resolve_music_links(http: &MusicHttp, links: &[MusicLink]) -> Vec<R
     let mut cache: HashMap<String, HashMap<MusicPlatform, String>> = HashMap::new();
 
     for link in links {
-        let platform_links = if let Some(cached) = cache.get(&link.cleaned) {
+        let mut platform_links = if let Some(cached) = cache.get(&link.cleaned) {
             cached.clone()
         } else {
             let fetched = fetch_platform_links(http, &link.cleaned)
@@ -169,6 +169,9 @@ pub async fn resolve_music_links(http: &MusicHttp, links: &[MusicLink]) -> Vec<R
             cache.insert(link.cleaned.clone(), fetched.clone());
             fetched
         };
+        if link.platform == MusicPlatform::YouTube {
+            platform_links.insert(MusicPlatform::YouTube, link.cleaned.clone());
+        }
 
         resolved.push(ResolvedMusicLink {
             original: link.original.clone(),
