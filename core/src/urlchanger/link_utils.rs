@@ -4,7 +4,7 @@ use regex::Regex;
 use url::Url;
 
 static MUSIC_YOUTUBE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"https?://(?:www\.)?youtu(?:\.be|be\.com)/\S+").unwrap());
+    Lazy::new(|| Regex::new(r"https?://(?:www\.|m\.)?youtu(?:\.be|be\.com)/\S+").unwrap());
 static MUSIC_YOUTUBE_MUSIC_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"https?://(?:www\.)?music\.youtube\.com/\S+").unwrap());
 static MUSIC_SPOTIFY_RE: Lazy<Regex> =
@@ -12,7 +12,7 @@ static MUSIC_SPOTIFY_RE: Lazy<Regex> =
 static MUSIC_APPLE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"https?://(?:www\.)?music\.apple\.com/\S+").unwrap());
 static MUSIC_YOUTUBE_CAPTURE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(https?://(?:www\.)?youtu(?:\.be|be\.com)/\S+)").unwrap());
+    Lazy::new(|| Regex::new(r"(https?://(?:www\.|m\.)?youtu(?:\.be|be\.com)/\S+)").unwrap());
 static MUSIC_YOUTUBE_MUSIC_CAPTURE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(https?://(?:www\.)?music\.youtube\.com/\S+)").unwrap());
 static MUSIC_SPOTIFY_CAPTURE_RE: Lazy<Regex> =
@@ -284,9 +284,20 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_music_links_from_mobile_youtube() {
+        let text = "https://m.youtube.com/watch?v=O36ynEi9TDw&si=abc123";
+        let links = extract_music_links(text);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].platform, MusicPlatform::YouTube);
+        assert_eq!(
+            links[0].cleaned,
+            "https://m.youtube.com/watch?v=O36ynEi9TDw"
+        );
+    }
+
+    #[test]
     fn test_music_link_tracking_flag() {
-        let with_tracking =
-            "https://music.youtube.com/watch?v=_F6lmHi7R7s&si=3S6ssv34qqXqffvK";
+        let with_tracking = "https://music.youtube.com/watch?v=_F6lmHi7R7s&si=3S6ssv34qqXqffvK";
         let without_tracking = "https://music.youtube.com/watch?v=_F6lmHi7R7s";
         let links = extract_music_links(&format!("{with_tracking} {without_tracking}"));
         assert_eq!(links.len(), 2);

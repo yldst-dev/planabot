@@ -278,25 +278,39 @@ fn build_client(proxy: Option<&WebshareProxy>) -> Option<reqwest::Client> {
 
 async fn load_proxy_states(direct: &reqwest::Client, config: &WebshareConfig) -> Vec<ProxyState> {
     let proxies = fetch_webshare_proxies(direct, config).await;
+    info!(
+        "Webshare 프록시 {}개 수신. 연결 점검을 시작합니다.",
+        proxies.len()
+    );
     let mut states = Vec::new();
     for proxy in proxies {
+        let label = format!("{}:{}", proxy.host, proxy.port);
         let Some(client) = build_client(Some(&proxy)) else {
+            warn!("프록시 {} 클라이언트 생성 실패", label);
             continue;
         };
         match probe_proxy(&client).await {
-            ProbeResult::Ok => states.push(ProxyState {
-                client,
-                label: format!("{}:{}", proxy.host, proxy.port),
-                rate_limited_until: None,
-                last_success: Some(Instant::now()),
-            }),
-            ProbeResult::RateLimited(retry_after) => states.push(ProxyState {
-                client,
-                label: format!("{}:{}", proxy.host, proxy.port),
-                rate_limited_until: Some(Instant::now() + retry_after),
-                last_success: None,
-            }),
-            ProbeResult::Failed => {}
+            ProbeResult::Ok => {
+                info!("프록시 {} 점검 완료: 정상", label);
+                states.push(ProxyState {
+                    client,
+                    label,
+                    rate_limited_until: None,
+                    last_success: Some(Instant::now()),
+                })
+            }
+            ProbeResult::RateLimited(retry_after) => {
+                warn!("프록시 {} 점검 완료: rate limit ({:?})", label, retry_after);
+                states.push(ProxyState {
+                    client,
+                    label,
+                    rate_limited_until: Some(Instant::now() + retry_after),
+                    last_success: None,
+                })
+            }
+            ProbeResult::Failed => {
+                warn!("프록시 {} 점검 실패", label);
+            }
         }
     }
     states
@@ -320,11 +334,20 @@ async fn run_proxy_health_check(proxies: Arc<Mutex<Vec<ProxyState>>>) {
             guard
                 .iter()
                 .enumerate()
-                .map(|(idx, state)| (idx, state.client.clone()))
+                .map(|(idx, state)| (idx, state.client.clone(), state.label.clone()))
                 .collect::<Vec<_>>()
         };
 
-        for (idx, client) in snapshot {
+        if snapshot.is_empty() {
+            continue;
+        }
+
+        info!("프록시 헬스 체크 시작: {}개", snapshot.len());
+        let mut ok = 0;
+        let mut rate_limited = 0;
+        let mut failed = 0;
+
+        for (idx, client, label) in snapshot {
             let result = probe_proxy(&client).await;
             let mut guard = match proxies.lock() {
                 Ok(guard) => guard,
@@ -334,13 +357,27 @@ async fn run_proxy_health_check(proxies: Arc<Mutex<Vec<ProxyState>>>) {
                 continue;
             };
             match result {
-                ProbeResult::Ok => state.last_success = Some(Instant::now()),
+                ProbeResult::Ok => {
+                    ok += 1;
+                    state.last_success = Some(Instant::now());
+                }
                 ProbeResult::RateLimited(retry_after) => {
+                    rate_limited += 1;
+                    warn!("프록시 {} 헬스 체크: rate limit ({:?})", label, retry_after);
                     state.rate_limited_until = Some(Instant::now() + retry_after);
                 }
-                ProbeResult::Failed => state.last_success = None,
+                ProbeResult::Failed => {
+                    failed += 1;
+                    warn!("프록시 {} 헬스 체크: 실패", label);
+                    state.last_success = None;
+                }
             }
         }
+
+        info!(
+            "프록시 헬스 체크 완료: 정상 {}개, 제한 {}개, 실패 {}개",
+            ok, rate_limited, failed
+        );
     }
 }
 

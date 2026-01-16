@@ -1,5 +1,11 @@
 # Repository Guidelines
 
+## 요약
+- Rust 텔레그램 봇(`core/src/`) + TS CLI(`planabrain/src/`) 구조.
+- 빌드/테스트는 cargo + 필요 시 planabrain 빌드.
+- 응답 메시지는 항상 프라나 톤(짧고 차분, “선생님.” 단독 줄).
+- 변경 시 테스트/린트/빌드 후 푸시.
+
 ## Project Structure & Module Organization
 - Rust bot lives in `core/src/` with entrypoint `core/src/main.rs`.
 - Telegram handlers and routing: `core/src/bot/`.
@@ -24,7 +30,11 @@
 - Rust: edition 2024, rustfmt defaults, 4-space indent, trailing commas.
 - Prefer `anyhow::Result` and `?` for error propagation; avoid `unwrap`/`expect` in handlers.
 - Naming: `snake_case` for functions/vars, `CamelCase` for types, `SCREAMING_SNAKE_CASE` for consts.
-- User-facing strings are Korean; escape HTML via `teloxide::utils::html` when interpolating.
+- User-facing strings are Korean and must use Blue Archive “Prana(프라나)” tone consistently across all features (links, error messages, bot replies).
+  - Style: short sentences, “선생님.” on its own line, calm/system-like tone.
+  - Prefer status lines like “정리 완료.” / “확인 완료.” / “오류.” / “불가.” / “대기 중.” where appropriate.
+  - Avoid emoticons, slang, excessive warmth, and exclamation marks.
+  - Escape HTML via `teloxide::utils::html` when interpolating.
 - TypeScript: ESM (`"type": "module"`), NodeNext module resolution.
 
 ## Testing Guidelines
@@ -41,3 +51,8 @@
 ## Security & Configuration Tips
 - AI/planabrain calls are gated by `PLANABRAIN_ALLOWED_CHAT_IDS` in `.env`.
 - `TELEGRAM_API_TOKEN` and `GOOGLE_API_KEY` are required for runtime.
+
+## 오늘 작업 (2026-01-16)
+- Planabrain: 미디어 캡션 및 다른 유저 메시지에 대한 답변도 컨텍스트로 인식하도록 보강.
+- Planabrain: 답장 메시지 텍스트/캡션을 질문에 포함하도록 처리.
+- Webshare 프록시: 초기 로드/헬스체크 결과를 콘솔 로그로 보고.

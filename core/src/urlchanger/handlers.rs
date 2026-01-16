@@ -62,8 +62,9 @@ where
     let resolved_links = resolve_music_links(music_http(), &links).await;
     let youtube_only = is_youtube_only(&resolved_links);
     let youtube_music_only = is_youtube_music_only(&resolved_links);
-    let youtube_music_had_tracking = youtube_music_only
-        && resolved_links.iter().any(|link| link.had_tracking);
+    let any_tracking = resolved_links.iter().any(|link| link.had_tracking);
+    let youtube_had_tracking = youtube_only && any_tracking;
+    let youtube_music_had_tracking = youtube_music_only && any_tracking;
 
     let chat_member = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
         Ok(member) => member,
@@ -77,7 +78,13 @@ where
         return handle_youtube_with_admin_rights(&bot, &msg, &resolved_links).await;
     }
     if youtube_only {
-        return handle_youtube_without_admin_rights(&bot, &msg, &resolved_links).await;
+        return handle_youtube_without_admin_rights(
+            &bot,
+            &msg,
+            &resolved_links,
+            youtube_had_tracking,
+        )
+        .await;
     }
     if youtube_music_only && chat_member.kind.is_privileged() {
         return handle_youtube_music_with_admin_rights(
@@ -123,7 +130,7 @@ where
 
     let username = display_name(msg);
     let cleaned_text = build_cleaned_message_text(msg.text().unwrap_or(""), links);
-    let message = format!("{}: {}", username, cleaned_text);
+    let message = format!("정리 완료.\n선생님.\n{}: {}", username, cleaned_text);
     let reply_markup = build_music_keyboard(links, false);
 
     let mut request = send_in_thread(bot, msg, message);
@@ -148,15 +155,16 @@ where
 {
     if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
         warn!("메시지 삭제 실패(유튜브): {:?}", e);
-        return handle_youtube_without_admin_rights(bot, msg, links).await;
+        let had_tracking = links.iter().any(|link| link.had_tracking);
+        return handle_youtube_without_admin_rights(bot, msg, links, had_tracking).await;
     }
 
     let username = display_name(msg);
     let cleaned_text = youtube_cleaned_text(links);
     let message = if cleaned_text.contains('\n') {
-        format!("{}:\n{}", username, cleaned_text)
+        format!("정리 완료.\n선생님.\n{}:\n{}", username, cleaned_text)
     } else {
-        format!("{}: {}", username, cleaned_text)
+        format!("정리 완료.\n선생님.\n{}: {}", username, cleaned_text)
     };
 
     send_in_thread(bot, msg, message).await?;
@@ -183,9 +191,9 @@ where
     let username = display_name(msg);
     let cleaned_text = youtube_cleaned_text(links);
     let message = if cleaned_text.contains('\n') {
-        format!("{}:\n{}", username, cleaned_text)
+        format!("정리 완료.\n선생님.\n{}:\n{}", username, cleaned_text)
     } else {
-        format!("{}: {}", username, cleaned_text)
+        format!("정리 완료.\n선생님.\n{}: {}", username, cleaned_text)
     };
     let reply_markup = build_music_keyboard(links, true);
 
@@ -229,6 +237,7 @@ async fn handle_youtube_without_admin_rights<B>(
     bot: &B,
     msg: &Message,
     links: &[ResolvedMusicLink],
+    had_tracking: bool,
 ) -> HandlerResult
 where
     B: Requester + ?Sized,
@@ -236,10 +245,15 @@ where
     <B as Requester>::SendMessage: Send,
 {
     let markup = build_youtube_keyboard(links);
+    let text = if had_tracking {
+        "정리 완료.\n선생님.\n추적 파라미터를 제거했습니다.\n확인 바랍니다."
+    } else {
+        "확인 완료.\n선생님.\n유튜브 링크입니다.\n임베드 버튼을 제공합니다."
+    };
     send_reply_with_fallback(
         bot,
         msg,
-        "추적 파라미터가 제거되었습니다.",
+        text,
         SendOptions {
             reply_markup: markup,
             ..SendOptions::default()
@@ -262,9 +276,9 @@ where
     <B as Requester>::SendMessage: Send,
 {
     let text = if had_tracking {
-        "추적 파라미터가 제거되었습니다."
+        "정리 완료.\n선생님.\n추적 파라미터를 제거했습니다.\n확인 바랍니다."
     } else {
-        "음악 플랫폼 링크입니다."
+        "확인 완료.\n선생님.\n음악 플랫폼 링크입니다.\n플랫폼 링크를 제공합니다."
     };
     let markup = build_music_keyboard(links, true);
     send_reply_with_fallback(
@@ -283,17 +297,36 @@ where
 
 fn build_cleaned_links_text(links: &[ResolvedMusicLink]) -> String {
     if links.is_empty() {
-        return "정리된 링크가 없습니다.".to_string();
+        return "확인 완료.\n선생님.\n정리된 링크가 없습니다.".to_string();
     }
 
+    let any_tracking = links.iter().any(|link| link.had_tracking);
+
     if links.len() == 1 {
-        format!("추적 파라미터 제거된 링크:\n{}", links[0].cleaned)
-    } else {
-        let mut lines = Vec::with_capacity(links.len());
-        for (idx, link) in links.iter().enumerate() {
-            lines.push(format!("{}. {}", idx + 1, link.cleaned));
+        if any_tracking {
+            format!(
+                "정리 완료.\n선생님.\n추적 파라미터를 제거했습니다.\n{}",
+                links[0].cleaned
+            )
+        } else {
+            format!(
+                "확인 완료.\n선생님.\n음악 링크입니다.\n{}",
+                links[0].cleaned
+            )
         }
-        format!("추적 파라미터 제거된 링크:\n{}", lines.join("\n"))
+    } else {
+        let mut lines = Vec::with_capacity(links.len() + 3);
+        if any_tracking {
+            lines.push("정리 완료.".to_string());
+            lines.push("선생님.".to_string());
+            lines.push("추적 파라미터를 제거했습니다.".to_string());
+        } else {
+            lines.push("확인 완료.".to_string());
+            lines.push("선생님.".to_string());
+            lines.push("음악 링크입니다.".to_string());
+        }
+        lines.extend(links.iter().map(|link| link.cleaned.clone()));
+        lines.join("\n")
     }
 }
 
@@ -480,9 +513,13 @@ where
 
     let disable_preview = links.iter().any(|l| l.disable_preview);
 
-    send_in_thread(bot, msg, format!("{}: {}", username, converted_text))
-        .disable_link_preview(disable_preview)
-        .await?;
+    send_in_thread(
+        bot,
+        msg,
+        format!("정리 완료.\n선생님.\n{}: {}", username, converted_text),
+    )
+    .disable_link_preview(disable_preview)
+    .await?;
 
     Ok(())
 }
@@ -507,7 +544,10 @@ where
     send_reply_with_fallback(
         bot,
         msg,
-        format!("임베드용 링크:\n{}", converted_text),
+        format!(
+            "정리 완료.\n선생님.\n임베드 링크입니다.\n{}",
+            converted_text
+        ),
         SendOptions {
             disable_preview: Some(disable_preview),
             ..SendOptions::default()
@@ -572,7 +612,12 @@ where
         converted_text = converted_text.replace(original, converted);
     }
 
-    send_in_thread(bot, msg, format!("{}: {}", username, converted_text)).await?;
+    send_in_thread(
+        bot,
+        msg,
+        format!("정리 완료.\n선생님.\n{}: {}", username, converted_text),
+    )
+    .await?;
 
     Ok(())
 }
@@ -595,7 +640,10 @@ where
     send_reply_with_fallback(
         bot,
         msg,
-        format!("임베드용 링크:\n{}", converted_text),
+        format!(
+            "정리 완료.\n선생님.\n임베드 링크입니다.\n{}",
+            converted_text
+        ),
         SendOptions::default(),
     )
     .await?;

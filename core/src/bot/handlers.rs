@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use chrono::{Datelike, Local, Timelike, Weekday};
+use chrono::{Datelike, FixedOffset, Timelike, Weekday};
 use log::{error, warn};
 use teloxide::prelude::*;
 use teloxide::types::{
@@ -11,6 +11,7 @@ use tokio::time::{self, Duration};
 use url::Url;
 
 use crate::planabrain;
+use crate::time::kst_now;
 
 use super::commands::Command;
 use super::gallery::{
@@ -39,19 +40,19 @@ where
     match cmd {
         Command::Start => {
             let mut text = String::from(
-                "선생님, 반갑습니다. 저는 다양한 기능을 통합해 선생님의 요청을 돕는 에이전트, 프라나입니다.\n\n지원 기능\n- 갤러리 검색: Hitomi.la ID 조회\n- 링크 정리: 유튜브/인스타그램/X 추적 파라미터 제거 및 임베딩 링크 제공\n- AI 채팅 에이전트: 베타 기능\n\n사용 안내\n- 갤러리 검색: 개인 채널은 숫자 ID 직접 입력 (예시: 12345)\n- 갤러리 검색: 모든 채널은 접두사 !와 ID 입력 (예시: !12345)\n",
+                "접속 완료.\n선생님.\n기능을 준비했습니다.\n갤러리 검색과 링크 정리를 지원합니다.\nAI 채팅은 베타입니다.\n개인 채팅은 숫자 ID만 가능합니다.",
             );
 
             if state.bot_username.is_empty() {
-                text.push_str("- 그룹 채널: 저를 호출 후 ID 입력 (예시: @봇이름 12345)\n");
+                text.push_str("\n그룹에서는 호출 후 ID를 입력합니다.");
             } else {
                 text.push_str(&format!(
-                    "- 그룹 채널: 저를 호출(@{}) 후 ID 입력 (예시: @{} 12345)\n",
-                    state.bot_username, state.bot_username
+                    "\n그룹에서는 @{} 뒤에 ID를 입력합니다.",
+                    state.bot_username
                 ));
             }
 
-            text.push_str("\n분석이 필요한 ID를 입력해주십시오, 선생님.");
+            text.push_str("\nID를 입력해 주세요.");
 
             let _ = send_reply_with_fallback(
                 &bot,
@@ -69,18 +70,15 @@ where
             let elapsed = started.elapsed();
             let ms = elapsed.as_secs_f64() * 1000.0;
 
-            bot.send_message(
-                msg.chat.id,
-                format!("Pong..? 입니다, 선생님.\n{:.6} ms", ms),
-            )
-            .await?;
+            bot.send_message(msg.chat.id, format!("응답 확인.\n선생님.\n{:.6} ms", ms))
+                .await?;
         }
         Command::MemoryReset => {
             let Some(user) = msg.from.as_ref() else {
                 send_reply_with_fallback(
                     &bot,
                     &msg,
-                    "선생님, 사용자 정보를 확인할 수 없습니다.",
+                    "확인 불가.\n선생님.\n사용자 정보를 확인하지 못했습니다.",
                     SendOptions::default(),
                 )
                 .await?;
@@ -92,7 +90,7 @@ where
                     send_reply_with_fallback(
                         &bot,
                         &msg,
-                        "선생님, 메모리를 초기화했습니다. 새 대화를 시작할 수 있습니다.",
+                        "완료.\n선생님.\n메모리를 초기화했습니다.\n새 대화를 시작할 수 있습니다.",
                         SendOptions::default(),
                     )
                     .await?;
@@ -101,7 +99,7 @@ where
                     send_reply_with_fallback(
                         &bot,
                         &msg,
-                        "선생님, 초기화할 메모리가 없습니다.",
+                        "확인 완료.\n선생님.\n초기화할 메모리가 없습니다.",
                         SendOptions::default(),
                     )
                     .await?;
@@ -111,7 +109,7 @@ where
                     send_reply_with_fallback(
                         &bot,
                         &msg,
-                        "선생님, 메모리 초기화에 실패했습니다. 잠시 후 다시 시도해 주십시오.",
+                        "오류.\n선생님.\n메모리 초기화에 실패했습니다.\n잠시 후 다시 시도해 주세요.",
                         SendOptions::default(),
                     )
                     .await?;
@@ -135,11 +133,11 @@ where
 
     state.record_group_chat(&msg).await;
 
-    let Some(text) = msg.text() else {
+    let Some(text) = extract_message_text(&msg) else {
         return Ok(());
     };
 
-    let question = match planabrain::extract_plana_question(text) {
+    let question = match planabrain::extract_plana_question(&text) {
         Some(q) => q,
         None if state.is_reply_to_planabrain(&msg) => text.trim().to_string(),
         None => return Ok(()),
@@ -158,7 +156,7 @@ where
         send_reply_with_fallback(
             &bot,
             &msg,
-            "선생님, 프라나 AI 기능은 현재 베타이며 지정된 그룹 또는 사용자에게만 제공됩니다.",
+            "접근 불가.\n선생님.\n프라나 AI 기능은 베타입니다.\n허용된 채팅만 지원합니다.",
             SendOptions::default(),
         )
         .await?;
@@ -166,11 +164,12 @@ where
     }
 
     let question = question.trim().to_string();
-    if question.is_empty() {
+    let question = build_planabrain_question(&question, &msg);
+    if question.trim().is_empty() {
         let sent = send_reply_with_fallback(
             &bot,
             &msg,
-            "선생님, 질문을 말씀해 주십시오.",
+            "대기 중.\n선생님.\n질문을 입력해 주세요.",
             SendOptions::default(),
         )
         .await?;
@@ -184,7 +183,8 @@ where
         .map(|user| user.id.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let question = format_question_with_timestamp(&question);
+    let now = kst_now().await;
+    let question = format_question_with_timestamp(&question, now);
     send_typing_in_thread(&bot, &msg).await;
     let mut typing_interval = time::interval(Duration::from_secs(3));
     let ask_fut = planabrain::run_planabrain_ask(&question, &user_id);
@@ -212,7 +212,7 @@ where
             let sent = send_reply_with_fallback(
                 &bot,
                 &msg,
-                "선생님, 응답 생성에 실패했습니다. 잠시 후 다시 시도해 주십시오.",
+                "오류.\n선생님.\n응답 생성에 실패했습니다.\n잠시 후 다시 시도해 주세요.",
                 SendOptions::default(),
             )
             .await?;
@@ -268,7 +268,7 @@ where
         &bot,
         &msg,
         format!(
-            "선생님, 요청하신 ID {}에 대한 데이터 검색을 시작합니다. 잠시만 기다려주십시오...",
+            "검색 시작.\n선생님.\nID {} 조회 중입니다.\n잠시만 대기해 주세요.",
             gallery_id
         ),
         SendOptions {
@@ -286,7 +286,7 @@ where
                 .edit_message_text(
                     chat_id,
                     initial.id,
-                    "선생님, 갤러리 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주십시오.",
+                    "오류.\n선생님.\n갤러리 정보를 불러오지 못했습니다.\n잠시 후 다시 시도해 주세요.",
                 )
                 .await;
             return Ok(());
@@ -322,7 +322,7 @@ where
         }
         None => {
             let error_text = format!(
-                "선생님, ID {}에 대한 정보를 찾을 수 없거나, 제목 데이터가 누락된 것으로 확인됩니다.",
+                "확인 필요.\n선생님.\nID {} 정보를 찾지 못했습니다.\n제목 데이터가 누락되었을 수 있습니다.",
                 gallery_id
             );
 
@@ -416,7 +416,7 @@ where
                 let _ = bot
                     .answer_callback_query(query.id)
                     .text(
-                        "선생님, 갤러리 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주십시오.",
+                        "오류.\n선생님.\n갤러리 정보를 불러오지 못했습니다.\n잠시 후 다시 시도해 주세요.",
                     )
                     .show_alert(true)
                     .await;
@@ -444,20 +444,20 @@ where
 
                     let _ = bot
                         .answer_callback_query(query.id)
-                        .text("선생님, 먼저 저와 개인 대화를 시작하거나 차단을 해제해 주세요.")
+                        .text("불가.\n선생님.\n개인 대화를 먼저 시작해 주세요.\n차단 해제가 필요합니다.")
                         .show_alert(true)
                         .await;
                 } else {
                     let _ = bot
                         .answer_callback_query(query.id)
-                        .text("갤러리 정보가 저와 선생님의 메시지로 전송되었습니다.")
+                        .text("전송 완료.\n선생님.\n개인 메시지로 전송했습니다.")
                         .await;
                 }
             }
             None => {
                 let _ = bot
                     .answer_callback_query(query.id)
-                    .text("저장할 갤러리 정보를 찾지 못했습니다.")
+                    .text("확인 불가.\n선생님.\n저장할 갤러리 정보를 찾지 못했습니다.")
                     .show_alert(true)
                     .await;
             }
@@ -481,8 +481,8 @@ pub(crate) fn is_plana_trigger(msg: &Message, state: &AppState) -> bool {
         return false;
     }
 
-    let text = msg.text().unwrap_or("");
-    if !text.trim().is_empty() && planabrain::extract_plana_question(text).is_some() {
+    let text = extract_message_text(msg).unwrap_or_default();
+    if !text.trim().is_empty() && planabrain::extract_plana_question(&text).is_some() {
         return true;
     }
 
@@ -505,8 +505,7 @@ where
     let _ = req.await;
 }
 
-fn format_question_with_timestamp(question: &str) -> String {
-    let now = Local::now();
+fn format_question_with_timestamp(question: &str, now: chrono::DateTime<FixedOffset>) -> String {
     let weekday = match now.weekday() {
         Weekday::Mon => "월",
         Weekday::Tue => "화",
@@ -527,4 +526,40 @@ fn format_question_with_timestamp(question: &str) -> String {
         now.second()
     );
     format!("현재 시각: {}\n\n{}", timestamp, question)
+}
+
+fn extract_message_text(msg: &Message) -> Option<String> {
+    msg.text()
+        .map(|text| text.to_string())
+        .or_else(|| msg.caption().map(|caption| caption.to_string()))
+}
+
+fn extract_reply_text(msg: &Message) -> Option<String> {
+    let reply = msg.reply_to_message()?;
+    if reply.from.as_ref().map(|user| user.is_bot).unwrap_or(false) {
+        return None;
+    }
+    reply
+        .text()
+        .map(|text| text.to_string())
+        .or_else(|| reply.caption().map(|caption| caption.to_string()))
+        .and_then(|text| {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+}
+
+fn build_planabrain_question(question: &str, msg: &Message) -> String {
+    let question = question.trim();
+    let Some(context) = extract_reply_text(msg) else {
+        return question.to_string();
+    };
+    if question.is_empty() {
+        return format!("참고 메시지:\n{}", context);
+    }
+    format!("참고 메시지:\n{}\n\n질문:\n{}", context, question)
 }

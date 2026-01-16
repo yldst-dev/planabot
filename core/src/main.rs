@@ -3,6 +3,7 @@ mod config;
 mod hitomi;
 mod planabrain;
 mod reboot;
+mod time;
 mod urlchanger;
 mod vision;
 

@@ -126,7 +126,7 @@ fn render_gallery_message_with_user(
     let artists = html::escape(&info.artists);
     let language = html::escape(&info.language);
     let tags = if info.tags.is_empty() {
-        "태그 정보 없음".to_string()
+        "태그 없음".to_string()
     } else {
         info.tags
             .iter()
@@ -138,13 +138,13 @@ fn render_gallery_message_with_user(
     let saved_suffix = if saved { " (#저장됨)" } else { "" };
     let header = match masked_user {
         Some(user) => format!(
-            "<b>{} 선생님, ID {}에 대한 분석 결과입니다.{}</b>",
+            "<b>분석 완료.</b>\n{} 선생님.\nID {} 결과입니다.{}",
             html::escape(user),
             info.id,
             saved_suffix
         ),
         None => format!(
-            "<b>선생님, ID {}에 대한 분석 결과입니다.{}</b>",
+            "<b>분석 완료.</b>\n선생님.\nID {} 결과입니다.{}",
             info.id, saved_suffix
         ),
     };
@@ -177,24 +177,18 @@ pub(crate) fn build_gallery_keyboard(
     let mut rows = Vec::new();
 
     match Url::parse(&info.hitomi_url()) {
-        Ok(hitomi) => rows.push(vec![InlineKeyboardButton::url(
-            "Hitomi.la에서 보기",
-            hitomi,
-        )]),
+        Ok(hitomi) => rows.push(vec![InlineKeyboardButton::url("Hitomi.la 열기", hitomi)]),
         Err(err) => warn!("hitomi URL 파싱 실패 (id {}): {}", info.id, err),
     }
 
     match Url::parse(&info.k_hentai_url()) {
-        Ok(k_hentai) => rows.push(vec![InlineKeyboardButton::url(
-            "K-Hentai에서 보기",
-            k_hentai,
-        )]),
+        Ok(k_hentai) => rows.push(vec![InlineKeyboardButton::url("K-Hentai 열기", k_hentai)]),
         Err(err) => warn!("k-hentai URL 파싱 실패 (id {}): {}", info.id, err),
     }
 
     if include_save {
         rows.push(vec![InlineKeyboardButton::callback(
-            "저장: 제 개인 메시지로 보내기",
+            "개인 메시지로 저장",
             format!("save_{}", info.id),
         )]);
     }
