@@ -16,6 +16,7 @@ use super::webshare::{WebshareConfig, WebshareProxy, fetch_webshare_proxies};
 
 const ODESLI_ENDPOINT: &str = "https://api.song.link/v1-alpha.1/links";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(6);
+const PROXY_HEALTH_INTERVAL: Duration = Duration::from_secs(300);
 
 static MUSIC_HTTP: Lazy<MusicHttp> = Lazy::new(MusicHttp::new);
 
@@ -50,6 +51,7 @@ struct ProxyState {
     client: reqwest::Client,
     label: String,
     rate_limited_until: Option<Instant>,
+    last_success: Option<Instant>,
 }
 
 struct ProxySelection {
@@ -89,6 +91,10 @@ impl MusicHttp {
                         *guard = loaded;
                     }
                 });
+                let health_ref = Arc::clone(&proxies);
+                handle.spawn(async move {
+                    run_proxy_health_check(health_ref).await;
+                });
             } else {
                 warn!("Tokio 런타임이 없어 Webshare 프록시 로드를 건너뜁니다.");
             }
@@ -113,23 +119,38 @@ impl MusicHttp {
         let start = self.next.fetch_add(1, Ordering::Relaxed);
         let len = proxies.len();
 
-        for offset in 0..len {
-            let idx = (start + offset) % len;
-            let state = &mut proxies[idx];
-            if let Some(until) = state.rate_limited_until {
-                if until > now {
+        for success_only in [true, false] {
+            for offset in 0..len {
+                let idx = (start + offset) % len;
+                let state = &mut proxies[idx];
+                if let Some(until) = state.rate_limited_until {
+                    if until > now {
+                        continue;
+                    }
+                    state.rate_limited_until = None;
+                }
+                if success_only && state.last_success.is_none() {
                     continue;
                 }
-                state.rate_limited_until = None;
-            }
 
-            return Some(ProxySelection {
-                client: state.client.clone(),
-                index: idx,
-            });
+                return Some(ProxySelection {
+                    client: state.client.clone(),
+                    index: idx,
+                });
+            }
         }
 
         None
+    }
+
+    fn mark_success(&self, index: usize) {
+        let mut proxies = match self.proxies.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        if let Some(state) = proxies.get_mut(index) {
+            state.last_success = Some(Instant::now());
+        }
     }
 
     fn mark_rate_limited(&self, index: usize, retry_after: Duration) {
@@ -208,7 +229,10 @@ async fn fetch_platform_links(
 
         let client = selection.client;
         match request_platform_links(&client, &api_url).await {
-            Ok(mapped) => return Some(mapped),
+            Ok(mapped) => {
+                http.mark_success(selection.index);
+                return Some(mapped);
+            }
             Err(RequestFailure::RateLimited(retry_after)) => {
                 http.mark_rate_limited(selection.index, retry_after);
             }
@@ -259,11 +283,13 @@ async fn load_proxy_states(direct: &reqwest::Client, config: &WebshareConfig) ->
                 client,
                 label: format!("{}:{}", proxy.host, proxy.port),
                 rate_limited_until: None,
+                last_success: Some(Instant::now()),
             }),
             ProbeResult::RateLimited(retry_after) => states.push(ProxyState {
                 client,
                 label: format!("{}:{}", proxy.host, proxy.port),
                 rate_limited_until: Some(Instant::now() + retry_after),
+                last_success: None,
             }),
             ProbeResult::Failed => {}
         }
@@ -275,6 +301,42 @@ enum ProbeResult {
     Ok,
     RateLimited(Duration),
     Failed,
+}
+
+async fn run_proxy_health_check(proxies: Arc<Mutex<Vec<ProxyState>>>) {
+    let mut interval = tokio::time::interval(PROXY_HEALTH_INTERVAL);
+    loop {
+        interval.tick().await;
+        let snapshot = {
+            let guard = match proxies.lock() {
+                Ok(guard) => guard,
+                Err(_) => continue,
+            };
+            guard
+                .iter()
+                .enumerate()
+                .map(|(idx, state)| (idx, state.client.clone()))
+                .collect::<Vec<_>>()
+        };
+
+        for (idx, client) in snapshot {
+            let result = probe_proxy(&client).await;
+            let mut guard = match proxies.lock() {
+                Ok(guard) => guard,
+                Err(_) => continue,
+            };
+            let Some(state) = guard.get_mut(idx) else {
+                continue;
+            };
+            match result {
+                ProbeResult::Ok => state.last_success = Some(Instant::now()),
+                ProbeResult::RateLimited(retry_after) => {
+                    state.rate_limited_until = Some(Instant::now() + retry_after);
+                }
+                ProbeResult::Failed => state.last_success = None,
+            }
+        }
+    }
 }
 
 async fn probe_proxy(client: &reqwest::Client) -> ProbeResult {
