@@ -1,6 +1,7 @@
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 
 import type { Settings } from "../config/settings.js";
+import { buildSystemPrompt } from "../config/systemPrompt.js";
 import { createChatModel } from "../integrations/gemini/chat.js";
 import { createEmbeddings } from "../integrations/gemini/embeddings.js";
 import { loadIndex } from "../retrieval/indexStore.js";
@@ -42,7 +43,7 @@ export async function answerQuestion(params: {
   const llm = createChatModel(params.settings);
 
   const result = await llm.invoke([
-    new SystemMessage(params.settings.systemPrompt),
+    new SystemMessage(buildSystemPrompt(params.settings)),
     new HumanMessage(`Question:\n${params.question}\n\nContext:\n${context}`)
   ]);
 

@@ -1,6 +1,7 @@
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 
 import type { Settings } from "../config/settings.js";
+import { buildSystemPrompt } from "../config/systemPrompt.js";
 import { createChatModel } from "../integrations/gemini/chat.js";
 import { createGoogleSearchTool } from "../integrations/googleSearch/retrievalTool.js";
 import { appendUserMemory, loadUserMemory } from "../memory/userMemoryStore.js";
@@ -24,7 +25,7 @@ export async function answerWithWebSearch(params: {
       : [];
 
   const result = await llm.invoke([
-    new SystemMessage(params.settings.systemPrompt),
+    new SystemMessage(buildSystemPrompt(params.settings)),
     ...history.map((m) =>
       m.role === "ai" ? new AIMessage(m.content) : new HumanMessage(m.content)
     ),
