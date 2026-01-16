@@ -94,12 +94,11 @@ where
 }
 
 pub(crate) fn should_reboot_on_request_error(err: &teloxide::RequestError) -> bool {
-    matches!(
-        err,
-        teloxide::RequestError::Network(_)
-            | teloxide::RequestError::InvalidJson { .. }
-            | teloxide::RequestError::Io(_)
-    )
+    match err {
+        teloxide::RequestError::Network(network_err) => !network_err.is_timeout(),
+        teloxide::RequestError::InvalidJson { .. } | teloxide::RequestError::Io(_) => true,
+        _ => false,
+    }
 }
 
 fn should_reboot_on_update_error<E>(err: &E) -> bool
