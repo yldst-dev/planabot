@@ -60,6 +60,7 @@ where
     }
 
     let resolved_links = resolve_music_links(music_http(), &links).await;
+    let youtube_only = is_youtube_only(&resolved_links);
 
     let chat_member = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
         Ok(member) => member,
@@ -68,6 +69,13 @@ where
             return handle_without_admin_rights(&bot, &msg, &resolved_links).await;
         }
     };
+
+    if youtube_only && chat_member.kind.is_privileged() {
+        return handle_youtube_with_admin_rights(&bot, &msg, &resolved_links).await;
+    }
+    if youtube_only {
+        return handle_youtube_without_admin_rights(&bot, &msg, &resolved_links).await;
+    }
 
     if chat_member.kind.is_privileged() {
         handle_with_admin_rights(&bot, &msg, &resolved_links).await
@@ -106,6 +114,34 @@ where
     Ok(())
 }
 
+async fn handle_youtube_with_admin_rights<B>(
+    bot: &B,
+    msg: &Message,
+    links: &[ResolvedMusicLink],
+) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: Send + Sync + 'static,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
+{
+    if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
+        warn!("메시지 삭제 실패(유튜브): {:?}", e);
+        return handle_youtube_without_admin_rights(bot, msg, links).await;
+    }
+
+    let username = display_name(msg);
+    let cleaned_text = youtube_cleaned_text(links);
+    let message = if cleaned_text.contains('\n') {
+        format!("{}:\n{}", username, cleaned_text)
+    } else {
+        format!("{}: {}", username, cleaned_text)
+    };
+
+    send_in_thread(bot, msg, message).await?;
+    Ok(())
+}
+
 async fn handle_without_admin_rights<B>(
     bot: &B,
     msg: &Message,
@@ -123,6 +159,31 @@ where
         bot,
         msg,
         text,
+        SendOptions {
+            reply_markup: markup,
+            ..SendOptions::default()
+        },
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn handle_youtube_without_admin_rights<B>(
+    bot: &B,
+    msg: &Message,
+    links: &[ResolvedMusicLink],
+) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: Send + Sync + 'static,
+    <B as Requester>::SendMessage: Send,
+{
+    let markup = build_youtube_keyboard(links);
+    send_reply_with_fallback(
+        bot,
+        msg,
+        "추적 파라미터가 제거되었습니다.",
         SendOptions {
             reply_markup: markup,
             ..SendOptions::default()
@@ -191,6 +252,40 @@ fn build_music_keyboard(links: &[ResolvedMusicLink]) -> Option<InlineKeyboardMar
     }
 }
 
+fn build_youtube_keyboard(links: &[ResolvedMusicLink]) -> Option<InlineKeyboardMarkup> {
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    let multi = links.len() > 1;
+    let mut current_row: Vec<InlineKeyboardButton> = Vec::new();
+
+    for (idx, link) in links.iter().enumerate() {
+        let label = if multi {
+            format!("유튜브 #{}", idx + 1)
+        } else {
+            "유튜브".to_string()
+        };
+        match reqwest::Url::parse(&link.cleaned) {
+            Ok(parsed) => {
+                current_row.push(InlineKeyboardButton::url(label, parsed));
+                if current_row.len() == 2 {
+                    rows.push(current_row);
+                    current_row = Vec::new();
+                }
+            }
+            Err(e) => warn!("유튜브 URL 파싱 오류: {}, URL: {}", e, link.cleaned),
+        }
+    }
+
+    if !current_row.is_empty() {
+        rows.push(current_row);
+    }
+
+    if rows.is_empty() {
+        None
+    } else {
+        Some(InlineKeyboardMarkup::new(rows))
+    }
+}
+
 fn music_platform_order() -> [MusicPlatform; 4] {
     [
         MusicPlatform::Spotify,
@@ -215,6 +310,25 @@ fn build_cleaned_message_text(original: &str, links: &[ResolvedMusicLink]) -> St
         text = text.replace(&link.original, &link.cleaned);
     }
     text
+}
+
+fn youtube_cleaned_text(links: &[ResolvedMusicLink]) -> String {
+    if links.len() == 1 {
+        links[0].cleaned.clone()
+    } else {
+        links
+            .iter()
+            .map(|link| link.cleaned.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+fn is_youtube_only(links: &[ResolvedMusicLink]) -> bool {
+    !links.is_empty()
+        && links
+            .iter()
+            .all(|link| link.platform == MusicPlatform::YouTube)
 }
 
 pub async fn handle_x_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult

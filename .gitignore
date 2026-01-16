@@ -12,6 +12,9 @@
 # planabrain data
 /planabrain/.planabrain
 
+# planabot data
+/.planabot
+
 # planabrain build/deps
 /planabrain/dist
 /planabrain/node_modules
