@@ -53,6 +53,9 @@
 - `TELEGRAM_API_TOKEN` and `GOOGLE_API_KEY` are required for runtime.
 
 ## 오늘 작업 (2026-01-16)
-- Planabrain: 미디어 캡션 및 다른 유저 메시지에 대한 답변도 컨텍스트로 인식하도록 보강.
-- Planabrain: 답장 메시지 텍스트/캡션을 질문에 포함하도록 처리.
-- Webshare 프록시: 초기 로드/헬스체크 결과를 콘솔 로그로 보고.
+- 프라나 톤: 봇의 모든 사용자 메시지를 프라나 말투로 통일.
+- KST 인터넷 시간: worldtimeapi/timeapi/Date 헤더 기반 시간 조회 + 실패 시 로컬 fallback.
+- 플래너브레인 질문: 미디어 캡션/답장 메시지를 컨텍스트로 포함.
+- 유튜브 링크: 모바일(m.youtube.com)도 처리.
+- 추적 파라미터: 없는 링크에는 “제거” 메시지를 표시하지 않도록 조정.
+- 프록시: 초기 로드/헬스체크 결과를 콘솔 로그로 보고.
