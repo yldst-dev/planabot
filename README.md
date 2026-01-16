@@ -31,11 +31,16 @@ cargo run --release
 - 음악 링크가 포함된 메시지에서는 정리된 링크를 제공하고, 같은 곡의
   스포티파이/유튜브 뮤직/유튜브/애플 뮤직 링크를 인라인 버튼으로 제공합니다
   (원본 플랫폼 버튼은 제외). 매핑 실패 시 정리된 링크만 전송합니다.
+- 유튜브 모바일 링크(`m.youtube.com`)도 처리합니다.
+- 추적 파라미터가 없는 링크에는 “제거” 안내를 출력하지 않습니다.
 - 봇이 재시작된 이후의 메시지만 처리합니다. (`/ping`은 예외)
 - 봇은 KST 자정(00:00)에만 재시동되며 재시동 기록은 터미널 로그에만 남습니다.
 - 텔레그램 통신 불능 오류나 치명적 패닉이 발생하면 즉시 재시동합니다.
 - 베타 AI 호출: `프라나야`로 시작하는 메시지
   - `PLANABRAIN_ALLOWED_CHAT_IDS`에 포함된 채팅 또는 `PLANABRAIN_ALLOWED_USER_IDS`에 포함된 1:1 사용자만 동작
+  - 텍스트/미디어 캡션 모두 인식하며, 다른 사용자 메시지에 대한 답장은 컨텍스트로 포함합니다.
+  - 현재 시각은 인터넷 KST(실패 시 로컬 KST) 기준으로 질문에 포함합니다.
+  - 프라나 말투로 응답합니다.
 
 ## planabrain (TypeScript CLI)
 - 위치: `planabrain/`
@@ -59,6 +64,7 @@ cargo run --release
 - `WEBSHARE_PLAN_ID`: 특정 플랜 ID 필터
 - `WEBSHARE_PAGE_SIZE` (기본 `25`)
 - `SONGLINK_DIRECT_FALLBACK` (기본 `false`): 프록시 전부 rate limit일 때 direct 요청 허용
+- 프록시 헬스 체크는 5분 간격으로 수행하며 결과는 로그에 기록됩니다.
 
 ## 빌드 산출물
 - 릴리즈 바이너리: `target/release/planabot`
