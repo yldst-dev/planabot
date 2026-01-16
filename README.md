@@ -41,6 +41,7 @@ cargo run --release
   - 텍스트/미디어 캡션 모두 인식하며, 다른 사용자 메시지에 대한 답장은 컨텍스트로 포함합니다.
   - 현재 시각은 인터넷 KST(실패 시 로컬 KST) 기준으로 질문에 포함합니다.
   - 프라나 말투로 응답합니다.
+  - 캡션 포함 이미지 또는 답장 이미지가 있으면 임시 저장 후 분석해 컨텍스트에 포함합니다.
 
 ## planabrain (TypeScript CLI)
 - 위치: `planabrain/`
@@ -76,4 +77,4 @@ cargo run --release
   - `PLANABOT_RUNTIME_IMAGE=debian:buster-slim PLANABOT_RUST_IMAGE=rustlang/rust:nightly-buster PLANABOT_NODE_IMAGE=node:18-buster-slim docker compose up --build -d`
 
 ## Todo
-- AI가 미디어의 이해와 설명을 하는 기능 추가 예정
+- (정리됨) 이미지 캡션/답장 기반 분석 지원

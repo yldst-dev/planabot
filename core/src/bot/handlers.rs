@@ -3,15 +3,18 @@ use std::time::Instant;
 use chrono::{Datelike, FixedOffset, Timelike, Weekday};
 use log::{error, warn};
 use teloxide::prelude::*;
+use teloxide::types::FileId;
 use teloxide::types::{
     CallbackQuery, ChatAction, InlineKeyboardButton, InlineKeyboardMarkup, Message, ParseMode,
 };
 use teloxide::utils::html;
+use tokio::fs;
 use tokio::time::{self, Duration};
 use url::Url;
 
 use crate::planabrain;
 use crate::time::kst_now;
+use crate::vision;
 
 use super::commands::Command;
 use super::gallery::{
@@ -123,8 +126,8 @@ where
 
 pub(crate) async fn handle_plana_message<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
 where
-    B: Requester + Send + Sync + 'static,
-    B::Err: std::error::Error + Send + Sync + 'static,
+    B: Requester + teloxide::net::Download + Send + Sync + 'static,
+    <B as Requester>::Err: std::error::Error + Send + Sync + 'static,
     B::SendChatAction: Send,
 {
     if !state.is_after_boot(&msg) {
@@ -183,6 +186,12 @@ where
         .map(|user| user.id.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
+    let image_context = build_image_context(&bot, &msg).await;
+    let question = if let Some(image_context) = image_context {
+        format!("{question}\n\n이미지 설명:\n{image_context}")
+    } else {
+        question
+    };
     let now = kst_now().await;
     let question = format_question_with_timestamp(&question, now);
     send_typing_in_thread(&bot, &msg).await;
@@ -562,4 +571,119 @@ fn build_planabrain_question(question: &str, msg: &Message) -> String {
         return format!("참고 메시지:\n{}", context);
     }
     format!("참고 메시지:\n{}\n\n질문:\n{}", context, question)
+}
+
+struct ImageSource {
+    file_id: FileId,
+    mime_type: String,
+}
+
+async fn build_image_context<B>(bot: &B, msg: &Message) -> Option<String>
+where
+    B: Requester + teloxide::net::Download + ?Sized,
+{
+    let source = extract_image_source_from_message_or_reply(msg)?;
+    let bytes = download_image_bytes(bot, &source).await?;
+    let prompt = "이미지를 간단히 설명해 주세요. 중요한 요소만 요약합니다.";
+    match vision::describe_image(&bytes, &source.mime_type, prompt).await {
+        Ok(text) => Some(text),
+        Err(err) => {
+            warn!("이미지 분석 실패: {}", err);
+            None
+        }
+    }
+}
+
+fn extract_image_source_from_message_or_reply(msg: &Message) -> Option<ImageSource> {
+    if let Some(source) = extract_image_source(msg) {
+        return Some(source);
+    }
+    msg.reply_to_message().and_then(extract_image_source)
+}
+
+fn extract_image_source(msg: &Message) -> Option<ImageSource> {
+    if let Some(photos) = msg.photo() {
+        let mut best = None;
+        let mut best_size = 0;
+        for photo in photos {
+            let size = photo.file.size;
+            if size >= best_size {
+                best_size = size;
+                best = Some(photo.file.id.clone());
+            }
+        }
+        let file_id = best?;
+        return Some(ImageSource {
+            file_id,
+            mime_type: "image/jpeg".to_string(),
+        });
+    }
+
+    if let Some(document) = msg.document()
+        && let Some(mime) = document.mime_type.as_ref()
+    {
+        let mime_str = mime.essence_str();
+        if mime_str.starts_with("image/") {
+            return Some(ImageSource {
+                file_id: document.file.id.clone(),
+                mime_type: mime_str.to_string(),
+            });
+        }
+    }
+
+    None
+}
+
+async fn download_image_bytes<B>(bot: &B, source: &ImageSource) -> Option<Vec<u8>>
+where
+    B: Requester + teloxide::net::Download + ?Sized,
+{
+    let file = match bot.get_file(source.file_id.clone()).await {
+        Ok(file) => file,
+        Err(err) => {
+            warn!("이미지 파일 조회 실패: {}", err);
+            return None;
+        }
+    };
+
+    let dir = std::path::Path::new(".planabot/planabrain_images");
+    if let Err(err) = fs::create_dir_all(dir).await {
+        warn!("이미지 임시 디렉터리 생성 실패: {}", err);
+        return None;
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let filename = format!("image_{timestamp}.tmp");
+    let path = dir.join(filename);
+    let mut output = match fs::File::create(&path).await {
+        Ok(file) => file,
+        Err(err) => {
+            warn!("이미지 임시 파일 생성 실패: {}", err);
+            return None;
+        }
+    };
+
+    if bot.download_file(&file.path, &mut output).await.is_err() {
+        warn!("이미지 다운로드 실패");
+        let _ = fs::remove_file(&path).await;
+        return None;
+    }
+
+    let bytes = match fs::read(&path).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!("이미지 임시 파일 읽기 실패: {}", err);
+            let _ = fs::remove_file(&path).await;
+            return None;
+        }
+    };
+
+    if let Err(err) = fs::remove_file(&path).await {
+        warn!("이미지 임시 파일 삭제 실패: {}", err);
+    }
+
+    Some(bytes)
 }
