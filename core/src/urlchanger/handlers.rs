@@ -75,6 +75,10 @@ where
     let youtube_had_tracking = youtube_only && any_tracking;
     let youtube_music_had_tracking = youtube_music_only && any_tracking;
 
+    if youtube_only && !any_tracking {
+        return Ok(());
+    }
+
     let chat_member = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
         Ok(member) => member,
         Err(e) => {
