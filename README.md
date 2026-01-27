@@ -70,6 +70,14 @@ cargo run --release
 ## 빌드 산출물
 - 릴리즈 바이너리: `target/release/planabot`
 
+## Linux 바이너리 호환성 (glibc 오류)
+- 에러 예: `GLIBC_2.39 not found`
+- 호스트 glibc에 맞는 바이너리를 만들려면:
+  - `./scripts/build-release.sh`
+- 출력: `dist/planabot`
+- 강제 지정이 필요하면:
+  - `PLANABOT_DEBIAN_RELEASE=bullseye ./scripts/build-release.sh`
+
 ## Docker 실행 (glibc 맞춤 빌드)
 - 호스트 glibc 버전에 맞춰 이미지를 선택하려면:
   - `./scripts/compose-up.sh`
