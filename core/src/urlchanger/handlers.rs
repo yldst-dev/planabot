@@ -4,11 +4,18 @@ use crate::urlchanger::link_utils::{
     convert_instagram_links, convert_x_links, extract_music_links,
 };
 use crate::urlchanger::music_resolver::{ResolvedMusicLink, music_http, resolve_music_links};
+use chrono::Utc;
 use log::{error, warn};
 use teloxide::dispatching::DpHandlerDescription;
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+
+fn is_recent_message(msg: &Message, seconds: i64) -> bool {
+    let now = Utc::now().timestamp();
+    let msg_time = msg.date.timestamp();
+    now - msg_time <= seconds
+}
 
 pub fn url_handlers<B>() -> Handler<'static, HandlerResult, DpHandlerDescription>
 where
@@ -20,25 +27,27 @@ where
     <B as Requester>::SendMessage: Send,
 {
     Update::filter_message().branch(
-        dptree::filter(|msg: Message, state: AppState| state.is_after_boot(&msg))
-            .branch(
-                dptree::filter(|msg: Message| {
-                    msg.text().is_some() && contains_music_link(msg.text().unwrap())
-                })
-                .endpoint(handle_music_links::<B>),
-            )
-            .branch(
-                dptree::filter(|msg: Message| {
-                    msg.text().is_some() && contains_x_link(msg.text().unwrap())
-                })
-                .endpoint(handle_x_links::<B>),
-            )
-            .branch(
-                dptree::filter(|msg: Message| {
-                    msg.text().is_some() && contains_instagram_link(msg.text().unwrap())
-                })
-                .endpoint(handle_instagram_links::<B>),
-            ),
+        dptree::filter(|msg: Message, state: AppState| {
+            state.is_after_boot(&msg) && is_recent_message(&msg, 30)
+        })
+        .branch(
+            dptree::filter(|msg: Message| {
+                msg.text().is_some() && contains_music_link(msg.text().unwrap())
+            })
+            .endpoint(handle_music_links::<B>),
+        )
+        .branch(
+            dptree::filter(|msg: Message| {
+                msg.text().is_some() && contains_x_link(msg.text().unwrap())
+            })
+            .endpoint(handle_x_links::<B>),
+        )
+        .branch(
+            dptree::filter(|msg: Message| {
+                msg.text().is_some() && contains_instagram_link(msg.text().unwrap())
+            })
+            .endpoint(handle_instagram_links::<B>),
+        ),
     )
 }
 
@@ -75,7 +84,11 @@ where
     };
 
     if youtube_only && chat_member.kind.is_privileged() {
-        return handle_youtube_with_admin_rights(&bot, &msg, &resolved_links).await;
+        if youtube_had_tracking {
+            return handle_youtube_with_admin_rights(&bot, &msg, &resolved_links).await;
+        } else {
+            return handle_youtube_without_admin_rights(&bot, &msg, &resolved_links, false).await;
+        }
     }
     if youtube_only {
         return handle_youtube_without_admin_rights(
