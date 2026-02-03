@@ -1,7 +1,7 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -85,6 +85,7 @@ pub struct AppState {
     planabrain_replies_path: PathBuf,
     group_registry: Arc<RwLock<HashSet<ChatId>>>,
     group_registry_path: PathBuf,
+    image_rate_limiter: Arc<Mutex<ImageRateLimiter>>,
 }
 
 impl AppState {
@@ -104,6 +105,7 @@ impl AppState {
         let group_registry = load_group_registry(&group_registry_path);
         let planabrain_replies_path = resolve_planabrain_replies_path();
         let planabrain_replies = load_planabrain_replies(&planabrain_replies_path);
+        let image_rate_limiter = ImageRateLimiter::new(2, Duration::from_secs(60));
 
         Self {
             bot_username,
@@ -116,6 +118,7 @@ impl AppState {
             planabrain_replies_path,
             group_registry: Arc::new(RwLock::new(group_registry)),
             group_registry_path,
+            image_rate_limiter: Arc::new(Mutex::new(image_rate_limiter)),
         }
     }
 
@@ -179,6 +182,47 @@ impl AppState {
         if let Err(err) = persist_group_registry(&self.group_registry_path, &snapshot).await {
             warn!("그룹 목록 저장 실패: {}", err);
         }
+    }
+
+    pub(crate) async fn allow_image_request(&self, user_id: i64) -> bool {
+        let mut limiter = match self.image_rate_limiter.lock() {
+            Ok(limiter) => limiter,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        limiter.allow(user_id)
+    }
+}
+
+struct ImageRateLimiter {
+    limit: usize,
+    window: Duration,
+    entries: HashMap<i64, VecDeque<Instant>>,
+}
+
+impl ImageRateLimiter {
+    fn new(limit: usize, window: Duration) -> Self {
+        Self {
+            limit,
+            window,
+            entries: std::collections::HashMap::new(),
+        }
+    }
+
+    fn allow(&mut self, user_id: i64) -> bool {
+        let now = Instant::now();
+        let queue = self.entries.entry(user_id).or_default();
+        while let Some(front) = queue.front().copied() {
+            if now.duration_since(front) > self.window {
+                queue.pop_front();
+            } else {
+                break;
+            }
+        }
+        if queue.len() >= self.limit {
+            return false;
+        }
+        queue.push_back(now);
+        true
     }
 }
 

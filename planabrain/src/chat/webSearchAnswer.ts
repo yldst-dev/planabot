@@ -33,6 +33,7 @@ export async function answerWithWebSearch(params: {
   ]);
 
   const answer = String(result.content);
+  const memoryQuestion = normalizeQuestionForMemory(params.question);
 
   if (params.settings.memoryEnabled && params.settings.memoryMaxMessages > 0) {
     await appendUserMemory({
@@ -40,11 +41,21 @@ export async function answerWithWebSearch(params: {
       userId,
       maxMessages: params.settings.memoryMaxMessages,
       messages: [
-        { role: "human", content: params.question, at: Date.now() },
+        { role: "human", content: memoryQuestion, at: Date.now() },
         { role: "ai", content: answer, at: Date.now() }
       ]
     });
   }
 
   return answer;
+}
+
+function normalizeQuestionForMemory(raw: string): string {
+  const trimmed = raw.trim();
+  const marker = "사용자 질문:";
+  const idx = trimmed.indexOf(marker);
+  if (idx === -1) {
+    return trimmed;
+  }
+  return trimmed.slice(idx + marker.length).trim();
 }

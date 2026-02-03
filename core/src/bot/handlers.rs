@@ -186,14 +186,23 @@ where
         .map(|user| user.id.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let image_context = build_image_context(&bot, &msg).await;
+    let image_context = if let Some(user) = msg.from.as_ref() {
+        let user_id = i64::try_from(user.id.0).unwrap_or(i64::MAX);
+        if state.allow_image_request(user_id).await {
+            build_image_context(&bot, &msg).await
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let question = if let Some(image_context) = image_context {
         format!("{question}\n\n이미지 설명:\n{image_context}")
     } else {
         question
     };
     let now = kst_now().await;
-    let question = format_question_with_timestamp(&question, now);
+    let question = format_question_with_metadata(&question, now, &msg);
     send_typing_in_thread(&bot, &msg).await;
     let mut typing_interval = time::interval(Duration::from_secs(3));
     let ask_fut = planabrain::run_planabrain_ask(&question, &user_id);
@@ -514,7 +523,11 @@ where
     let _ = req.await;
 }
 
-fn format_question_with_timestamp(question: &str, now: chrono::DateTime<FixedOffset>) -> String {
+fn format_question_with_metadata(
+    question: &str,
+    now: chrono::DateTime<FixedOffset>,
+    msg: &Message,
+) -> String {
     let weekday = match now.weekday() {
         Weekday::Mon => "월",
         Weekday::Tue => "화",
@@ -534,7 +547,58 @@ fn format_question_with_timestamp(question: &str, now: chrono::DateTime<FixedOff
         now.minute(),
         now.second()
     );
-    format!("현재 시각: {}\n\n{}", timestamp, question)
+
+    let (user_name, username) = msg
+        .from
+        .as_ref()
+        .map(|user| {
+            let mut name = user.first_name.clone();
+            if let Some(last_name) = &user.last_name
+                && !last_name.trim().is_empty()
+            {
+                name = format!("{name} {last_name}");
+            }
+            let name = sanitize_meta_value(&name);
+            let username = user
+                .username
+                .as_deref()
+                .map(|value| format!("@{value}"))
+                .map(|value| sanitize_meta_value(&value))
+                .unwrap_or_else(|| "없음".to_string());
+            (name, username)
+        })
+        .unwrap_or_else(|| ("알 수 없음".to_string(), "없음".to_string()));
+
+    format!(
+        "메타정보:\n현재 시각: {} KST\n사용자 이름: {}\n사용자 유저명: {}\n\n사용자 질문:\n{}",
+        timestamp, user_name, username, question
+    )
+}
+
+fn sanitize_meta_value(value: &str) -> String {
+    let trimmed = value.trim();
+    let mut out = String::with_capacity(trimmed.len());
+    let mut prev_space = false;
+    for ch in trimmed.chars() {
+        let is_space = ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t';
+        if is_space {
+            if !prev_space {
+                out.push(' ');
+            }
+        } else {
+            out.push(ch);
+        }
+        prev_space = is_space;
+        if out.len() >= 200 {
+            break;
+        }
+    }
+    let out = out.trim().to_string();
+    if out.is_empty() {
+        "없음".to_string()
+    } else {
+        out
+    }
 }
 
 fn extract_message_text(msg: &Message) -> Option<String> {
@@ -638,6 +702,7 @@ async fn download_image_bytes<B>(bot: &B, source: &ImageSource) -> Option<Vec<u8
 where
     B: Requester + teloxide::net::Download + ?Sized,
 {
+    const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
     let file = match bot.get_file(source.file_id.clone()).await {
         Ok(file) => file,
         Err(err) => {
@@ -645,6 +710,10 @@ where
             return None;
         }
     };
+    if file.size as u64 > MAX_IMAGE_BYTES {
+        warn!("이미지 파일 크기 초과: {}", file.size);
+        return None;
+    }
 
     let dir = std::path::Path::new(".planabot/planabrain_images");
     if let Err(err) = fs::create_dir_all(dir).await {
@@ -680,6 +749,11 @@ where
             return None;
         }
     };
+    if bytes.len() as u64 > MAX_IMAGE_BYTES {
+        warn!("이미지 파일 크기 초과: {}", bytes.len());
+        let _ = fs::remove_file(&path).await;
+        return None;
+    }
 
     if let Err(err) = fs::remove_file(&path).await {
         warn!("이미지 임시 파일 삭제 실패: {}", err);

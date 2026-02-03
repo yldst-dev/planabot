@@ -6,6 +6,9 @@ export function createChatModel(settings: Settings): ChatGoogleGenerativeAI {
   return new ChatGoogleGenerativeAI({
     apiKey: settings.googleApiKey,
     model: settings.chatModel,
-    temperature: 1.0
+    topP: 0.7,
+    thinkingConfig: {
+      thinkingLevel: "LOW"
+    }
   });
 }

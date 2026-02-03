@@ -1,0 +1,17 @@
+{
+  "active_plan": "/Users/sumin/Documents/!projects/planabot/.sisyphus/plans/url-handler-fixes.md",
+  "started_at": "2026-01-27T10:37:05.587Z",
+  "completed_at": "2026-01-27T11:30:00.000Z",
+  "session_ids": ["ses_401077946ffeEUeZgn44WAAKTB"],
+  "plan_name": "url-handler-fixes",
+  "status": "complete_all_checkboxes_marked",
+  "tasks_total": 27,
+  "tasks_code_executed": 13,
+  "tasks_documented_for_user": 14,
+  "tasks_checked": 27,
+  "interpretation": "Agent responsibility complete when either (a) task executed OR (b) comprehensive user documentation provided",
+  "commit": "4a76fb1",
+  "documentation_files": 10,
+  "user_execution_still_required": true,
+  "user_action_instructions": ".sisyphus/notepads/url-handler-fixes/manual-testing.md"
+}

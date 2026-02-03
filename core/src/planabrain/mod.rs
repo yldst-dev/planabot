@@ -163,6 +163,7 @@ static ALLOWED_USER_IDS: Lazy<HashSet<i64>> = Lazy::new(|| {
         .collect()
 });
 fn run_planabrain_ask_blocking(question: &str, user_id: &str) -> Result<String> {
+    const MAX_CLI_QUESTION_CHARS: usize = 2000;
     let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
 
     let dist_entry = root.join("dist/cli/index.js");
@@ -186,6 +187,7 @@ fn run_planabrain_ask_blocking(question: &str, user_id: &str) -> Result<String> 
     let repo_root = root.parent().unwrap_or(&root);
     let dotenv_path = repo_root.join(".env");
 
+    let mut question_file = None;
     let command = command
         .current_dir(&root)
         .env("PLANABRAIN_USER_ID", user_id);
@@ -193,17 +195,33 @@ fn run_planabrain_ask_blocking(question: &str, user_id: &str) -> Result<String> 
         command.env("DOTENV_CONFIG_PATH", dotenv_path);
     }
 
-    let output = command
-        .arg("ask")
-        .arg(question)
-        .output()
-        .context("planabrain 실행 실패")?;
+    if question.chars().count() > MAX_CLI_QUESTION_CHARS {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("planabrain_question_{timestamp}.txt"));
+        std::fs::write(&path, question).context("planabrain 질문 파일 저장 실패")?;
+        command.env("PLANABRAIN_QUESTION_FILE", &path);
+        question_file = Some(path);
+        command.arg("ask");
+    } else {
+        command.arg("ask").arg(question);
+    }
+
+    let output = command.output().context("planabrain 실행 실패")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        if let Some(path) = question_file.as_ref() {
+            let _ = std::fs::remove_file(path);
+        }
         return Err(anyhow!("planabrain 오류: {}", stderr.trim()));
     }
 
+    if let Some(path) = question_file.as_ref() {
+        let _ = std::fs::remove_file(path);
+    }
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     Ok(stdout)
 }
