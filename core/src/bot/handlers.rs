@@ -6,6 +6,7 @@ use teloxide::prelude::*;
 use teloxide::types::FileId;
 use teloxide::types::{
     CallbackQuery, ChatAction, InlineKeyboardButton, InlineKeyboardMarkup, Message, ParseMode,
+    ReactionType,
 };
 use teloxide::utils::html;
 use tokio::fs;
@@ -21,7 +22,7 @@ use super::gallery::{
     GalleryIdSource, build_gallery_keyboard, extract_gallery_id, is_private_chat,
     render_gallery_message, render_gallery_message_for_user,
 };
-use super::telegram::{SendOptions, send_reply_with_fallback};
+use super::telegram::{SendOptions, send_reply_markdown_with_fallback, send_reply_with_fallback};
 use super::{AppState, HandlerResult};
 
 pub(crate) async fn handle_command<B>(
@@ -129,6 +130,7 @@ where
     B: Requester + teloxide::net::Download + Send + Sync + 'static,
     <B as Requester>::Err: std::error::Error + Send + Sync + 'static,
     B::SendChatAction: Send,
+    B::SetMessageReaction: Send,
 {
     if !state.is_after_boot(&msg) {
         return Ok(());
@@ -156,7 +158,7 @@ where
         .and_then(|user| i64::try_from(user.id.0).ok());
     let is_private = msg.chat.is_private();
     if !planabrain::is_planabrain_allowed(msg.chat.id.0, user_id, is_private) {
-        send_reply_with_fallback(
+        send_reply_markdown_with_fallback(
             &bot,
             &msg,
             "접근 불가.\n선생님.\n프라나 AI 기능은 베타입니다.\n허용된 채팅만 지원합니다.",
@@ -169,7 +171,7 @@ where
     let question = question.trim().to_string();
     let question = build_planabrain_question(&question, &msg);
     if question.trim().is_empty() {
-        let sent = send_reply_with_fallback(
+        let sent = send_reply_markdown_with_fallback(
             &bot,
             &msg,
             "대기 중.\n선생님.\n질문을 입력해 주세요.",
@@ -201,6 +203,7 @@ where
     } else {
         question
     };
+    maybe_react_heart_on_nested_reply(&bot, &msg).await;
     let now = kst_now().await;
     let question = format_question_with_metadata(&question, now, &msg);
     send_typing_in_thread(&bot, &msg).await;
@@ -222,12 +225,13 @@ where
     match answer {
         Ok(answer) => {
             let reply = planabrain::truncate_message(answer.trim(), 4000);
-            let sent = send_reply_with_fallback(&bot, &msg, reply, SendOptions::default()).await?;
+            let sent = send_reply_markdown_with_fallback(&bot, &msg, reply, SendOptions::default())
+                .await?;
             state.record_planabrain_reply(&sent).await;
         }
         Err(err) => {
             error!("planabrain 응답 실패: {}", err);
-            let sent = send_reply_with_fallback(
+            let sent = send_reply_markdown_with_fallback(
                 &bot,
                 &msg,
                 "오류.\n선생님.\n응답 생성에 실패했습니다.\n잠시 후 다시 시도해 주세요.",
@@ -521,6 +525,34 @@ where
         req = req.message_thread_id(thread_id);
     }
     let _ = req.await;
+}
+
+async fn maybe_react_heart_on_nested_reply<B>(bot: &B, msg: &Message)
+where
+    B: Requester + ?Sized,
+    B::Err: std::error::Error + Send + Sync + 'static,
+    B::SetMessageReaction: Send,
+{
+    if msg.chat.is_private() {
+        return;
+    }
+    let is_nested_reply = msg
+        .reply_to_message()
+        .and_then(|reply| reply.reply_to_message())
+        .is_some();
+    if !is_nested_reply {
+        return;
+    }
+    let reaction = ReactionType::Emoji {
+        emoji: "❤".to_string(),
+    };
+    if let Err(err) = bot
+        .set_message_reaction(msg.chat.id, msg.id)
+        .reaction([reaction])
+        .await
+    {
+        warn!("하트 반응 추가 실패: {}", err);
+    }
 }
 
 fn format_question_with_metadata(

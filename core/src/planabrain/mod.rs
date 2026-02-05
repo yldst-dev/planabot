@@ -68,7 +68,7 @@ pub(crate) fn truncate_message(text: &str, limit: usize) -> String {
         }
         out.push(ch);
     }
-    out.push_str("\n…");
+    out.push('…');
     out
 }
 

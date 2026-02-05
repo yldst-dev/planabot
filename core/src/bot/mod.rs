@@ -33,6 +33,7 @@ where
     <B as Requester>::SendMessage: Send,
     <B as Requester>::EditMessageText: Send,
     <B as Requester>::EditMessageCaption: Send,
+    <B as Requester>::SetMessageReaction: Send,
     <B as teloxide::net::Download>::StreamErr: std::fmt::Debug + Send,
     <B as teloxide::net::Download>::Stream: Unpin + Send,
 {

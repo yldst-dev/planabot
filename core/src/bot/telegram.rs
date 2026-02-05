@@ -1,13 +1,15 @@
 use anyhow::Result;
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
-use teloxide::types::{InlineKeyboardMarkup, Message, ReplyParameters};
+use teloxide::types::{InlineKeyboardMarkup, Message, ParseMode, ReplyParameters};
+use teloxide::utils::markdown;
 
 #[derive(Clone, Default)]
 pub(crate) struct SendOptions {
     pub reply_markup: Option<InlineKeyboardMarkup>,
     pub disable_preview: Option<bool>,
     pub disable_notification: Option<bool>,
+    pub parse_mode: Option<ParseMode>,
 }
 
 pub(crate) fn send_in_thread<B>(bot: &B, msg: &Message, text: impl Into<String>) -> B::SendMessage
@@ -97,6 +99,30 @@ where
     }
 }
 
+pub(crate) async fn send_reply_markdown_with_fallback<B>(
+    bot: &B,
+    msg: &Message,
+    text: impl Into<String>,
+    mut opts: SendOptions,
+) -> Result<Message>
+where
+    B: Requester + ?Sized,
+    B::Err: std::error::Error + Send + Sync + 'static,
+{
+    let text = text.into();
+    opts.parse_mode = Some(ParseMode::MarkdownV2);
+    match send_reply_with_fallback(bot, msg, text.clone(), opts.clone()).await {
+        Ok(message) => Ok(message),
+        Err(err) => {
+            if is_markdown_error(&err) {
+                let escaped = markdown::escape(&text);
+                return send_reply_with_fallback(bot, msg, escaped, opts).await;
+            }
+            Err(err)
+        }
+    }
+}
+
 fn apply_send_options<B>(mut req: B::SendMessage, opts: &SendOptions) -> B::SendMessage
 where
     B: Requester + ?Sized,
@@ -110,5 +136,13 @@ where
     if let Some(disable_notification) = opts.disable_notification {
         req = req.disable_notification(disable_notification);
     }
+    if let Some(parse_mode) = opts.parse_mode {
+        req = req.parse_mode(parse_mode);
+    }
     req
+}
+
+fn is_markdown_error(err: &anyhow::Error) -> bool {
+    let text = err.to_string().to_lowercase();
+    text.contains("can't parse entities") || text.contains("cannot parse entities")
 }
