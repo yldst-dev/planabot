@@ -203,7 +203,7 @@ where
     } else {
         question
     };
-    maybe_react_heart_on_nested_reply(&bot, &msg).await;
+    maybe_react_heart_on_reply_chain(&bot, &msg, &state).await;
     let now = kst_now().await;
     let question = format_question_with_metadata(&question, now, &msg);
     send_typing_in_thread(&bot, &msg).await;
@@ -524,23 +524,23 @@ where
     if let Some(thread_id) = msg.thread_id {
         req = req.message_thread_id(thread_id);
     }
-    let _ = req.await;
+    if let Err(err) = req.await {
+        log::debug!("입력중 상태 전송 실패 (chat {}): {}", msg.chat.id, err);
+    }
 }
 
-async fn maybe_react_heart_on_nested_reply<B>(bot: &B, msg: &Message)
+async fn maybe_react_heart_on_reply_chain<B>(bot: &B, msg: &Message, state: &AppState)
 where
     B: Requester + ?Sized,
     B::Err: std::error::Error + Send + Sync + 'static,
     B::SetMessageReaction: Send,
 {
+    // 개인 채팅에서는 입력중이 정상 동작하므로 반응 불필요
     if msg.chat.is_private() {
         return;
     }
-    let is_nested_reply = msg
-        .reply_to_message()
-        .and_then(|reply| reply.reply_to_message())
-        .is_some();
-    if !is_nested_reply {
+    // 봇의 플라나브레인 답변에 대한 답글인 경우에만 반응
+    if !state.is_reply_to_planabrain(msg) {
         return;
     }
     let reaction = ReactionType::Emoji {

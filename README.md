@@ -78,11 +78,91 @@ cargo run --release
 - 강제 지정이 필요하면:
   - `PLANABOT_DEBIAN_RELEASE=bullseye ./scripts/build-release.sh`
 
-## Docker 실행 (glibc 맞춤 빌드)
+## Docker 실행 (개발용, 로컬 빌드)
 - 호스트 glibc 버전에 맞춰 이미지를 선택하려면:
   - `./scripts/compose-up.sh`
 - 직접 지정하려면:
   - `PLANABOT_RUNTIME_IMAGE=debian:buster-slim PLANABOT_RUST_IMAGE=rustlang/rust:nightly-buster PLANABOT_NODE_IMAGE=node:18-buster-slim docker compose up --build -d`
+
+## CI/CD
+
+이 저장소는 GitHub Actions를 통해 자동으로 테스트와 배포를 수행합니다.
+
+### 파이프라인
+
+| 트리거 | 테스트 | Docker 빌드 & 푸시 |
+|-------|-------|-------------------|
+| Pull Request | ✅ | ❌ |
+| main push | ✅ | ✅ (테스트 통과 시) |
+| 태그 push (v*) | ✅ | ✅ (테스트 통과 시) |
+
+### 테스트 항목
+
+**Rust (core/):**
+- `cargo fmt --check` - 코드 포맷팅
+- `cargo clippy -- -D warnings` - 린트
+- `cargo test` - 유닛 테스트
+
+**TypeScript (planabrain/):**
+- `npm run typecheck` - 타입 체크
+- `npm run build` - 빌드
+
+### Docker 이미지
+
+빌드된 이미지는 GitHub Container Registry에 푸시됩니다:
+- `ghcr.io/yldst-dev/planabot:latest` - main 브랜치 최신
+- `ghcr.io/yldst-dev/planabot:1.2.3` - 태그 버전
+
+## 배포 (Production Deployment)
+
+### 서버 초기 설정 (1회)
+
+```bash
+mkdir -p /path/to/planabot && cd /path/to/planabot
+
+# 필요한 파일 다운로드
+curl -O https://raw.githubusercontent.com/yldst-dev/planabot/main/docker-compose.prod.yml
+curl -O https://raw.githubusercontent.com/yldst-dev/planabot/main/deploy.sh
+chmod +x deploy.sh
+
+# .env 파일 생성
+cat > .env << 'EOF'
+TELEGRAM_API_TOKEN=your_token_here
+GOOGLE_API_KEY=your_api_key_here
+PLANABRAIN_ALLOWED_CHAT_IDS=-1001234567890
+PLANABRAIN_ALLOWED_USER_IDS=123456789
+EOF
+
+# 데이터 디렉토리 생성
+mkdir -p .planabot
+```
+
+### 배포
+
+```bash
+./deploy.sh
+```
+
+또는:
+
+```bash
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### 롤백
+
+`docker-compose.prod.yml`에서 이미지 태그 변경:
+
+```yaml
+image: ghcr.io/yldst-dev/planabot:v1.0.0
+```
+
+그 후 재배포:
+
+```bash
+./deploy.sh
+```
 
 ## Todo
 - (정리됨) 이미지 캡션/답장 기반 분석 지원

@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  planabot:
+    image: ghcr.io/yldst-dev/planabot:latest
+    container_name: planabot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./.planabot:/app/.planabot
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

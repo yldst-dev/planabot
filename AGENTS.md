@@ -52,6 +52,15 @@
 - AI/planabrain calls are gated by `PLANABRAIN_ALLOWED_CHAT_IDS` in `.env`.
 - `TELEGRAM_API_TOKEN` and `GOOGLE_API_KEY` are required for runtime.
 
+## CI/CD & Deployment
+- GitHub Actions 워크플로우: `.github/workflows/ci.yml`
+- PR/push 시 테스트 자동 실행 (Rust fmt/clippy/test + TypeScript typecheck/build)
+- 테스트 통과 후에만 main/태그에서 Docker 이미지 빌드
+- 이미지는 GHCR(`ghcr.io/yldst-dev/planabot`)에 푸시
+- 프로덕션 서버: `docker-compose.prod.yml` + `deploy.sh` 사용
+- 서버에서 빌드하지 않음 (이미지 pull만 수행)
+- 롤백: `docker-compose.prod.yml`에서 이미지 태그 변경 후 재배포
+
 ## 오늘 작업 (2026-01-16)
 - 프라나 톤: 봇의 모든 사용자 메시지를 프라나 말투로 통일.
 - KST 인터넷 시간: worldtimeapi/timeapi/Date 헤더 기반 시간 조회 + 실패 시 로컬 fallback.
