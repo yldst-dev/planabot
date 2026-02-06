@@ -1,5 +1,6 @@
 mod bot;
 mod config;
+mod health;
 mod hitomi;
 mod planabrain;
 mod reboot;
@@ -20,11 +21,13 @@ use tokio::time::sleep;
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
+    health::init_start_time();
     reboot::install_panic_reboot_hook();
 
     let config = Config::load()?;
     let bot = Bot::new(&config.telegram_api_token);
 
+    tokio::spawn(health::run_health_server());
     spawn_reboot_scheduler();
 
     let me = get_me_or_reboot(&bot).await?;

@@ -14,8 +14,12 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    ports:
+      - "8080:8080"
+      - "8081:8081"
     volumes:
       - ./.env:/app/.env:ro
+      - ./.planabot:/app/.planabot
     logging:
       driver: json-file
       options:

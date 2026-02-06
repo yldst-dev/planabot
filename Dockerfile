@@ -56,4 +56,11 @@ COPY --from=planabrain-builder /app/planabrain/package.json /app/planabrain/pack
 COPY --from=planabrain-builder /app/planabrain/node_modules /app/planabrain/node_modules
 COPY --from=planabrain-builder /app/planabrain/dist /app/planabrain/dist
 
-CMD ["/usr/local/bin/planabot"]
+# 헬스체크 포트 노출
+EXPOSE 8080 8081
+
+# 시작 스크립트
+COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+CMD ["/usr/local/bin/entrypoint.sh"]

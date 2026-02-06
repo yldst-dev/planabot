@@ -9,8 +9,29 @@ services:
       - .env
     volumes:
       - ./.planabot:/app/.planabot
+    expose:
+      - "8080"
+      - "8081"
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+    networks:
+      - planabot-net
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - planabot
+    networks:
+      - planabot-net
+
+networks:
+  planabot-net:
+    driver: bridge
