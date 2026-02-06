@@ -1,21 +1,16 @@
 # syntax=docker/dockerfile:1.7
 
-ARG RUST_IMAGE=rustlang/rust:nightly-slim
+ARG RUST_IMAGE=rust:1.84-slim-bookworm
 ARG RUNTIME_IMAGE=debian:bookworm-slim
 ARG NODE_IMAGE=node:20-bookworm-slim
-ARG RUSTUP_TOOLCHAIN=nightly
-ARG RUSTUP_UPDATE=0
 
 ## Build stage
 FROM ${RUST_IMAGE} AS builder
 
 WORKDIR /app
 
-# Ensure toolchain is set; update is optional to avoid rustup fs errors in some environments.
-RUN if [ "${RUSTUP_UPDATE}" = "1" ]; then \
-        rustup update ${RUSTUP_TOOLCHAIN}; \
-    fi && \
-    rustup default ${RUSTUP_TOOLCHAIN}
+# nightly 툴체인 설치
+RUN rustup default nightly
 
 # 캐시 최적화를 위해 먼저 manifest 복사
 COPY Cargo.toml Cargo.lock ./
