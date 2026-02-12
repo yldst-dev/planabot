@@ -18,6 +18,7 @@ const DEFAULT_SYSTEM_PROMPT = `당신은 넥슨게임즈가 제작한 서브컬�
 export type Settings = {
   googleApiKey: string;
   chatModel: string;
+  chatMaxOutputTokens?: number;
   embeddingModel: string;
   indexPath: string;
   systemPrompt: string;
@@ -53,9 +54,15 @@ export function loadSettings(): Settings {
     process.env.PLANABRAIN_MEMORY_DIR ??
     path.join(path.dirname(indexPath), "memory");
 
+  const chatMaxOutputTokens = parseOptionalPositiveIntEnv(
+    "PLANABRAIN_GEMINI_MAX_OUTPUT_TOKENS",
+    1024,
+  );
+
   return {
     googleApiKey,
     chatModel: process.env.PLANABRAIN_GEMINI_MODEL ?? "gemini-3-flash-preview",
+    chatMaxOutputTokens,
     embeddingModel:
       process.env.PLANABRAIN_GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001",
     indexPath,
@@ -64,4 +71,23 @@ export function loadSettings(): Settings {
     memoryMaxMessages,
     memoryDir,
   };
+}
+
+function parseOptionalPositiveIntEnv(
+  key: string,
+  defaultValue: number,
+): number | undefined {
+  const raw = process.env[key];
+  if (raw == null) {
+    return defaultValue;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === "0" || trimmed.toLowerCase() === "false") {
+    return undefined;
+  }
+  const value = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${key} must be a positive integer (or 0 to disable)`);
+  }
+  return value;
 }

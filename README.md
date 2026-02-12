@@ -56,6 +56,8 @@ cargo run --release
 - `PLANABRAIN_ALLOWED_USER_IDS`: 베타 AI 허용 사용자 ID 목록 (1:1 대화)
 - `PLANABRAIN_GEMINI_MODEL` (기본 `gemini-3-flash-preview`)
 - `PLANABRAIN_GEMINI_EMBEDDING_MODEL` (기본 `gemini-embedding-001`)
+- `PLANABRAIN_GEMINI_MAX_OUTPUT_TOKENS` (기본 `1024`, `0`이면 제한 해제)
+- `PLANABRAIN_GEMINI_VISION_MAX_OUTPUT_TOKENS` (기본 `512`, `0`이면 제한 해제. 이미지 분석 전용)
 - `PLANABRAIN_INDEX_PATH` (기본 `.planabrain/index.json`)
 - `PLANABOT_GROUPS_PATH` (기본 `.planabot/groups.json`): 봇이 참여한 그룹 채팅 ID 저장 경로
 - `PLANABOT_PLANABRAIN_REPLIES_PATH` (기본 `.planabot/planabrain_replies.json`): planabrain 답변 ID 저장 경로
