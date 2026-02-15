@@ -5,6 +5,7 @@ mod hitomi;
 mod planabrain;
 mod reboot;
 mod time;
+mod token;
 mod urlchanger;
 mod vision;
 

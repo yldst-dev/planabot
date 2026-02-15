@@ -27,11 +27,18 @@ loadEnv();
 import { loadSettings } from "../config/settings.js";
 import { runAskCommand } from "./commands/ask.js";
 import { runIngestCommand } from "./commands/ingest.js";
+import { runTokensCommand } from "./commands/tokens.js";
 import { parseCli } from "./parse.js";
 
 export async function main(argv: string[]): Promise<void> {
-  const settings = loadSettings();
   const parsed = parseCli(argv);
+
+  if (parsed.command === "tokens") {
+    await runTokensCommand(parsed.args);
+    return;
+  }
+
+  const settings = loadSettings();
 
   if (parsed.command === "ingest") {
     await runIngestCommand(parsed.args, settings);

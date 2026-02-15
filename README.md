@@ -22,7 +22,7 @@ cargo run --release
 
 ## 사용 방법
 - Hitomi 조회: `!<ID>` (모든 채팅), `<ID>` (개인 채팅), `@봇계정 <ID>` (그룹)
-- 명령어: `/start`, `/ping`
+- 명령어: `/start`, `/ping`, `/token`
 - URL 정리: 메시지에 포함된
   - YouTube/YouTube Music/Spotify/Apple Music 링크 → 추적 파라미터 제거
   - X/Twitter 링크 → `fxtwitter.com`으로 변환
@@ -42,6 +42,10 @@ cargo run --release
   - 현재 시각은 인터넷 KST(실패 시 로컬 KST) 기준으로 질문에 포함합니다.
   - 프라나 말투로 응답합니다.
   - 캡션 포함 이미지 또는 답장 이미지가 있으면 임시 저장 후 분석해 컨텍스트에 포함합니다.
+- 토큰 측정: 측정할 메시지에 답장한 뒤 `/token`
+  - 텍스트/캡션 메시지를 `tokenx` 기반으로 로컬 추정합니다. (외부 토큰 API 미사용)
+  - 모델명(`PLANABOT_TOKEN_MODEL`)에 따라 프로파일을 선택해 추정합니다.
+  - 기본 기준값 1024 토큰 초과 여부를 함께 안내합니다.
 
 ## planabrain (TypeScript CLI)
 - 위치: `planabrain/`
@@ -55,6 +59,9 @@ cargo run --release
 - `PLANABRAIN_ALLOWED_CHAT_IDS`: 베타 AI 허용 채팅 ID 목록
 - `PLANABRAIN_ALLOWED_USER_IDS`: 베타 AI 허용 사용자 ID 목록 (1:1 대화)
 - `PLANABRAIN_GEMINI_MODEL` (기본 `gemini-3-flash-preview`)
+- `PLANABOT_TOKEN_MODEL` (기본 비어 있음): `/token` 추정 모델명. 비어 있으면 `PLANABRAIN_GEMINI_MODEL` 사용
+- `PLANABOT_TOKEN_LIMIT` (기본 `1024`): `/token` 기준 토큰 임계값
+- `PLANABOT_TOKEN_ESTIMATE_MULTIPLIER` (기본 `1.0`): `/token` 추정값 보정 배수 (`1.1`이면 10% 보수적으로 계산)
 - `PLANABRAIN_GEMINI_EMBEDDING_MODEL` (기본 `gemini-embedding-001`)
 - `PLANABRAIN_GEMINI_MAX_OUTPUT_TOKENS` (기본 `1024`, `0`이면 제한 해제)
 - `PLANABRAIN_GEMINI_VISION_MAX_OUTPUT_TOKENS` (기본 `512`, `0`이면 제한 해제. 이미지 분석 전용)

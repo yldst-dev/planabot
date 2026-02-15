@@ -15,6 +15,7 @@ use url::Url;
 
 use crate::planabrain;
 use crate::time::kst_now;
+use crate::token;
 use crate::vision;
 
 use super::commands::Command;
@@ -76,6 +77,50 @@ where
 
             bot.send_message(msg.chat.id, format!("응답 확인.\n선생님.\n{:.6} ms", ms))
                 .await?;
+        }
+        Command::Token => {
+            let Some(reply) = msg.reply_to_message() else {
+                send_reply_with_fallback(
+                    &bot,
+                    &msg,
+                    "불가.\n선생님.\n측정할 메시지에 답장한 뒤 /token을 입력해 주세요.",
+                    SendOptions::default(),
+                )
+                .await?;
+                return Ok(());
+            };
+
+            let Some(target_text) = extract_message_text(reply)
+                .map(|text| text.trim().to_string())
+                .filter(|text| !text.is_empty())
+            else {
+                send_reply_with_fallback(
+                    &bot,
+                    &msg,
+                    "불가.\n선생님.\n텍스트 또는 캡션 메시지만 측정할 수 있습니다.",
+                    SendOptions::default(),
+                )
+                .await?;
+                return Ok(());
+            };
+
+            match token::count_text_tokens(&target_text).await {
+                Ok(result) => {
+                    let limit = resolve_token_limit();
+                    let report = render_token_report(result.total_tokens, limit);
+                    send_reply_with_fallback(&bot, &msg, report, SendOptions::default()).await?;
+                }
+                Err(err) => {
+                    error!("토큰 측정 실패: {}", err);
+                    send_reply_with_fallback(
+                        &bot,
+                        &msg,
+                        "오류.\n선생님.\n토큰 측정에 실패했습니다.\n모델 설정과 로컬 실행 환경을 확인해 주세요.",
+                        SendOptions::default(),
+                    )
+                    .await?;
+                }
+            }
         }
         Command::MemoryReset => {
             let Some(user) = msg.from.as_ref() else {
@@ -667,6 +712,28 @@ fn build_planabrain_question(question: &str, msg: &Message) -> String {
         return format!("참고 메시지:\n{}", context);
     }
     format!("참고 메시지:\n{}\n\n질문:\n{}", context, question)
+}
+
+fn render_token_report(tokens: u32, limit: u32) -> String {
+    if tokens > limit {
+        let exceeded = tokens - limit;
+        return format!(
+            "주의.\n선생님.\n추정 토큰 {}.\n기준 {} 초과입니다.\n초과 {}.",
+            tokens, limit, exceeded
+        );
+    }
+    format!(
+        "확인 완료.\n선생님.\n추정 토큰 {}.\n기준 {} 이하입니다.",
+        tokens, limit
+    )
+}
+
+fn resolve_token_limit() -> u32 {
+    std::env::var("PLANABOT_TOKEN_LIMIT")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(1024)
 }
 
 struct ImageSource {

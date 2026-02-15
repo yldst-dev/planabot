@@ -7,6 +7,8 @@ pub(crate) enum Command {
     Start,
     #[command(description = "봇 상태 확인")]
     Ping,
+    #[command(description = "답장 메시지 토큰 측정")]
+    Token,
     #[command(description = "내 대화 메모리 초기화")]
     MemoryReset,
 }
