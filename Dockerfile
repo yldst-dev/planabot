@@ -2,7 +2,7 @@
 
 ARG RUST_IMAGE=rust:1.84-slim-bookworm
 ARG RUNTIME_IMAGE=debian:bookworm-slim
-ARG NODE_IMAGE=node:20-bookworm-slim
+ARG NODE_IMAGE=node:22-bookworm-slim
 
 ## Build stage
 FROM ${RUST_IMAGE} AS builder

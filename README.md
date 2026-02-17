@@ -42,6 +42,9 @@ cargo run --release
   - 현재 시각은 인터넷 KST(실패 시 로컬 KST) 기준으로 질문에 포함합니다.
   - 프라나 말투로 응답합니다.
   - 캡션 포함 이미지 또는 답장 이미지가 있으면 임시 저장 후 분석해 컨텍스트에 포함합니다.
+  - planabrain 내장 장기 메모리 컨텍스트를 함께 주입합니다. (`PLANABOT_LOCAL_MEMORY_ENABLED=1`)
+  - 장기 메모리는 사용자별 스코프 + 그룹 공용 스코프를 함께 사용합니다.
+  - `/memoryreset`은 기존 planabrain 메모리와 장기 메모리를 함께 정리합니다.
 - 토큰 측정: 측정할 메시지에 답장한 뒤 `/token`
   - 텍스트/캡션 메시지를 `tokenx` 기반으로 로컬 추정합니다. (외부 토큰 API 미사용)
   - 모델명(`PLANABOT_TOKEN_MODEL`)에 따라 프로파일을 선택해 추정합니다.
@@ -52,6 +55,37 @@ cargo run --release
 - 개발 실행: `npm run dev`
 - 타입 체크: `npm run typecheck`
 - 빌드: `npm run build`
+- JSON 메모리 마이그레이션: `node dist/cli/index.js memory-migrate-json [sourceDir]`
+
+## 장기 메모리 검증 체크리스트
+1. 사전 확인
+   - `.env`에 `PLANABOT_LOCAL_MEMORY_ENABLED=1` 설정
+   - 봇 재시작 후 `프라나야` 호출 가능한 채팅에서 테스트
+2. 선호 기억 확인
+   - 사용자 입력: `프라나야 나는 말차 라떼를 좋아해`
+   - 다음 입력: `프라나야 내가 좋아하는 음료 뭐였지`
+   - 기대 결과: 말차 라떼 선호를 재호출
+3. 시간 간격 후 재호출 확인
+   - 몇 분 뒤 같은 질문 재시도
+   - 기대 결과: 동일 선호 정보 유지
+4. 채팅 스코프 분리 확인
+   - 다른 그룹/개인채팅에서 같은 사용자로 `프라나야 내가 좋아하는 음료 뭐였지` 질문
+   - 기대 결과: 원래 채팅의 선호가 자동 전이되지 않음
+5. 그룹 공용 메모리 확인
+   - 같은 그룹에서 사용자 A가 `우리 방 규칙은 1024 토큰 초과 금지야` 입력
+   - 같은 그룹에서 사용자 B가 `프라나야 우리 방 규칙이 뭐야` 질문
+   - 기대 결과: 규칙이 재호출됨
+6. 메모리 초기화 확인
+   - 같은 사용자로 `/memoryreset`
+   - 다음 입력: `프라나야 내가 좋아하는 음료 뭐였지`
+   - 기대 결과: 기존 선호 기억이 사라짐
+7. 비활성화 확인
+   - `.env`에서 `PLANABOT_LOCAL_MEMORY_ENABLED=0` 설정 후 재시작
+   - 같은 시나리오 반복
+   - 기대 결과: 장기 기억 주입 없이 기본 동작
+8. 로컬 저장 확인
+   - `.planabrain/local-memory/memory.sqlite` 파일 생성 여부 확인
+   - 기대 결과: 실행 중 SQLite 파일이 생성되고 갱신됨
 
 ## 환경변수
 - `TELEGRAM_API_TOKEN`: 텔레그램 봇 토큰
@@ -59,6 +93,12 @@ cargo run --release
 - `PLANABRAIN_ALLOWED_CHAT_IDS`: 베타 AI 허용 채팅 ID 목록
 - `PLANABRAIN_ALLOWED_USER_IDS`: 베타 AI 허용 사용자 ID 목록 (1:1 대화)
 - `PLANABRAIN_GEMINI_MODEL` (기본 `gemini-3-flash-preview`)
+- `PLANABOT_LOCAL_MEMORY_ENABLED` (기본 `1`): 장기 메모리 사용 여부 (`0`/`false`면 비활성화)
+- `PLANABOT_LOCAL_MEMORY_TOKEN_BUDGET` (기본 `900`): 장기 메모리 컨텍스트 패킹 시 토큰 예산
+- `PLANABRAIN_LOCAL_MEMORY_DIR` (기본 `.planabrain/local-memory`): 장기 메모리 저장 경로
+- `PLANABRAIN_LOCAL_MEMORY_STORE` (기본 `sqlite`): 장기 메모리 저장소 (`sqlite` 또는 `json`)
+- `PLANABRAIN_LOCAL_MEMORY_SQLITE_PATH` (기본 `.planabrain/local-memory/memory.sqlite`): SQLite 파일 경로
+- `PLANABRAIN_LOCAL_GROUP_MEMORY_ENABLED` (기본 `1`): 그룹 공용 메모리 사용 여부
 - `PLANABOT_TOKEN_MODEL` (기본 비어 있음): `/token` 추정 모델명. 비어 있으면 `PLANABRAIN_GEMINI_MODEL` 사용
 - `PLANABOT_TOKEN_LIMIT` (기본 `1024`): `/token` 기준 토큰 임계값
 - `PLANABOT_TOKEN_ESTIMATE_MULTIPLIER` (기본 `1.0`): `/token` 추정값 보정 배수 (`1.1`이면 10% 보수적으로 계산)
@@ -91,7 +131,7 @@ cargo run --release
 - 호스트 glibc 버전에 맞춰 이미지를 선택하려면:
   - `./scripts/compose-up.sh`
 - 직접 지정하려면:
-  - `PLANABOT_RUNTIME_IMAGE=debian:buster-slim PLANABOT_RUST_IMAGE=rustlang/rust:nightly-buster PLANABOT_NODE_IMAGE=node:18-buster-slim docker compose up --build -d`
+  - `PLANABOT_RUNTIME_IMAGE=debian:bookworm-slim PLANABOT_RUST_IMAGE=rustlang/rust:nightly-bookworm PLANABOT_NODE_IMAGE=node:22-bookworm-slim docker compose up --build -d`
 
 ## CI/CD
 

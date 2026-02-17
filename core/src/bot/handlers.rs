@@ -253,7 +253,7 @@ where
     let question = format_question_with_metadata(&question, now, &msg);
     send_typing_in_thread(&bot, &msg).await;
     let mut typing_interval = time::interval(Duration::from_secs(3));
-    let ask_fut = planabrain::run_planabrain_ask(&question, &user_id);
+    let ask_fut = planabrain::run_planabrain_ask(&question, &user_id, msg.chat.id.0);
     tokio::pin!(ask_fut);
 
     let answer = loop {
