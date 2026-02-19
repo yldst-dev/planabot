@@ -18,11 +18,29 @@ if [ -n "$token" ]; then
   services+=(cloudflared)
 fi
 
+arch=$(uname -m)
+platform=""
+if [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; then
+  platform="linux/amd64"
+elif [ "$arch" = "aarch64" ] || [ "$arch" = "arm64" ]; then
+  platform="linux/arm64"
+fi
+
 echo "Pulling latest image..."
-docker compose -f docker-compose.prod.yml pull "${services[@]}"
+if [ -n "$platform" ]; then
+  echo "Detected architecture: $arch ($platform)"
+  DOCKER_DEFAULT_PLATFORM="$platform" docker compose -f docker-compose.prod.yml pull "${services[@]}"
+else
+  echo "Detected architecture: $arch (default platform)"
+  docker compose -f docker-compose.prod.yml pull "${services[@]}"
+fi
 
 echo "Restarting container..."
-docker compose -f docker-compose.prod.yml up -d "${services[@]}"
+if [ -n "$platform" ]; then
+  DOCKER_DEFAULT_PLATFORM="$platform" docker compose -f docker-compose.prod.yml up -d "${services[@]}"
+else
+  docker compose -f docker-compose.prod.yml up -d "${services[@]}"
+fi
 
 if [ -z "$token" ]; then
   docker compose -f docker-compose.prod.yml stop cloudflared >/dev/null 2>&1 || true
