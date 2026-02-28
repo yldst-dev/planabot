@@ -40,6 +40,10 @@ pub(crate) async fn run_planabrain_ask(
     user_id: &str,
     chat_id: i64,
 ) -> Result<String> {
+    if !is_planabrain_enabled() {
+        return Err(anyhow!("planabrain 비활성화"));
+    }
+
     let question = question.to_string();
     let user_id = user_id.to_string();
 
@@ -51,6 +55,10 @@ pub(crate) async fn run_planabrain_ask(
 }
 
 pub(crate) async fn reset_user_memory(user_id: &str) -> Result<bool> {
+    if !is_planabrain_enabled() {
+        return Err(anyhow!("planabrain 비활성화"));
+    }
+
     let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
     let memory_file = planabrain_memory_file(&root, user_id)?;
 
@@ -71,6 +79,10 @@ pub(crate) async fn reset_user_memory(user_id: &str) -> Result<bool> {
 }
 
 pub(crate) fn is_planabrain_allowed(chat_id: i64, user_id: Option<i64>, is_private: bool) -> bool {
+    if !is_planabrain_enabled() {
+        return false;
+    }
+
     if ALLOWED_CHAT_IDS.contains(&chat_id) {
         return true;
     }
@@ -160,6 +172,23 @@ fn safe_user_id(raw: &str) -> String {
     } else {
         out
     }
+}
+
+static PLANABRAIN_ENABLED: Lazy<bool> = Lazy::new(|| {
+    let Ok(raw) = std::env::var("PLANABRAIN_ENABLED") else {
+        return true;
+    };
+
+    let normalized = raw.trim().to_ascii_lowercase();
+    !(normalized.is_empty()
+        || normalized == "0"
+        || normalized == "false"
+        || normalized == "off"
+        || normalized == "no")
+});
+
+pub(crate) fn is_planabrain_enabled() -> bool {
+    *PLANABRAIN_ENABLED
 }
 
 static ALLOWED_CHAT_IDS: Lazy<HashSet<i64>> = Lazy::new(|| {

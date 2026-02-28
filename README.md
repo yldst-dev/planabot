@@ -7,6 +7,7 @@ Hitomi.la 갤러리 정보 조회 + URL 정리(YouTube/Spotify si 제거, X→fx
 ```
 TELEGRAM_API_TOKEN=123456:ABC-YourRealToken
 GOOGLE_API_KEY=YOUR_API_KEY_HERE
+PLANABRAIN_ENABLED=1
 # 베타 AI 기능을 허용할 채팅 ID (쉼표/공백/세미콜론 구분 가능)
 PLANABRAIN_ALLOWED_CHAT_IDS=-1001234567890,-1009876543210
 # 베타 AI 기능을 허용할 사용자 ID (1:1 대화용)
@@ -37,6 +38,7 @@ cargo run --release
 - 봇은 KST 자정(00:00)에만 재시동되며 재시동 기록은 터미널 로그에만 남습니다.
 - 텔레그램 통신 불능 오류나 치명적 패닉이 발생하면 즉시 재시동합니다.
 - 베타 AI 호출: `프라나야`로 시작하는 메시지
+  - `PLANABRAIN_ENABLED=0`이면 AI 기능(`/token`, `/memoryreset` 포함)이 비활성화됩니다.
   - `PLANABRAIN_ALLOWED_CHAT_IDS`에 포함된 채팅 또는 `PLANABRAIN_ALLOWED_USER_IDS`에 포함된 1:1 사용자만 동작
   - 텍스트/미디어 캡션 모두 인식하며, 다른 사용자 메시지에 대한 답장은 컨텍스트로 포함합니다.
   - 현재 시각은 인터넷 KST(실패 시 로컬 KST) 기준으로 질문에 포함합니다.
@@ -90,6 +92,7 @@ cargo run --release
 ## 환경변수
 - `TELEGRAM_API_TOKEN`: 텔레그램 봇 토큰
 - `GOOGLE_API_KEY` (또는 `GEMINI_API_KEY`): Gemini API 키
+- `PLANABRAIN_ENABLED` (기본 `1`): planabrain 기능 전체 사용 여부 (`0`/`false`/`off`/`no`/빈 값이면 비활성화)
 - `PLANABRAIN_ALLOWED_CHAT_IDS`: 베타 AI 허용 채팅 ID 목록
 - `PLANABRAIN_ALLOWED_USER_IDS`: 베타 AI 허용 사용자 ID 목록 (1:1 대화)
 - `PLANABRAIN_GEMINI_MODEL` (기본 `gemini-3-flash-preview`)

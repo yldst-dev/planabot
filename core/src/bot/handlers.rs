@@ -79,6 +79,17 @@ where
                 .await?;
         }
         Command::Token => {
+            if !planabrain::is_planabrain_enabled() {
+                send_reply_with_fallback(
+                    &bot,
+                    &msg,
+                    "불가.\n선생님.\n프라나브레인 기능이 비활성화 상태입니다.",
+                    SendOptions::default(),
+                )
+                .await?;
+                return Ok(());
+            }
+
             let Some(reply) = msg.reply_to_message() else {
                 send_reply_with_fallback(
                     &bot,
@@ -123,6 +134,17 @@ where
             }
         }
         Command::MemoryReset => {
+            if !planabrain::is_planabrain_enabled() {
+                send_reply_with_fallback(
+                    &bot,
+                    &msg,
+                    "불가.\n선생님.\n프라나브레인 기능이 비활성화 상태입니다.",
+                    SendOptions::default(),
+                )
+                .await?;
+                return Ok(());
+            }
+
             let Some(user) = msg.from.as_ref() else {
                 send_reply_with_fallback(
                     &bot,
@@ -178,6 +200,9 @@ where
     B::SetMessageReaction: Send,
 {
     if !state.is_after_boot(&msg) {
+        return Ok(());
+    }
+    if !planabrain::is_planabrain_enabled() {
         return Ok(());
     }
 
@@ -545,6 +570,9 @@ fn build_notice_keyboard(state: &AppState) -> Option<InlineKeyboardMarkup> {
 
 pub(crate) fn is_plana_trigger(msg: &Message, state: &AppState) -> bool {
     if !state.is_after_boot(msg) {
+        return false;
+    }
+    if !planabrain::is_planabrain_enabled() {
         return false;
     }
 
