@@ -160,7 +160,7 @@ enum Artist {
 
 fn merge_tags(a: Vec<Tag>, b: Vec<Tag>) -> Vec<String> {
     let mut out = Vec::new();
-    for tag in a.into_iter().chain(b.into_iter()) {
+    for tag in a.into_iter().chain(b) {
         let value = match tag {
             Tag::Simple(s) => Some(s),
             Tag::Object { tag } => tag,
@@ -178,7 +178,7 @@ fn merge_tags(a: Vec<Tag>, b: Vec<Tag>) -> Vec<String> {
 
 fn merge_artists(a: Vec<Artist>, b: Vec<Artist>) -> Vec<String> {
     let mut out = Vec::new();
-    for artist in a.into_iter().chain(b.into_iter()) {
+    for artist in a.into_iter().chain(b) {
         let value = match artist {
             Artist::Simple(s) => Some(s),
             Artist::Object { artist } => artist,
