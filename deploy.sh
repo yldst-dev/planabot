@@ -74,15 +74,16 @@ if ! pull_with_platform planabot "$planabot_platform"; then
       export PLANABOT_IMAGE_TAG="$fallback_tag"
       echo "ARM64 latest unavailable. Fallback to release tag: ${PLANABOT_IMAGE_TAG}"
       if ! pull_with_platform planabot "$planabot_platform"; then
-        echo "ARM64 release tag pull failed. Fallback to amd64 emulation with latest."
-        export PLANABOT_IMAGE_TAG="latest"
-        planabot_platform="linux/amd64"
-        pull_with_platform planabot "$planabot_platform"
+        echo "ARM64 release tag pull failed."
+        echo "No compatible linux/arm64 image is currently available."
+        echo "Create/push a semver tag (v*) to publish multi-arch images, then redeploy."
+        exit 1
       fi
     else
-      echo "No release tag found. Fallback to amd64 emulation with latest."
-      planabot_platform="linux/amd64"
-      pull_with_platform planabot "$planabot_platform"
+      echo "No release tag found."
+      echo "latest is amd64-only and cannot run on this arm64 host."
+      echo "Create/push a semver tag (v*) to publish multi-arch images, then redeploy."
+      exit 1
     fi
   else
     exit 1
