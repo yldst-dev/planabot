@@ -35,7 +35,9 @@ RUN npm run build && npm prune --omit=dev
 FROM ${RUNTIME_IMAGE}
 
 ENV RUST_LOG=info \
-    RUST_BACKTRACE=1
+    RUST_BACKTRACE=1 \
+    GEMINI_CLI_API_HOST=host.docker.internal \
+    GEMINI_CLI_API_PORT=43173
 
 RUN if grep -q "VERSION_CODENAME=buster" /etc/os-release; then \
         sed -i 's|deb.debian.org/debian|archive.debian.org/debian|g' /etc/apt/sources.list && \
