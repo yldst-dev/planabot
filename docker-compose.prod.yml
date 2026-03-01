@@ -1,6 +1,6 @@
 services:
   planabot:
-    image: ghcr.io/yldst-dev/planabot:latest
+    image: ghcr.io/yldst-dev/planabot:${PLANABOT_IMAGE_TAG:-latest}
     container_name: planabot
     restart: unless-stopped
     env_file:

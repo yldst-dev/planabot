@@ -123,6 +123,7 @@ cargo run --release
 - `PLANABRAIN_INDEX_PATH` (기본 `.planabrain/index.json`)
 - `PLANABOT_GROUPS_PATH` (기본 `.planabot/groups.json`): 봇이 참여한 그룹 채팅 ID 저장 경로
 - `PLANABOT_PLANABRAIN_REPLIES_PATH` (기본 `.planabot/planabrain_replies.json`): planabrain 답변 ID 저장 경로
+- `PLANABOT_IMAGE_TAG` (기본 `latest`, 배포 스크립트 전용): `deploy.sh`가 사용할 Docker 이미지 태그
 - `WEBSHARE_API_KEY`: Webshare 프록시 API 키 (song.link 매핑에 프록시 사용 시)
 - `WEBSHARE_MODE` (기본 `direct`): `direct` 또는 `backbone`
 - `WEBSHARE_COUNTRY_CODES`: 국가 코드 필터 (예: `US,KR`)
@@ -208,6 +209,8 @@ mkdir -p .planabot
 ```bash
 ./deploy.sh
 ```
+
+ARM64 서버에서 `latest`가 단일 아키텍처일 경우 `deploy.sh`는 GitHub 최신 릴리즈 태그(예: `1.2.3`)로 자동 폴백합니다.
 
 또는:
 
