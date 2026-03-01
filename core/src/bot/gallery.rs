@@ -67,11 +67,12 @@ pub(crate) fn extract_gallery_id(
                 }
 
                 let pattern = format!(r"^@{}\s+(\d+)", regex::escape(bot_username));
-                if let Ok(re) = regex::Regex::new(&pattern)
-                    && let Some(cap) = re.captures(text)
+                if let Some(gallery_id) = regex::Regex::new(&pattern)
+                    .ok()
+                    .and_then(|re| re.captures(text).map(|cap| cap[1].to_string()))
                 {
                     return Some(GalleryIdMatch {
-                        id: cap[1].to_string(),
+                        id: gallery_id,
                         source: GalleryIdSource::Direct,
                     });
                 }

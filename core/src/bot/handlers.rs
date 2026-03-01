@@ -678,8 +678,10 @@ fn format_question_with_metadata(
         .as_ref()
         .map(|user| {
             let mut name = user.first_name.clone();
-            if let Some(last_name) = &user.last_name
-                && !last_name.trim().is_empty()
+            if let Some(last_name) = user
+                .last_name
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
             {
                 name = format!("{name} {last_name}");
             }
@@ -830,16 +832,18 @@ fn extract_image_source(msg: &Message) -> Option<ImageSource> {
         });
     }
 
-    if let Some(document) = msg.document()
-        && let Some(mime) = document.mime_type.as_ref()
-    {
-        let mime_str = mime.essence_str();
-        if mime_str.starts_with("image/") {
-            return Some(ImageSource {
-                file_id: document.file.id.clone(),
-                mime_type: mime_str.to_string(),
-            });
-        }
+    if let Some((document, mime_type)) = msg.document().and_then(|document| {
+        document
+            .mime_type
+            .as_ref()
+            .map(|mime| mime.essence_str())
+            .filter(|mime| mime.starts_with("image/"))
+            .map(|mime| (document, mime.to_string()))
+    }) {
+        return Some(ImageSource {
+            file_id: document.file.id.clone(),
+            mime_type,
+        });
     }
 
     None

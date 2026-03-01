@@ -285,10 +285,12 @@ fn run_planabrain_ask_blocking(question: &str, user_id: &str, chat_id: i64) -> R
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    if local_memory_ready
-        && let Err(err) =
-            remember_planabrain_memory_answer(&root, stdout.trim(), user_id, &chat_scope)
-    {
+    let memory_save_result = if local_memory_ready {
+        remember_planabrain_memory_answer(&root, stdout.trim(), user_id, &chat_scope)
+    } else {
+        Ok(())
+    };
+    if let Err(err) = memory_save_result {
         warn!("로컬 장기 메모리 응답 저장 실패: {}", err);
     }
     Ok(stdout)
