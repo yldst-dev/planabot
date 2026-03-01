@@ -1,0 +1,17 @@
+.git
+.github
+.planabot
+.sisyphus
+.skills
+.codex
+target
+dist
+node_modules
+planabrain/node_modules
+planabrain/dist
+.env
+.env.*
+*.log
+*.tmp
+*.swp
+.DS_Store

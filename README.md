@@ -176,6 +176,8 @@ cargo run --release
 빌드된 이미지는 GitHub Container Registry에 푸시됩니다:
 - `ghcr.io/yldst-dev/planabot:latest` - main 브랜치 최신
 - `ghcr.io/yldst-dev/planabot:1.2.3` - 태그 버전
+- `main` push는 `linux/amd64` 단일 아키텍처로 빌드합니다.
+- `v*` 태그 push는 `linux/amd64,linux/arm64` 멀티아키텍처로 빌드합니다.
 
 ## 배포 (Production Deployment)
 
