@@ -25,7 +25,7 @@ cargo run --release
 
 ## 사용 방법
 - Hitomi 조회: `!<ID>` (모든 채팅), `<ID>` (개인 채팅), `@봇계정 <ID>` (그룹)
-- 명령어: `/start`, `/ping`, `/token`
+- 명령어: `/start`, `/ping`, `/token`, `/memoryreset`, `/groupinfo`
 - URL 정리: 메시지에 포함된
   - YouTube/YouTube Music/Spotify/Apple Music 링크 → 추적 파라미터 제거
   - X/Twitter 링크 → `fxtwitter.com`으로 변환

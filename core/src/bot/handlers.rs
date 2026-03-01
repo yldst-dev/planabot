@@ -187,6 +187,26 @@ where
                 }
             }
         }
+        Command::GroupInfo => {
+            if msg.chat.is_private() {
+                send_reply_with_fallback(
+                    &bot,
+                    &msg,
+                    "불가.\n선생님.\n이 명령은 그룹 채팅에서만 지원합니다.",
+                    SendOptions::default(),
+                )
+                .await?;
+                return Ok(());
+            }
+
+            send_reply_with_fallback(
+                &bot,
+                &msg,
+                format!("확인 완료.\n선생님.\n그룹 ID: {}", msg.chat.id.0),
+                SendOptions::default(),
+            )
+            .await?;
+        }
     }
 
     Ok(())
