@@ -34,6 +34,7 @@ if [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; then
 elif [ "$arch" = "aarch64" ] || [ "$arch" = "arm64" ]; then
   platform="linux/arm64"
 fi
+planabot_platform="$platform"
 
 resolve_latest_release_image_tag() {
   release_json="$(curl -fsSL https://api.github.com/repos/yldst-dev/planabot/releases/latest 2>/dev/null || true)"
@@ -43,18 +44,20 @@ resolve_latest_release_image_tag() {
 }
 
 pull_with_platform() {
-  if [ -n "$platform" ]; then
-    DOCKER_DEFAULT_PLATFORM="$platform" docker compose -f docker-compose.prod.yml pull "$@"
+  service_platform="${2:-}"
+  if [ -n "$service_platform" ]; then
+    DOCKER_DEFAULT_PLATFORM="$service_platform" docker compose -f docker-compose.prod.yml pull "$1"
   else
-    docker compose -f docker-compose.prod.yml pull "$@"
+    docker compose -f docker-compose.prod.yml pull "$1"
   fi
 }
 
 up_with_platform() {
-  if [ -n "$platform" ]; then
-    DOCKER_DEFAULT_PLATFORM="$platform" docker compose -f docker-compose.prod.yml up -d "$@"
+  service_platform="${2:-}"
+  if [ -n "$service_platform" ]; then
+    DOCKER_DEFAULT_PLATFORM="$service_platform" docker compose -f docker-compose.prod.yml up -d "$1"
   else
-    docker compose -f docker-compose.prod.yml up -d "$@"
+    docker compose -f docker-compose.prod.yml up -d "$1"
   fi
 }
 
@@ -64,16 +67,22 @@ else
   echo "Detected architecture: $arch (default platform)"
 fi
 echo "Pulling planabot image tag: ${PLANABOT_IMAGE_TAG}"
-if ! pull_with_platform planabot; then
+if ! pull_with_platform planabot "$planabot_platform"; then
   if [ "$platform" = "linux/arm64" ] && [ "${PLANABOT_IMAGE_TAG}" = "latest" ]; then
     fallback_tag="$(resolve_latest_release_image_tag)"
     if [ -n "$fallback_tag" ] && [ "$fallback_tag" != "latest" ]; then
       export PLANABOT_IMAGE_TAG="$fallback_tag"
       echo "ARM64 latest unavailable. Fallback to release tag: ${PLANABOT_IMAGE_TAG}"
-      pull_with_platform planabot
+      if ! pull_with_platform planabot "$planabot_platform"; then
+        echo "ARM64 release tag pull failed. Fallback to amd64 emulation with latest."
+        export PLANABOT_IMAGE_TAG="latest"
+        planabot_platform="linux/amd64"
+        pull_with_platform planabot "$planabot_platform"
+      fi
     else
-      echo "Failed to resolve ARM64-compatible release tag."
-      exit 1
+      echo "No release tag found. Fallback to amd64 emulation with latest."
+      planabot_platform="linux/amd64"
+      pull_with_platform planabot "$planabot_platform"
     fi
   else
     exit 1
@@ -86,7 +95,7 @@ if [ -n "$token" ]; then
 fi
 
 echo "Restarting container..."
-up_with_platform planabot
+up_with_platform planabot "$planabot_platform"
 if [ -n "$token" ]; then
   docker compose -f docker-compose.prod.yml up -d cloudflared
 fi
