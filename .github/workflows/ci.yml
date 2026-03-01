@@ -88,7 +88,8 @@ jobs:
     if: |
       always() &&
       github.event_name == 'push' &&
-      (needs.changes.outputs.rust == 'true' || 
+      (startsWith(github.ref, 'refs/tags/v') ||
+       needs.changes.outputs.rust == 'true' || 
        needs.changes.outputs.planabrain == 'true' || 
        needs.changes.outputs.docker == 'true') &&
       (needs.test-rust.result == 'success' || needs.test-rust.result == 'skipped') &&
