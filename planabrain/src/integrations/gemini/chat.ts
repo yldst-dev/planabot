@@ -4,6 +4,14 @@ import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages
 import type { Settings } from "../../config/settings.js";
 import { createGoogleSearchTool } from "../googleSearch/retrievalTool.js";
 
+const DEFAULT_CHAT_TEMPERATURE = 1.0;
+const DEFAULT_CHAT_TOP_P = 0.7;
+
+type GeminiSafetySetting = {
+  category: string;
+  threshold: string;
+};
+
 export type ChatMessage = {
   role: "system" | "user" | "assistant" | "developer" | "tool";
   content: string;
@@ -29,8 +37,9 @@ function createChatModel(settings: Settings): ChatGoogleGenerativeAI {
   return new ChatGoogleGenerativeAI({
     apiKey: settings.googleApiKey,
     model: settings.chatModel,
+    temperature: DEFAULT_CHAT_TEMPERATURE,
     maxOutputTokens: settings.chatMaxOutputTokens,
-    topP: 0.7,
+    topP: DEFAULT_CHAT_TOP_P,
     thinkingConfig: {
       thinkingLevel: "LOW",
     },
@@ -61,11 +70,18 @@ async function invokeGeminiMockChat(
   }
   const payload: Record<string, unknown> = {
     model: settings.chatModel,
+    temperature: DEFAULT_CHAT_TEMPERATURE,
+    top_p: DEFAULT_CHAT_TOP_P,
+    thinking_level: "LOW",
+    safety_settings: buildSafetySettingsOff(),
     messages: messages.map((message) => ({
       role: message.role,
       content: message.content,
     })),
   };
+  if (settings.chatMaxOutputTokens) {
+    payload.max_tokens = settings.chatMaxOutputTokens;
+  }
 
   const response = await fetch(
     `${settings.geminiMockBaseUrl}/v1/chat/completions`,
@@ -190,4 +206,29 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+function buildSafetySettingsOff(): GeminiSafetySetting[] {
+  return [
+    {
+      category: "HARM_CATEGORY_HARASSMENT",
+      threshold: "BLOCK_NONE",
+    },
+    {
+      category: "HARM_CATEGORY_HATE_SPEECH",
+      threshold: "BLOCK_NONE",
+    },
+    {
+      category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+      threshold: "BLOCK_NONE",
+    },
+    {
+      category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+      threshold: "BLOCK_NONE",
+    },
+    {
+      category: "HARM_CATEGORY_CIVIC_INTEGRITY",
+      threshold: "BLOCK_NONE",
+    },
+  ];
 }
