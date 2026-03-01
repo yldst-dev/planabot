@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./.planabot:/app/.planabot
     expose:
