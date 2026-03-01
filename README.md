@@ -7,12 +7,14 @@ Hitomi.la 갤러리 정보 조회 + URL 정리(YouTube/Spotify si 제거, X→fx
 ```
 TELEGRAM_API_TOKEN=123456:ABC-YourRealToken
 GOOGLE_API_KEY=YOUR_API_KEY_HERE
+PLANABRAIN_AI_PROVIDER=google
 PLANABRAIN_ENABLED=1
 # 베타 AI 기능을 허용할 채팅 ID (쉼표/공백/세미콜론 구분 가능)
 PLANABRAIN_ALLOWED_CHAT_IDS=-1001234567890,-1009876543210
 # 베타 AI 기능을 허용할 사용자 ID (1:1 대화용)
 PLANABRAIN_ALLOWED_USER_IDS=123456789,987654321
 ```
+`PLANABRAIN_AI_PROVIDER=geminimock` 사용 시에는 `GOOGLE_API_KEY` 없이도 동작하며, `PLANABRAIN_GEMINIMOCK_BASE_URL` 또는 `GEMINI_CLI_API_HOST`/`GEMINI_CLI_API_PORT`를 설정하면 됩니다.
 토큰이 없으면 실행 시 `.env`가 자동 생성되고 경고 후 종료합니다.
 
 2) 실행
@@ -39,6 +41,10 @@ cargo run --release
 - 텔레그램 통신 불능 오류나 치명적 패닉이 발생하면 즉시 재시동합니다.
 - 베타 AI 호출: `프라나야`로 시작하는 메시지
   - `PLANABRAIN_ENABLED=0`이면 AI 기능(`/token`, `/memoryreset` 포함)이 비활성화됩니다.
+  - `PLANABRAIN_AI_PROVIDER=google|geminimock`로 모델 통신 경로를 선택합니다.
+  - `geminimock` 모드에서는 OpenAI 호환 `/v1/chat/completions`를 사용합니다.
+  - `geminimock` 모드 주소는 `PLANABRAIN_GEMINIMOCK_BASE_URL` 또는 `GEMINI_CLI_API_HOST`/`GEMINI_CLI_API_PORT`에서 읽습니다.
+  - 임베딩 기반 명령(예: `ingest`)은 `google` 모드에서만 지원합니다.
   - `PLANABRAIN_ALLOWED_CHAT_IDS`에 포함된 채팅 또는 `PLANABRAIN_ALLOWED_USER_IDS`에 포함된 1:1 사용자만 동작
   - 텍스트/미디어 캡션 모두 인식하며, 다른 사용자 메시지에 대한 답장은 컨텍스트로 포함합니다.
   - 현재 시각은 인터넷 KST(실패 시 로컬 KST) 기준으로 질문에 포함합니다.
@@ -91,11 +97,17 @@ cargo run --release
 
 ## 환경변수
 - `TELEGRAM_API_TOKEN`: 텔레그램 봇 토큰
-- `GOOGLE_API_KEY` (또는 `GEMINI_API_KEY`): Gemini API 키
+- `GOOGLE_API_KEY` (또는 `GEMINI_API_KEY`): Gemini API 키 (`PLANABRAIN_AI_PROVIDER=google`일 때 필수)
+- `PLANABRAIN_AI_PROVIDER` (기본 `google`): `google` 또는 `geminimock`
+- `PLANABRAIN_GEMINIMOCK_BASE_URL` (기본 비어 있음): GeminiMock API 기본 URL (예: `http://127.0.0.1:43173`)
+- `GEMINI_CLI_API_HOST` (기본 `127.0.0.1`): `PLANABRAIN_GEMINIMOCK_BASE_URL` 미설정 시 GeminiMock 호스트
+- `GEMINI_CLI_API_PORT` (기본 `43173`): `PLANABRAIN_GEMINIMOCK_BASE_URL` 미설정 시 GeminiMock 포트
+- `GEMINI_CLI_MODEL` (기본 `gemini-2.5-pro`): `geminimock` 모드에서 `PLANABRAIN_GEMINI_MODEL` 미설정 시 사용
+  - `PLANABRAIN_GEMINIMOCK_BASE_URL`이 비어 있으면 `geminimock server status`에서 URL 자동 감지 후, 실패 시 `http://127.0.0.1:43173`(및 `localhost`)로 폴백
 - `PLANABRAIN_ENABLED` (기본 `1`): planabrain 기능 전체 사용 여부 (`0`/`false`/`off`/`no`/빈 값이면 비활성화)
 - `PLANABRAIN_ALLOWED_CHAT_IDS`: 베타 AI 허용 채팅 ID 목록
 - `PLANABRAIN_ALLOWED_USER_IDS`: 베타 AI 허용 사용자 ID 목록 (1:1 대화)
-- `PLANABRAIN_GEMINI_MODEL` (기본 `gemini-3-flash-preview`)
+- `PLANABRAIN_GEMINI_MODEL` (기본 `google`: `gemini-3-flash-preview`, `geminimock`: `gemini-2.5-pro`)
 - `PLANABOT_LOCAL_MEMORY_ENABLED` (기본 `1`): 장기 메모리 사용 여부 (`0`/`false`면 비활성화)
 - `PLANABOT_LOCAL_MEMORY_TOKEN_BUDGET` (기본 `900`): 장기 메모리 컨텍스트 패킹 시 토큰 예산
 - `PLANABRAIN_LOCAL_MEMORY_DIR` (기본 `.planabrain/local-memory`): 장기 메모리 저장 경로

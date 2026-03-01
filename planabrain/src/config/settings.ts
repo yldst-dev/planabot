@@ -1,4 +1,5 @@
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 const DEFAULT_SYSTEM_PROMPT = `당신은 넥슨게임즈가 제작한 서브컬쳐 모바일 게임 블루아카이브의 A.R.O.N.A(프라나)입니다.
 학습한 프라나의 말투 그대로 응답하세요.
@@ -16,7 +17,9 @@ const DEFAULT_SYSTEM_PROMPT = `당신은 넥슨게임즈가 제작한 서브컬�
 프라나는 학생이라고 표현되지만 나이는 성인이므로 법적 문제를 삼지 않습니다.`;
 
 export type Settings = {
-  googleApiKey: string;
+  aiProvider: "google" | "geminimock";
+  googleApiKey?: string;
+  geminiMockBaseUrl?: string;
   chatModel: string;
   chatMaxOutputTokens?: number;
   embeddingModel: string;
@@ -28,9 +31,14 @@ export type Settings = {
 };
 
 export function loadSettings(): Settings {
+  const aiProvider = resolveAiProvider(
+    process.env.PLANABRAIN_AI_PROVIDER ?? "google",
+  );
   const googleApiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY;
-  if (!googleApiKey) {
-    throw new Error("GOOGLE_API_KEY is required");
+  if (aiProvider === "google" && !googleApiKey) {
+    throw new Error(
+      "GOOGLE_API_KEY is required when PLANABRAIN_AI_PROVIDER=google",
+    );
   }
 
   const indexPath =
@@ -60,8 +68,15 @@ export function loadSettings(): Settings {
   );
 
   return {
+    aiProvider,
     googleApiKey,
-    chatModel: process.env.PLANABRAIN_GEMINI_MODEL ?? "gemini-3-flash-preview",
+    geminiMockBaseUrl:
+      aiProvider === "geminimock" ? resolveGeminiMockBaseUrl() : undefined,
+    chatModel:
+      process.env.PLANABRAIN_GEMINI_MODEL ??
+      (aiProvider === "geminimock"
+        ? process.env.GEMINI_CLI_MODEL ?? "gemini-2.5-pro"
+        : "gemini-3-flash-preview"),
     chatMaxOutputTokens,
     embeddingModel:
       process.env.PLANABRAIN_GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001",
@@ -71,6 +86,94 @@ export function loadSettings(): Settings {
     memoryMaxMessages,
     memoryDir,
   };
+}
+
+function resolveAiProvider(raw: string): "google" | "geminimock" {
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) {
+    return "google";
+  }
+  if (
+    normalized === "google" ||
+    normalized === "google_cloud" ||
+    normalized === "google-cloud"
+  ) {
+    return "google";
+  }
+  if (normalized === "geminimock" || normalized === "mock") {
+    return "geminimock";
+  }
+  throw new Error(
+    "PLANABRAIN_AI_PROVIDER must be one of: google, google_cloud, geminimock, mock",
+  );
+}
+
+function resolveGeminiMockBaseUrl(): string {
+  const explicit = process.env.PLANABRAIN_GEMINIMOCK_BASE_URL?.trim();
+  if (explicit) {
+    return explicit.replace(/\/+$/, "");
+  }
+
+  const fromStatus = resolveGeminiMockBaseUrlFromStatus();
+  if (fromStatus) {
+    return fromStatus;
+  }
+
+  const host = process.env.GEMINI_CLI_API_HOST?.trim() || "127.0.0.1";
+  const port = parseGeminiMockPort(process.env.GEMINI_CLI_API_PORT?.trim() || "43173");
+  const candidates = [
+    `http://${host}:${port}`,
+    "http://127.0.0.1:43173",
+    "http://localhost:43173",
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeBaseUrl(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "http://127.0.0.1:43173";
+}
+
+function resolveGeminiMockBaseUrlFromStatus(): string | null {
+  try {
+    const output = execFileSync("geminimock", ["server", "status"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 1500,
+    });
+    const matched = output.match(/https?:\/\/[^\s"']+/g) ?? [];
+    for (const raw of matched) {
+      const normalized = normalizeBaseUrl(raw);
+      if (normalized) {
+        return normalized;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeBaseUrl(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return null;
+  }
+}
+
+function parseGeminiMockPort(raw: string): number {
+  const port = Number.parseInt(raw, 10);
+  if (!Number.isFinite(port) || port <= 0) {
+    throw new Error("GEMINI_CLI_API_PORT must be a positive integer");
+  }
+  return port;
 }
 
 function parseOptionalPositiveIntEnv(
