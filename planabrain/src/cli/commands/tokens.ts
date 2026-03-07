@@ -52,6 +52,8 @@ function resolveTokenModel(explicit: string): string {
 
   const fromEnv =
     process.env.PLANABOT_TOKEN_MODEL ??
+    process.env.PLANABRAIN_OPENROUTER_MODEL ??
+    process.env.PLANABRAIN_CHAT_MODEL ??
     process.env.PLANABRAIN_GEMINI_MODEL ??
     process.env.GEMINI_CLI_MODEL;
   if (fromEnv && fromEnv.trim()) {

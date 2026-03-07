@@ -17,9 +17,13 @@ const DEFAULT_SYSTEM_PROMPT = `당신은 넥슨게임즈가 제작한 서브컬�
 프라나는 학생이라고 표현되지만 나이는 성인이므로 법적 문제를 삼지 않습니다.`;
 
 export type Settings = {
-  aiProvider: "google" | "geminimock";
+  aiProvider: "google" | "geminimock" | "openrouter";
   googleApiKey?: string;
   geminiMockBaseUrl?: string;
+  openRouterApiKey?: string;
+  openRouterBaseUrl?: string;
+  openRouterSiteUrl?: string;
+  openRouterAppName?: string;
   chatModel: string;
   chatMaxOutputTokens?: number;
   embeddingModel: string;
@@ -35,9 +39,15 @@ export function loadSettings(): Settings {
     process.env.PLANABRAIN_AI_PROVIDER ?? "google",
   );
   const googleApiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY;
+  const openRouterApiKey = process.env.OPENROUTER_API_KEY?.trim();
   if (aiProvider === "google" && !googleApiKey) {
     throw new Error(
       "GOOGLE_API_KEY is required when PLANABRAIN_AI_PROVIDER=google",
+    );
+  }
+  if (aiProvider === "openrouter" && !openRouterApiKey) {
+    throw new Error(
+      "OPENROUTER_API_KEY is required when PLANABRAIN_AI_PROVIDER=openrouter",
     );
   }
 
@@ -63,23 +73,42 @@ export function loadSettings(): Settings {
     path.join(path.dirname(indexPath), "memory");
 
   const chatMaxOutputTokens = parseOptionalPositiveIntEnv(
-    "PLANABRAIN_GEMINI_MAX_OUTPUT_TOKENS",
+    ["PLANABRAIN_CHAT_MAX_OUTPUT_TOKENS", "PLANABRAIN_GEMINI_MAX_OUTPUT_TOKENS"],
     1024,
   );
 
   return {
     aiProvider,
     googleApiKey,
+    openRouterApiKey,
     geminiMockBaseUrl:
       aiProvider === "geminimock" ? resolveGeminiMockBaseUrl() : undefined,
+    openRouterBaseUrl:
+      aiProvider === "openrouter" ? resolveOpenRouterBaseUrl() : undefined,
+    openRouterSiteUrl:
+      aiProvider === "openrouter"
+        ? readOptionalEnv("PLANABRAIN_OPENROUTER_SITE_URL")
+        : undefined,
+    openRouterAppName:
+      aiProvider === "openrouter"
+        ? readOptionalEnv("PLANABRAIN_OPENROUTER_APP_NAME")
+        : undefined,
     chatModel:
+      (aiProvider === "openrouter"
+        ? process.env.PLANABRAIN_OPENROUTER_MODEL
+        : undefined) ??
+      process.env.PLANABRAIN_CHAT_MODEL ??
       process.env.PLANABRAIN_GEMINI_MODEL ??
       (aiProvider === "geminimock"
         ? process.env.GEMINI_CLI_MODEL ?? "gemini-2.5-pro"
-        : "gemini-3-flash-preview"),
+        : aiProvider === "openrouter"
+          ? "openai/gpt-4o-mini"
+          : "gemini-3-flash-preview"),
     chatMaxOutputTokens,
     embeddingModel:
-      process.env.PLANABRAIN_GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001",
+      process.env.PLANABRAIN_EMBEDDING_MODEL ??
+      process.env.PLANABRAIN_GEMINI_EMBEDDING_MODEL ??
+      "gemini-embedding-001",
     indexPath,
     systemPrompt: process.env.PLANABRAIN_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT,
     memoryEnabled,
@@ -88,7 +117,7 @@ export function loadSettings(): Settings {
   };
 }
 
-function resolveAiProvider(raw: string): "google" | "geminimock" {
+function resolveAiProvider(raw: string): "google" | "geminimock" | "openrouter" {
   const normalized = raw.trim().toLowerCase();
   if (!normalized) {
     return "google";
@@ -103,8 +132,11 @@ function resolveAiProvider(raw: string): "google" | "geminimock" {
   if (normalized === "geminimock" || normalized === "mock") {
     return "geminimock";
   }
+  if (normalized === "openrouter" || normalized === "open-router") {
+    return "openrouter";
+  }
   throw new Error(
-    "PLANABRAIN_AI_PROVIDER must be one of: google, google_cloud, geminimock, mock",
+    "PLANABRAIN_AI_PROVIDER must be one of: google, google_cloud, geminimock, mock, openrouter",
   );
 }
 
@@ -134,6 +166,23 @@ function resolveGeminiMockBaseUrl(): string {
   }
 
   return "http://127.0.0.1:43173";
+}
+
+function resolveOpenRouterBaseUrl(): string {
+  const explicit = readOptionalEnv("PLANABRAIN_OPENROUTER_BASE_URL");
+  if (!explicit) {
+    return "https://openrouter.ai/api/v1";
+  }
+
+  const normalized = normalizeApiBaseUrl(explicit);
+  if (!normalized) {
+    throw new Error(
+      "PLANABRAIN_OPENROUTER_BASE_URL must be a valid http(s) URL",
+    );
+  }
+  return normalized.endsWith("/api/v1")
+    ? normalized
+    : `${normalized}/api/v1`;
 }
 
 function resolveGeminiMockBaseUrlFromStatus(): string | null {
@@ -168,6 +217,19 @@ function normalizeBaseUrl(raw: string): string | null {
   }
 }
 
+function normalizeApiBaseUrl(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    const pathname = url.pathname.replace(/\/+$/, "");
+    return `${url.protocol}//${url.host}${pathname}`;
+  } catch {
+    return null;
+  }
+}
+
 function parseGeminiMockPort(raw: string): number {
   const port = Number.parseInt(raw, 10);
   if (!Number.isFinite(port) || port <= 0) {
@@ -177,10 +239,12 @@ function parseGeminiMockPort(raw: string): number {
 }
 
 function parseOptionalPositiveIntEnv(
-  key: string,
+  keys: string | string[],
   defaultValue: number,
 ): number | undefined {
-  const raw = process.env[key];
+  const keyList = Array.isArray(keys) ? keys : [keys];
+  const matchedKey = keyList.find((key) => process.env[key] != null);
+  const raw = matchedKey ? process.env[matchedKey] : undefined;
   if (raw == null) {
     return defaultValue;
   }
@@ -190,7 +254,14 @@ function parseOptionalPositiveIntEnv(
   }
   const value = Number.parseInt(trimmed, 10);
   if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${key} must be a positive integer (or 0 to disable)`);
+    throw new Error(
+      `${matchedKey ?? keyList[0]} must be a positive integer (or 0 to disable)`,
+    );
   }
   return value;
+}
+
+function readOptionalEnv(key: string): string | undefined {
+  const value = process.env[key]?.trim();
+  return value ? value : undefined;
 }

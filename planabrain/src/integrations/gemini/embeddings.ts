@@ -5,7 +5,7 @@ import type { Settings } from "../../config/settings.js";
 export function createEmbeddings(settings: Settings): GoogleGenerativeAIEmbeddings {
   if (settings.aiProvider !== "google") {
     throw new Error(
-      "Embeddings require PLANABRAIN_AI_PROVIDER=google. GeminiMock mode supports chat completions only.",
+      "Embeddings require PLANABRAIN_AI_PROVIDER=google. GeminiMock/OpenRouter modes support chat completions only.",
     );
   }
   if (!settings.googleApiKey) {

@@ -23,7 +23,9 @@ use super::gallery::{
     GalleryIdSource, build_gallery_keyboard, extract_gallery_id, is_private_chat,
     render_gallery_message, render_gallery_message_for_user,
 };
-use super::telegram::{SendOptions, send_reply_markdown_with_fallback, send_reply_with_fallback};
+use super::telegram::{
+    PrivateDraftStatus, SendOptions, send_reply_markdown_with_fallback, send_reply_with_fallback,
+};
 use super::{AppState, HandlerResult};
 
 pub(crate) async fn handle_command<B>(
@@ -242,6 +244,8 @@ where
         return Ok(());
     }
 
+    add_heart_reaction(&bot, &msg).await;
+
     let user_id = msg
         .from
         .as_ref()
@@ -293,18 +297,25 @@ where
     } else {
         question
     };
-    maybe_react_heart_on_reply_chain(&bot, &msg, &state).await;
     let now = kst_now().await;
     let question = format_question_with_metadata(&question, now, &msg);
-    send_typing_in_thread(&bot, &msg).await;
+    let mut draft_status = PrivateDraftStatus::from_message(&msg);
+    notify_planabrain_progress(&bot, &msg, &mut draft_status, "확인 중.\n선생님.").await;
     let mut typing_interval = time::interval(Duration::from_secs(3));
     let ask_fut = planabrain::run_planabrain_ask(&question, &user_id, msg.chat.id.0);
     tokio::pin!(ask_fut);
+    let mut progress_index = 0usize;
 
     let answer = loop {
         tokio::select! {
             _ = typing_interval.tick() => {
-                send_typing_in_thread(&bot, &msg).await;
+                progress_index = (progress_index + 1) % PLANABRAIN_PROGRESS_TEXTS.len();
+                notify_planabrain_progress(
+                    &bot,
+                    &msg,
+                    &mut draft_status,
+                    PLANABRAIN_PROGRESS_TEXTS[progress_index],
+                ).await;
             }
             result = &mut ask_fut => {
                 break result;
@@ -622,20 +633,36 @@ where
     }
 }
 
-async fn maybe_react_heart_on_reply_chain<B>(bot: &B, msg: &Message, state: &AppState)
+const PLANABRAIN_PROGRESS_TEXTS: [&str; 3] = [
+    "응답 생성 중.\n선생님.",
+    "정리 중.\n선생님.",
+    "전송 준비 중.\n선생님.",
+];
+
+async fn notify_planabrain_progress<B>(
+    bot: &B,
+    msg: &Message,
+    draft_status: &mut Option<PrivateDraftStatus>,
+    text: &str,
+) where
+    B: Requester + ?Sized,
+    B::SendChatAction: Send,
+{
+    if let Some(status) = draft_status.as_mut()
+        && status.send(text).await
+    {
+        return;
+    }
+
+    send_typing_in_thread(bot, msg).await;
+}
+
+async fn add_heart_reaction<B>(bot: &B, msg: &Message)
 where
     B: Requester + ?Sized,
     B::Err: std::error::Error + Send + Sync + 'static,
     B::SetMessageReaction: Send,
 {
-    // 개인 채팅에서는 입력중이 정상 동작하므로 반응 불필요
-    if msg.chat.is_private() {
-        return;
-    }
-    // 봇의 플라나브레인 답변에 대한 답글인 경우에만 반응
-    if !state.is_reply_to_planabrain(msg) {
-        return;
-    }
     let reaction = ReactionType::Emoji {
         emoji: "❤".to_string(),
     };

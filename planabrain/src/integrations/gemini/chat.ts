@@ -25,6 +25,9 @@ export async function invokeChat(params: {
   if (params.settings.aiProvider === "google") {
     return invokeGoogleChat(params);
   }
+  if (params.settings.aiProvider === "openrouter") {
+    return invokeOpenRouterChat(params.settings, params.messages);
+  }
   return invokeGeminiMockChat(params.settings, params.messages);
 }
 
@@ -83,29 +86,57 @@ async function invokeGeminiMockChat(
     payload.max_tokens = settings.chatMaxOutputTokens;
   }
 
-  const response = await fetch(
-    `${settings.geminiMockBaseUrl}/v1/chat/completions`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    },
-  );
+  return invokeOpenAICompatibleChat({
+    providerName: "GeminiMock",
+    url: `${settings.geminiMockBaseUrl}/v1/chat/completions`,
+    payload,
+  });
+}
 
-  const body = await readJsonOrText(response);
-  if (!response.ok) {
-    throw new Error(buildApiErrorMessage(body, response.status));
-  }
-
-  const content = extractOpenAIContent(body);
-  if (!content) {
+async function invokeOpenRouterChat(
+  settings: Settings,
+  messages: ChatMessage[],
+): Promise<string> {
+  if (!settings.openRouterApiKey) {
     throw new Error(
-      "GeminiMock API response missing choices[0].message.content",
+      "OPENROUTER_API_KEY is required when PLANABRAIN_AI_PROVIDER=openrouter",
     );
   }
-  return content;
+  if (!settings.openRouterBaseUrl) {
+    throw new Error(
+      "PLANABRAIN_OPENROUTER_BASE_URL is required when PLANABRAIN_AI_PROVIDER=openrouter",
+    );
+  }
+
+  const payload: Record<string, unknown> = {
+    model: settings.chatModel,
+    temperature: DEFAULT_CHAT_TEMPERATURE,
+    top_p: DEFAULT_CHAT_TOP_P,
+    messages: messages.map((message) => ({
+      role: normalizeOpenAIRole(message.role),
+      content: message.content,
+    })),
+  };
+  if (settings.chatMaxOutputTokens) {
+    payload.max_tokens = settings.chatMaxOutputTokens;
+  }
+
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${settings.openRouterApiKey}`,
+  };
+  if (settings.openRouterSiteUrl) {
+    headers["http-referer"] = settings.openRouterSiteUrl;
+  }
+  if (settings.openRouterAppName) {
+    headers["x-title"] = settings.openRouterAppName;
+  }
+
+  return invokeOpenAICompatibleChat({
+    providerName: "OpenRouter",
+    url: `${settings.openRouterBaseUrl}/chat/completions`,
+    headers,
+    payload,
+  });
 }
 
 function toLangChainMessages(
@@ -156,21 +187,54 @@ async function readJsonOrText(response: Response): Promise<unknown> {
   }
 }
 
-function buildApiErrorMessage(body: unknown, status: number): string {
+async function invokeOpenAICompatibleChat(params: {
+  providerName: string;
+  url: string;
+  payload: Record<string, unknown>;
+  headers?: Record<string, string>;
+}): Promise<string> {
+  const response = await fetch(params.url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...params.headers,
+    },
+    body: JSON.stringify(params.payload),
+  });
+
+  const body = await readJsonOrText(response);
+  if (!response.ok) {
+    throw new Error(buildApiErrorMessage(params.providerName, body, response.status));
+  }
+
+  const content = extractOpenAIContent(body);
+  if (!content) {
+    throw new Error(
+      `${params.providerName} API response missing choices[0].message.content`,
+    );
+  }
+  return content;
+}
+
+function buildApiErrorMessage(
+  providerName: string,
+  body: unknown,
+  status: number,
+): string {
   const record = asRecord(body);
   const nestedError = asRecord(record?.error);
   const nestedMessage = nestedError?.message;
   if (typeof nestedMessage === "string" && nestedMessage.trim()) {
-    return `GeminiMock API error (${status}): ${nestedMessage.trim()}`;
+    return `${providerName} API error (${status}): ${nestedMessage.trim()}`;
   }
   const message = record?.message;
   if (typeof message === "string" && message.trim()) {
-    return `GeminiMock API error (${status}): ${message.trim()}`;
+    return `${providerName} API error (${status}): ${message.trim()}`;
   }
   if (typeof body === "string" && body.trim()) {
-    return `GeminiMock API error (${status}): ${body.trim()}`;
+    return `${providerName} API error (${status}): ${body.trim()}`;
   }
-  return `GeminiMock API error (${status})`;
+  return `${providerName} API error (${status})`;
 }
 
 function extractOpenAIContent(body: unknown): string {
@@ -206,6 +270,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+function normalizeOpenAIRole(role: ChatMessage["role"]): "system" | "user" | "assistant" | "tool" {
+  if (role === "developer") {
+    return "system";
+  }
+  if (role === "tool") {
+    return "tool";
+  }
+  return role;
 }
 
 function buildSafetySettingsOff(): GeminiSafetySetting[] {
