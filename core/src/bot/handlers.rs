@@ -648,9 +648,11 @@ async fn notify_planabrain_progress<B>(
     B: Requester + ?Sized,
     B::SendChatAction: Send,
 {
-    if let Some(status) = draft_status.as_mut()
-        && status.send(text).await
-    {
+    let sent_via_draft = match draft_status.as_mut() {
+        Some(status) => status.send(text).await,
+        None => false,
+    };
+    if sent_via_draft {
         return;
     }
 
