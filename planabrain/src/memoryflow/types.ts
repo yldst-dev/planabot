@@ -12,6 +12,9 @@ export interface EngineConfig {
   maxEpisodicItems: number;
   maxSummaryItems: number;
   summaryEveryTurns: number;
+  compactionEnabled: boolean;
+  compactionKeepRecentTurns: number;
+  compactionMinSourceTurns: number;
   defaultTokenBudget: number;
   groupMemoryEnabled: boolean;
 }

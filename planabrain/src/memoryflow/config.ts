@@ -34,6 +34,18 @@ export function loadConfig(): EngineConfig {
       process.env.MEMORY_FLOW_SUMMARY_EVERY_TURNS,
     8
   );
+  const compactionEnabled = parseBoolean(
+    process.env.PLANABRAIN_LOCAL_MEMORY_COMPACTION_ENABLED,
+    true
+  );
+  const compactionKeepRecentTurns = parsePositiveInt(
+    process.env.PLANABRAIN_LOCAL_MEMORY_COMPACTION_KEEP_RECENT_TURNS,
+    6
+  );
+  const compactionMinSourceTurns = parsePositiveInt(
+    process.env.PLANABRAIN_LOCAL_MEMORY_COMPACTION_MIN_SOURCE_TURNS,
+    summaryEveryTurns
+  );
   const defaultTokenBudget = parsePositiveInt(
     process.env.PLANABRAIN_LOCAL_MEMORY_DEFAULT_TOKEN_BUDGET ??
       process.env.MEMORY_FLOW_DEFAULT_TOKEN_BUDGET,
@@ -51,6 +63,9 @@ export function loadConfig(): EngineConfig {
     maxEpisodicItems,
     maxSummaryItems,
     summaryEveryTurns,
+    compactionEnabled,
+    compactionKeepRecentTurns,
+    compactionMinSourceTurns,
     defaultTokenBudget,
     groupMemoryEnabled
   };

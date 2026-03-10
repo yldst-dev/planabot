@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { buildCompactedSummary, buildFallbackCompactedSummary } from "./compaction.js";
 import { cosineSimilarity, embedText } from "./embedding.js";
 import {
   extractSemanticFacts,
@@ -264,7 +265,7 @@ export class LocalMemoryEngine {
 
     await this.upsertFacts(state, text, at);
     this.upsertEpisode(state, turn);
-    this.upsertSummary(state);
+    await this.compactConversationState(state, turn);
     this.applyForgetting(state);
 
     await this.saveState(scope, state);
@@ -413,6 +414,72 @@ export class LocalMemoryEngine {
       .slice(0, this.config.maxSummaryItems);
   }
 
+  private async compactConversationState(state: MemoryState, latestTurn: Turn): Promise<void> {
+    if (!this.config.compactionEnabled) {
+      this.upsertSummary(state);
+      return;
+    }
+
+    if (!shouldCompactWorkingTurns(state, this.config, latestTurn)) {
+      return;
+    }
+
+    const keepCount = Math.min(
+      Math.max(1, this.config.compactionKeepRecentTurns),
+      state.working.turns.length
+    );
+    const olderTurns = state.working.turns.slice(0, -keepCount);
+    if (olderTurns.length < this.config.compactionMinSourceTurns) {
+      return;
+    }
+
+    const previousSummary = collapseSummaryItems(state.summary.items);
+    let compacted = "";
+
+    try {
+      compacted = await buildCompactedSummary({
+        previousSummary,
+        turns: olderTurns
+      });
+    } catch {
+      compacted = "";
+    }
+
+    if (!compacted) {
+      compacted = buildFallbackCompactedSummary({
+        previousSummary,
+        turns: olderTurns
+      });
+    }
+    if (!compacted) {
+      return;
+    }
+
+    const fromTurnId = previousSummary
+      ? state.summary.items
+          .map((item) => item.fromTurnId)
+          .find((item) => item.length > 0) ?? olderTurns[0]?.id ?? ""
+      : olderTurns[0]?.id ?? "";
+    const toTurnId = olderTurns[olderTurns.length - 1]?.id ?? latestTurn.id;
+    const at = olderTurns[olderTurns.length - 1]?.at ?? latestTurn.at;
+    const salience =
+      olderTurns.reduce((acc, turn) => acc + (turn.salience ?? 0.35), 0) /
+      Math.max(1, olderTurns.length);
+
+    state.summary.items = [
+      {
+        id: `sum_${at}_${randomUUID().slice(0, 8)}`,
+        text: compacted,
+        fromTurnId,
+        toTurnId,
+        at,
+        salience: Number(salience.toFixed(4)),
+        embedding: embedText(compacted)
+      }
+    ];
+    state.working.turns = state.working.turns.slice(-keepCount);
+  }
+
   private applyForgetting(state: MemoryState): void {
     const now = Date.now();
     const episodicTtl = 1000 * 60 * 60 * 24 * 120;
@@ -556,4 +623,35 @@ function mergeContextBundles(params: {
 
 function hasContext(bundle: ContextBundle): boolean {
   return bundle.sections.length > 0 && bundle.contextText.trim().toLowerCase() !== "memory_context: none";
+}
+
+function shouldCompactWorkingTurns(
+  state: MemoryState,
+  config: EngineConfig,
+  latestTurn: Turn
+): boolean {
+  if (latestTurn.role !== "assistant") {
+    return false;
+  }
+  const keepRecentTurns = Math.max(1, config.compactionKeepRecentTurns);
+  if (state.working.turns.length <= keepRecentTurns) {
+    return false;
+  }
+  const sourceTurns = state.working.turns.length - keepRecentTurns;
+  return sourceTurns >= Math.max(1, config.compactionMinSourceTurns);
+}
+
+function collapseSummaryItems(items: MemoryState["summary"]["items"]): string {
+  const texts = items
+    .slice()
+    .sort((a, b) => a.at - b.at)
+    .map((item) => String(item.text ?? "").trim())
+    .filter((item) => item.length > 0);
+  if (texts.length === 0) {
+    return "";
+  }
+  if (texts.length === 1) {
+    return texts[0] ?? "";
+  }
+  return texts.join("\n\n");
 }

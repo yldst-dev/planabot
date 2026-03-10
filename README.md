@@ -57,6 +57,7 @@ cargo run --release
   - 캡션 포함 이미지 또는 답장 이미지가 있으면 임시 저장 후 분석해 컨텍스트에 포함합니다.
   - planabrain 내장 장기 메모리 컨텍스트를 함께 주입합니다. (`PLANABOT_LOCAL_MEMORY_ENABLED=1`)
   - 장기 메모리는 사용자별 스코프 + 그룹 공용 스코프를 함께 사용합니다.
+  - 오래된 대화는 rolling summary로 자동 압축하고, 최근 몇 턴만 원문으로 유지합니다.
   - `/memoryreset`은 기존 planabrain 메모리와 장기 메모리를 함께 정리합니다.
 - 토큰 측정: 측정할 메시지에 답장한 뒤 `/token`
   - 텍스트/캡션 메시지를 `tokenx` 기반으로 로컬 추정합니다. (외부 토큰 API 미사용)
@@ -126,6 +127,9 @@ cargo run --release
 - `PLANABRAIN_LOCAL_MEMORY_STORE` (기본 `sqlite`): 장기 메모리 저장소 (`sqlite` 또는 `json`)
 - `PLANABRAIN_LOCAL_MEMORY_SQLITE_PATH` (기본 `.planabrain/local-memory/memory.sqlite`): SQLite 파일 경로
 - `PLANABRAIN_LOCAL_GROUP_MEMORY_ENABLED` (기본 `1`): 그룹 공용 메모리 사용 여부
+- `PLANABRAIN_LOCAL_MEMORY_COMPACTION_ENABLED` (기본 `1`): 오래된 대화를 rolling summary로 자동 압축할지 여부
+- `PLANABRAIN_LOCAL_MEMORY_COMPACTION_KEEP_RECENT_TURNS` (기본 `6`): compaction 이후 원문으로 남겨둘 최근 turn 수
+- `PLANABRAIN_LOCAL_MEMORY_COMPACTION_MIN_SOURCE_TURNS` (기본 `8`): 이 수 이상 누적된 오래된 turn이 생기면 compaction 실행
 - `PLANABOT_TOKEN_MODEL` (기본 비어 있음): `/token` 추정 모델명. 비어 있으면 `PLANABRAIN_OPENROUTER_MODEL`, `PLANABRAIN_CHAT_MODEL`, `PLANABRAIN_GEMINI_MODEL` 순서로 사용
 - `PLANABOT_TOKEN_LIMIT` (기본 `1024`): `/token` 기준 토큰 임계값
 - `PLANABOT_TOKEN_ESTIMATE_MULTIPLIER` (기본 `1.0`): `/token` 추정값 보정 배수 (`1.1`이면 10% 보수적으로 계산)
