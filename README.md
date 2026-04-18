@@ -91,6 +91,7 @@ npm run dev
 - 명령어
   - `/start`
   - `/ping`
+  - `/version`
   - `/token`
   - `/memoryreset`
   - `/groupinfo`
@@ -266,13 +267,13 @@ mkdir -p .planabot
 ### 이미지 태그 지정 배포
 
 ```bash
-PLANABOT_IMAGE_TAG=0.1.5 ./deploy.sh
+PLANABOT_IMAGE_TAG=0.1.6 ./deploy.sh
 ```
 
 또는 `.env`에 아래 값을 넣어도 됩니다.
 
 ```dotenv
-PLANABOT_IMAGE_TAG=0.1.5
+PLANABOT_IMAGE_TAG=0.1.6
 ```
 
 ### ARM64 주의사항
@@ -292,7 +293,7 @@ PLANABOT_IMAGE_TAG=0.1.5
 이미지 위치:
 
 - `ghcr.io/yldst-dev/planabot:latest`
-- `ghcr.io/yldst-dev/planabot:0.1.5`
+- `ghcr.io/yldst-dev/planabot:0.1.6`
 
 ## 로컬 수동 릴리즈
 
@@ -306,26 +307,26 @@ GitHub Actions를 기다리지 않고 로컬에서 멀티아키 이미지를 직
 추가한 스크립트:
 
 ```bash
-./scripts/release-ghcr.sh 0.1.5
+./scripts/release-ghcr.sh 0.1.6
 ```
 
 동작:
 
 - `gh auth token` 또는 `GHCR_TOKEN`, `GITHUB_TOKEN`으로 GHCR 로그인
 - `linux/amd64,linux/arm64` 멀티아키 빌드
-- `ghcr.io/yldst-dev/planabot:0.1.5` 푸시
+- `ghcr.io/yldst-dev/planabot:0.1.6` 푸시
 - 기본값으로 `latest`도 함께 갱신
 
 `latest` 갱신 없이 버전 태그만 올리려면:
 
 ```bash
-PUSH_LATEST=0 ./scripts/release-ghcr.sh 0.1.5
+PUSH_LATEST=0 ./scripts/release-ghcr.sh 0.1.6
 ```
 
 릴리즈 생성 예시:
 
 ```bash
-gh release create v0.1.5 --title "v0.1.5" --notes-file RELEASE_NOTES.md
+gh release create v0.1.6 --title "v0.1.6" --notes-file RELEASE_NOTES.md
 ```
 
 ## 체크리스트
@@ -350,3 +351,4 @@ cd planabrain && npm run typecheck && npm run build
 - 30초 응답 지연 감지
 - 내부 메타 응답 누출 필터링
 - 응답 잘림 자동 이어쓰기
+- `/version` 명령으로 현재 실행 버전 확인

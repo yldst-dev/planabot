@@ -39,7 +39,7 @@ where
     B: Requester + Send + Sync + 'static,
     B::Err: std::error::Error + Send + Sync + 'static,
 {
-    if cmd != Command::Ping && !state.is_after_boot(&msg) {
+    if !matches!(cmd, Command::Ping | Command::Version) && !state.is_after_boot(&msg) {
         return Ok(());
     }
 
@@ -80,6 +80,18 @@ where
 
             bot.send_message(msg.chat.id, format!("응답 확인.\n선생님.\n{:.6} ms", ms))
                 .await?;
+        }
+        Command::Version => {
+            send_reply_with_fallback(
+                &bot,
+                &msg,
+                format!(
+                    "확인 완료.\n선생님.\n현재 실행 버전은 {} 입니다.",
+                    env!("CARGO_PKG_VERSION")
+                ),
+                SendOptions::default(),
+            )
+            .await?;
         }
         Command::Token => {
             if !planabrain::is_planabrain_enabled() {
