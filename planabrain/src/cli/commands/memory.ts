@@ -6,6 +6,7 @@ import { LocalMemoryEngine } from "../../memoryflow/memory-engine.js";
 export async function runMemoryPrepareCommand(args: string[]): Promise<void> {
   const [userId, chatId, ...parts] = args;
   ensure(Boolean(userId && chatId), "Usage: planabrain memory-prepare <userId> <chatId> <text> [tokenBudget]");
+  const conversationId = readConversationId();
 
   const { textParts, budget } = splitTextAndBudget(parts);
   const text = await resolveTextFromArgs(
@@ -18,6 +19,7 @@ export async function runMemoryPrepareCommand(args: string[]): Promise<void> {
     const prepared = await engine.preparePromptInput({
       userId: String(userId),
       chatId: String(chatId),
+      conversationId,
       userText: text,
       tokenBudget: budget
     });
@@ -30,6 +32,7 @@ export async function runMemoryPrepareCommand(args: string[]): Promise<void> {
 export async function runMemoryAssistantCommand(args: string[]): Promise<void> {
   const [userId, chatId, ...parts] = args;
   ensure(Boolean(userId && chatId), "Usage: planabrain memory-assistant <userId> <chatId> <text>");
+  const conversationId = readConversationId();
   const text = await resolveTextFromArgs(
     parts,
     "Usage: planabrain memory-assistant <userId> <chatId> <text>"
@@ -40,6 +43,7 @@ export async function runMemoryAssistantCommand(args: string[]): Promise<void> {
     const result = await engine.rememberAssistantTurn({
       userId: String(userId),
       chatId: String(chatId),
+      conversationId,
       assistantText: text
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
@@ -111,4 +115,9 @@ function ensure(condition: boolean, message: string): void {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function readConversationId(): string | undefined {
+  const value = process.env.PLANABRAIN_CONVERSATION_ID?.trim();
+  return value ? value : undefined;
 }

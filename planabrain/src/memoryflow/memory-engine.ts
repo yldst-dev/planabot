@@ -60,9 +60,11 @@ interface ResetUserResult {
 interface PreparePromptResult {
   scopeId: string;
   userScopeId: string;
+  conversationScopeId?: string;
   groupScopeId: string;
   userText: string;
   userMemoryContext: string;
+  conversationMemoryContext: string;
   groupMemoryContext: string;
   memoryContext: string;
   memoryTokenEstimate: number;
@@ -72,6 +74,7 @@ interface PreparePromptResult {
 
 interface BudgetSplit {
   userBudget: number;
+  conversationBudget: number;
   groupBudget: number;
 }
 
@@ -98,7 +101,8 @@ export class LocalMemoryEngine {
     role: MemoryRole | "ai";
     text: string;
     at?: number;
-    scopeKind?: "user" | "group";
+    conversationId?: string;
+    scopeKind?: "user" | "group" | "conversation";
   }): Promise<IngestTurnResult> {
     const scope = this.resolveScope(params);
     return this.ingestTurnInScope(scope, params.role, params.text, params.at);
@@ -111,9 +115,15 @@ export class LocalMemoryEngine {
 
   async preparePromptInput(params: PreparePromptInput): Promise<PreparePromptResult> {
     const userScope = this.userScope(params.userId, params.chatId);
+    const conversationScope = params.conversationId
+      ? this.conversationScope(params.chatId, params.conversationId)
+      : null;
     const groupScope = this.groupScope(params.chatId);
 
     await this.ingestTurnInScope(userScope, "user", params.userText, params.at);
+    if (conversationScope) {
+      await this.ingestTurnInScope(conversationScope, "user", params.userText, params.at);
+    }
     let groupStored = false;
     if (
       this.config.groupMemoryEnabled &&
@@ -124,13 +134,26 @@ export class LocalMemoryEngine {
     }
 
     const totalBudget = Math.max(120, params.tokenBudget ?? this.config.defaultTokenBudget);
-    const split = resolveBudgetSplit(params.userText, totalBudget);
+    const split = resolveBudgetSplit(
+      params.userText,
+      totalBudget,
+      Boolean(conversationScope),
+      this.config.groupMemoryEnabled
+    );
 
     const userBundle = await this.retrieveContextForScope(
       userScope,
       String(params.userText ?? ""),
       split.userBudget
     );
+    const conversationBundle =
+      conversationScope && split.conversationBudget > 0
+        ? await this.retrieveContextForScope(
+            conversationScope,
+            String(params.userText ?? ""),
+            split.conversationBudget
+          )
+        : emptyContext(split.conversationBudget);
     const groupBundle =
       this.config.groupMemoryEnabled && split.groupBudget > 0
         ? await this.retrieveContextForScope(
@@ -143,15 +166,18 @@ export class LocalMemoryEngine {
     const merged = mergeContextBundles({
       totalBudget,
       userBundle,
+      conversationBundle,
       groupBundle
     });
 
     return {
       scopeId: userScope.scopeId,
       userScopeId: userScope.scopeId,
+      conversationScopeId: conversationScope?.scopeId,
       groupScopeId: groupScope.scopeId,
       userText: params.userText,
       userMemoryContext: userBundle.contextText,
+      conversationMemoryContext: conversationBundle.contextText,
       groupMemoryContext: groupBundle.contextText,
       memoryContext: merged.contextText,
       memoryTokenEstimate: merged.estimatedTokens,
@@ -162,12 +188,23 @@ export class LocalMemoryEngine {
 
   async rememberAssistantTurn(params: RememberAssistantInput): Promise<IngestTurnResult> {
     const userScope = this.userScope(params.userId, params.chatId);
+    const conversationScope = params.conversationId
+      ? this.conversationScope(params.chatId, params.conversationId)
+      : null;
     const userResult = await this.ingestTurnInScope(
       userScope,
       "assistant",
       params.assistantText,
       params.at
     );
+    if (conversationScope) {
+      await this.ingestTurnInScope(
+        conversationScope,
+        "assistant",
+        params.assistantText,
+        params.at
+      );
+    }
     if (
       this.config.groupMemoryEnabled &&
       shouldStoreInGroupMemory(params.assistantText, "assistant")
@@ -209,6 +246,9 @@ export class LocalMemoryEngine {
     if (params.scopeKind === "group") {
       return this.groupScope(params.chatId);
     }
+    if (params.scopeKind === "conversation") {
+      return this.conversationScope(params.chatId, params.conversationId);
+    }
     return this.userScope(params.userId, params.chatId);
   }
 
@@ -225,6 +265,18 @@ export class LocalMemoryEngine {
       userId: "group",
       chatId: String(chatId ?? "global"),
       scopeKind: "group"
+    });
+  }
+
+  private conversationScope(
+    chatId: string | undefined,
+    conversationId: string | undefined
+  ): ScopeDescriptor {
+    return buildScopeDescriptor({
+      userId: "conversation",
+      chatId: String(chatId ?? "global"),
+      conversationId: String(conversationId ?? "default"),
+      scopeKind: "conversation"
     });
   }
 
@@ -521,24 +573,76 @@ function normalizeRole(raw: MemoryRole | "ai"): MemoryRole {
   return role === "assistant" || role === "ai" ? "assistant" : "user";
 }
 
-function resolveBudgetSplit(query: string, totalBudget: number): BudgetSplit {
+function resolveBudgetSplit(
+  query: string,
+  totalBudget: number,
+  hasConversationScope: boolean,
+  groupMemoryEnabled: boolean
+): BudgetSplit {
   const budget = Math.max(120, totalBudget);
-  let userRatio = 0.6;
+  if (!groupMemoryEnabled && !hasConversationScope) {
+    return {
+      userBudget: budget,
+      conversationBudget: 0,
+      groupBudget: 0
+    };
+  }
+  if (!hasConversationScope) {
+    let userRatio = 0.6;
+    if (isPersonalQuery(query)) {
+      userRatio = 0.78;
+    } else if (isGroupQuery(query)) {
+      userRatio = 0.42;
+    }
+    let userBudget = Math.max(72, Math.floor(budget * userRatio));
+    let groupBudget = groupMemoryEnabled ? Math.max(48, budget - userBudget) : 0;
+    if (userBudget + groupBudget > budget) {
+      groupBudget = Math.max(0, budget - userBudget);
+    }
+    if (groupBudget <= 0) {
+      groupBudget = 0;
+      userBudget = budget;
+    }
+    return {
+      userBudget,
+      conversationBudget: 0,
+      groupBudget
+    };
+  }
+
+  let userRatio = 0.26;
+  let conversationRatio = 0.54;
+  let groupRatio = groupMemoryEnabled ? 0.2 : 0;
   if (isPersonalQuery(query)) {
-    userRatio = 0.78;
+    userRatio = 0.3;
+    conversationRatio = groupMemoryEnabled ? 0.55 : 0.7;
+    groupRatio = groupMemoryEnabled ? 0.15 : 0;
   } else if (isGroupQuery(query)) {
-    userRatio = 0.42;
+    userRatio = 0.2;
+    conversationRatio = 0.5;
+    groupRatio = groupMemoryEnabled ? 0.3 : 0;
   }
-  let userBudget = Math.max(72, Math.floor(budget * userRatio));
-  let groupBudget = Math.max(48, budget - userBudget);
-  if (userBudget + groupBudget > budget) {
-    groupBudget = Math.max(0, budget - userBudget);
+  const userBudget = Math.max(48, Math.floor(budget * userRatio));
+  let conversationBudget = Math.max(72, Math.floor(budget * conversationRatio));
+  let groupBudget = groupMemoryEnabled ? Math.floor(budget * groupRatio) : 0;
+  const assigned = userBudget + conversationBudget + groupBudget;
+  if (assigned > budget) {
+    const overflow = assigned - budget;
+    if (groupBudget > 0) {
+      groupBudget = Math.max(0, groupBudget - overflow);
+    } else {
+      conversationBudget = Math.max(72, conversationBudget - overflow);
+    }
   }
-  if (groupBudget <= 0) {
-    groupBudget = 0;
-    userBudget = budget;
+  const remaining = budget - userBudget - conversationBudget - groupBudget;
+  if (remaining > 0) {
+    conversationBudget += remaining;
   }
-  return { userBudget, groupBudget };
+  return {
+    userBudget,
+    conversationBudget,
+    groupBudget
+  };
 }
 
 function isPersonalQuery(query: string): boolean {
@@ -563,11 +667,13 @@ function emptyContext(tokenBudget: number): ContextBundle {
 function mergeContextBundles(params: {
   totalBudget: number;
   userBundle: ContextBundle;
+  conversationBundle: ContextBundle;
   groupBundle: ContextBundle;
 }): ContextBundle {
   const userHas = hasContext(params.userBundle);
+  const conversationHas = hasContext(params.conversationBundle);
   const groupHas = hasContext(params.groupBundle);
-  if (!userHas && !groupHas) {
+  if (!userHas && !conversationHas && !groupHas) {
     return {
       tokenBudget: params.totalBudget,
       estimatedTokens: 0,
@@ -596,6 +702,23 @@ function mergeContextBundles(params: {
     }
   }
 
+  if (conversationHas) {
+    lines.push("conversation_memory:");
+    for (const section of params.conversationBundle.sections) {
+      lines.push(`${section.name}:`);
+      for (const item of section.items) {
+        lines.push(`- ${item.text}`);
+      }
+      mergedSections.push({
+        name: section.name,
+        items: section.items.map((item) => ({
+          ...item,
+          text: `[conversation] ${item.text}`
+        }))
+      });
+    }
+  }
+
   if (groupHas) {
     lines.push("group_memory:");
     for (const section of params.groupBundle.sections) {
@@ -615,7 +738,10 @@ function mergeContextBundles(params: {
 
   return {
     tokenBudget: params.totalBudget,
-    estimatedTokens: params.userBundle.estimatedTokens + params.groupBundle.estimatedTokens,
+    estimatedTokens:
+      params.userBundle.estimatedTokens +
+      params.conversationBundle.estimatedTokens +
+      params.groupBundle.estimatedTokens,
     sections: mergedSections,
     contextText: lines.join("\n")
   };

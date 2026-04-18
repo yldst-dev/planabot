@@ -7,7 +7,6 @@ mod reboot;
 mod time;
 mod token;
 mod urlchanger;
-mod vision;
 
 use anyhow::Result;
 use bot::AppState;

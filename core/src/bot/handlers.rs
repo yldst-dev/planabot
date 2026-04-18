@@ -16,7 +16,6 @@ use url::Url;
 use crate::planabrain;
 use crate::time::kst_now;
 use crate::token;
-use crate::vision;
 
 use super::commands::Command;
 use super::gallery::{
@@ -27,6 +26,8 @@ use super::telegram::{
     PrivateDraftStatus, SendOptions, send_reply_markdown_with_fallback, send_reply_with_fallback,
 };
 use super::{AppState, HandlerResult};
+
+const PLANABRAIN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) async fn handle_command<B>(
     bot: B,
@@ -262,8 +263,9 @@ where
         return Ok(());
     }
 
+    let conversation_scope_id = state.planabrain_conversation_scope_id(&msg);
     let question = question.trim().to_string();
-    let question = build_planabrain_question(&question, &msg);
+    let question = build_planabrain_question(&question, &msg, &state);
     if question.trim().is_empty() {
         let sent = send_reply_markdown_with_fallback(
             &bot,
@@ -272,7 +274,9 @@ where
             SendOptions::default(),
         )
         .await?;
-        state.record_planabrain_reply(&sent).await;
+        state
+            .record_planabrain_reply(&sent, &conversation_scope_id)
+            .await;
         return Ok(());
     }
 
@@ -282,28 +286,31 @@ where
         .map(|user| user.id.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let image_context = if let Some(user) = msg.from.as_ref() {
+    let image_input = if let Some(user) = msg.from.as_ref() {
         let user_id = i64::try_from(user.id.0).unwrap_or(i64::MAX);
         if state.allow_image_request(user_id).await {
-            build_image_context(&bot, &msg).await
+            build_image_input(&bot, &msg).await
         } else {
             None
         }
     } else {
         None
     };
-    let question = if let Some(image_context) = image_context {
-        format!("{question}\n\n이미지 설명:\n{image_context}")
-    } else {
-        question
-    };
     let now = kst_now().await;
     let question = format_question_with_metadata(&question, now, &msg);
     let mut draft_status = PrivateDraftStatus::from_message(&msg);
     notify_planabrain_progress(&bot, &msg, &mut draft_status, "확인 중.\n선생님.").await;
     let mut typing_interval = time::interval(Duration::from_secs(3));
-    let ask_fut = planabrain::run_planabrain_ask(&question, &user_id, msg.chat.id.0);
+    let ask_fut = planabrain::run_planabrain_ask(
+        &question,
+        &user_id,
+        msg.chat.id.0,
+        Some(&conversation_scope_id),
+        image_input,
+    );
     tokio::pin!(ask_fut);
+    let timeout = time::sleep(PLANABRAIN_RESPONSE_TIMEOUT);
+    tokio::pin!(timeout);
     let mut progress_index = 0usize;
 
     let answer = loop {
@@ -317,6 +324,24 @@ where
                     PLANABRAIN_PROGRESS_TEXTS[progress_index],
                 ).await;
             }
+            _ = &mut timeout => {
+                error!(
+                    "planabrain 응답 시간 초과: chat_id={}, user_id={}",
+                    msg.chat.id.0,
+                    user_id
+                );
+                let sent = send_reply_markdown_with_fallback(
+                    &bot,
+                    &msg,
+                    "지연 감지.\n선생님.\n응답 전송이 30초 이상 지연되었습니다.\n실패로 간주합니다.\n다시 시도해 주세요.",
+                    SendOptions::default(),
+                )
+                .await?;
+                state
+                    .record_planabrain_reply(&sent, &conversation_scope_id)
+                    .await;
+                return Ok(());
+            }
             result = &mut ask_fut => {
                 break result;
             }
@@ -328,7 +353,9 @@ where
             let reply = planabrain::truncate_message(answer.trim(), 4000);
             let sent = send_reply_markdown_with_fallback(&bot, &msg, reply, SendOptions::default())
                 .await?;
-            state.record_planabrain_reply(&sent).await;
+            state
+                .record_planabrain_reply(&sent, &conversation_scope_id)
+                .await;
         }
         Err(err) => {
             error!("planabrain 응답 실패: {}", err);
@@ -339,7 +366,9 @@ where
                 SendOptions::default(),
             )
             .await?;
-            state.record_planabrain_reply(&sent).await;
+            state
+                .record_planabrain_reply(&sent, &conversation_scope_id)
+                .await;
         }
     }
 
@@ -763,12 +792,9 @@ fn extract_message_text(msg: &Message) -> Option<String> {
         .or_else(|| msg.caption().map(|caption| caption.to_string()))
 }
 
-fn extract_reply_text(msg: &Message) -> Option<String> {
+fn extract_reply_context(msg: &Message, state: &AppState) -> Option<(String, String)> {
     let reply = msg.reply_to_message()?;
-    if reply.from.as_ref().map(|user| user.is_bot).unwrap_or(false) {
-        return None;
-    }
-    reply
+    let text = reply
         .text()
         .map(|text| text.to_string())
         .or_else(|| reply.caption().map(|caption| caption.to_string()))
@@ -779,18 +805,26 @@ fn extract_reply_text(msg: &Message) -> Option<String> {
             } else {
                 Some(trimmed.to_string())
             }
-        })
+        })?;
+
+    if state.is_reply_to_planabrain(msg) {
+        return Some(("직전 프라나 응답".to_string(), text));
+    }
+    if reply.from.as_ref().map(|user| user.is_bot).unwrap_or(false) {
+        return None;
+    }
+    Some(("참고 메시지".to_string(), text))
 }
 
-fn build_planabrain_question(question: &str, msg: &Message) -> String {
+fn build_planabrain_question(question: &str, msg: &Message, state: &AppState) -> String {
     let question = question.trim();
-    let Some(context) = extract_reply_text(msg) else {
+    let Some((label, context)) = extract_reply_context(msg, state) else {
         return question.to_string();
     };
     if question.is_empty() {
-        return format!("참고 메시지:\n{}", context);
+        return format!("{label}:\n{context}");
     }
-    format!("참고 메시지:\n{}\n\n질문:\n{}", context, question)
+    format!("{label}:\n{context}\n\n질문:\n{question}")
 }
 
 fn render_token_report(tokens: u32, limit: u32) -> String {
@@ -820,20 +854,17 @@ struct ImageSource {
     mime_type: String,
 }
 
-async fn build_image_context<B>(bot: &B, msg: &Message) -> Option<String>
+async fn build_image_input<B>(bot: &B, msg: &Message) -> Option<planabrain::ImageInput>
 where
     B: Requester + teloxide::net::Download + ?Sized,
 {
     let source = extract_image_source_from_message_or_reply(msg)?;
-    let bytes = download_image_bytes(bot, &source).await?;
-    let prompt = "이미지를 간단히 설명해 주세요. 중요한 요소만 요약합니다.";
-    match vision::describe_image(&bytes, &source.mime_type, prompt).await {
-        Ok(text) => Some(text),
-        Err(err) => {
-            warn!("이미지 분석 실패: {}", err);
-            None
-        }
-    }
+    download_image_file(bot, &source)
+        .await
+        .map(|path| planabrain::ImageInput {
+            path,
+            mime_type: source.mime_type,
+        })
 }
 
 fn extract_image_source_from_message_or_reply(msg: &Message) -> Option<ImageSource> {
@@ -878,7 +909,7 @@ fn extract_image_source(msg: &Message) -> Option<ImageSource> {
     None
 }
 
-async fn download_image_bytes<B>(bot: &B, source: &ImageSource) -> Option<Vec<u8>>
+async fn download_image_file<B>(bot: &B, source: &ImageSource) -> Option<std::path::PathBuf>
 where
     B: Requester + teloxide::net::Download + ?Sized,
 {
@@ -895,8 +926,15 @@ where
         return None;
     }
 
-    let dir = std::path::Path::new(".planabot/planabrain_images");
-    if let Err(err) = fs::create_dir_all(dir).await {
+    let current_dir = match std::env::current_dir() {
+        Ok(path) => path,
+        Err(err) => {
+            warn!("현재 작업 디렉터리 조회 실패: {}", err);
+            return None;
+        }
+    };
+    let dir = current_dir.join(".planabot/planabrain_images");
+    if let Err(err) = fs::create_dir_all(&dir).await {
         warn!("이미지 임시 디렉터리 생성 실패: {}", err);
         return None;
     }
@@ -934,10 +972,5 @@ where
         let _ = fs::remove_file(&path).await;
         return None;
     }
-
-    if let Err(err) = fs::remove_file(&path).await {
-        warn!("이미지 임시 파일 삭제 실패: {}", err);
-    }
-
-    Some(bytes)
+    Some(path)
 }

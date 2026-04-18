@@ -13,7 +13,7 @@ use crate::hitomi::GalleryClient;
 #[derive(Debug)]
 struct PlanabrainReplyTracker {
     max: usize,
-    items: VecDeque<(ChatId, MessageId)>,
+    items: VecDeque<PlanabrainReplyRecord>,
 }
 
 impl PlanabrainReplyTracker {
@@ -25,31 +25,33 @@ impl PlanabrainReplyTracker {
     }
 
     fn contains(&self, chat_id: ChatId, message_id: MessageId) -> bool {
-        self.items
-            .iter()
-            .any(|(c, m)| *c == chat_id && *m == message_id)
+        self.get(chat_id, message_id).is_some()
     }
 
-    fn insert(&mut self, chat_id: ChatId, message_id: MessageId) {
+    fn get(&self, chat_id: ChatId, message_id: MessageId) -> Option<PlanabrainReplyRecord> {
+        self.items
+            .iter()
+            .find(|record| record.chat_id == chat_id.0 && record.message_id == message_id.0)
+            .cloned()
+    }
+
+    fn insert(&mut self, record: PlanabrainReplyRecord) {
         if let Some(pos) = self
             .items
             .iter()
-            .position(|(c, m)| *c == chat_id && *m == message_id)
+            .position(|item| item.chat_id == record.chat_id && item.message_id == record.message_id)
         {
             self.items.remove(pos);
         }
 
-        self.items.push_back((chat_id, message_id));
+        self.items.push_back(record);
         while self.items.len() > self.max {
             self.items.pop_front();
         }
     }
 
     fn from_records(max: usize, records: Vec<PlanabrainReplyRecord>) -> Self {
-        let mut items = VecDeque::new();
-        for record in records {
-            items.push_back((ChatId(record.chat_id), MessageId(record.message_id)));
-        }
+        let mut items = VecDeque::from(records);
         while items.len() > max {
             items.pop_front();
         }
@@ -57,13 +59,7 @@ impl PlanabrainReplyTracker {
     }
 
     fn records(&self) -> Vec<PlanabrainReplyRecord> {
-        self.items
-            .iter()
-            .map(|(chat_id, message_id)| PlanabrainReplyRecord {
-                chat_id: chat_id.0,
-                message_id: message_id.0,
-            })
-            .collect()
+        self.items.iter().cloned().collect()
     }
 }
 
@@ -71,6 +67,8 @@ impl PlanabrainReplyTracker {
 struct PlanabrainReplyRecord {
     chat_id: i64,
     message_id: i32,
+    #[serde(default)]
+    conversation_scope_id: String,
 }
 
 #[derive(Clone)]
@@ -136,13 +134,32 @@ impl AppState {
             .is_some_and(|t| t.contains(reply.chat.id, reply.id))
     }
 
-    pub(crate) async fn record_planabrain_reply(&self, msg: &Message) {
+    pub(crate) fn planabrain_conversation_scope_id(&self, msg: &Message) -> String {
+        let Some(reply) = msg.reply_to_message() else {
+            return format!("msg_{}", msg.id.0);
+        };
+        let tracker = self.planabrain_replies.read().ok();
+        if let Some(record) = tracker
+            .as_ref()
+            .and_then(|tracker| tracker.get(reply.chat.id, reply.id))
+            .filter(|record| !record.conversation_scope_id.trim().is_empty())
+        {
+            return record.conversation_scope_id;
+        }
+        format!("reply_{}", reply.id.0)
+    }
+
+    pub(crate) async fn record_planabrain_reply(&self, msg: &Message, conversation_scope_id: &str) {
         let snapshot = {
             let mut tracker = match self.planabrain_replies.write() {
                 Ok(tracker) => tracker,
                 Err(_) => return,
             };
-            tracker.insert(msg.chat.id, msg.id);
+            tracker.insert(PlanabrainReplyRecord {
+                chat_id: msg.chat.id.0,
+                message_id: msg.id.0,
+                conversation_scope_id: conversation_scope_id.to_string(),
+            });
             tracker.records()
         };
 
@@ -302,4 +319,31 @@ async fn persist_planabrain_replies(
     }
     let payload = serde_json::to_string_pretty(records).unwrap_or_else(|_| "[]".to_string());
     fs::write(path, payload).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PlanabrainReplyRecord, PlanabrainReplyTracker};
+    use teloxide::types::{ChatId, MessageId};
+
+    #[test]
+    fn tracker_returns_saved_conversation_scope() {
+        let mut tracker = PlanabrainReplyTracker::new(10);
+        tracker.insert(PlanabrainReplyRecord {
+            chat_id: 100,
+            message_id: 42,
+            conversation_scope_id: "msg_40".to_string(),
+        });
+
+        let record = tracker.get(ChatId(100), MessageId(42)).unwrap();
+        assert_eq!(record.conversation_scope_id, "msg_40");
+    }
+
+    #[test]
+    fn legacy_reply_records_deserialize_without_conversation_scope() {
+        let raw = r#"[{"chat_id":1,"message_id":2}]"#;
+        let parsed: Vec<PlanabrainReplyRecord> = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].conversation_scope_id, "");
+    }
 }

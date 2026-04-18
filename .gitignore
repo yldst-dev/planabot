@@ -5,9 +5,16 @@
 
 # Artifacts
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+coverage/
 
 # Env / secrets
 .env
+.env.*
+!.env.example
 
 # planabrain data
 /.planabrain
@@ -19,6 +26,9 @@
 # planabrain build/deps
 /planabrain/dist
 /planabrain/node_modules
+*.tsbuildinfo
+*.sqlite-shm
+*.sqlite-wal
 
 # OS
 .DS_Store

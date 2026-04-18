@@ -2,7 +2,7 @@ export type MemoryRole = "user" | "assistant";
 
 export type MemoryLayer = "semantic" | "episodic" | "summary" | "working";
 export type MemoryStoreKind = "sqlite" | "json";
-export type ScopeKind = "user" | "group";
+export type ScopeKind = "user" | "group" | "conversation";
 
 export interface EngineConfig {
   rootDir: string;
@@ -22,6 +22,7 @@ export interface EngineConfig {
 export interface ScopeParams {
   userId: string;
   chatId?: string;
+  conversationId?: string;
   scopeKind?: ScopeKind;
 }
 
@@ -29,6 +30,7 @@ export interface ScopeDescriptor {
   scopeId: string;
   userId: string;
   chatId: string;
+  conversationId?: string;
   scopeKind: ScopeKind;
 }
 

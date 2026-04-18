@@ -19,6 +19,12 @@ struct LocalMemoryResetOutput {
     removed: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ImageInput {
+    pub path: PathBuf,
+    pub mime_type: String,
+}
+
 pub(crate) fn extract_plana_question(text: &str) -> Option<String> {
     let trimmed = text.trim_start();
     let prefixes = ["프라나야"];
@@ -39,6 +45,8 @@ pub(crate) async fn run_planabrain_ask(
     question: &str,
     user_id: &str,
     chat_id: i64,
+    conversation_scope_id: Option<&str>,
+    image_input: Option<ImageInput>,
 ) -> Result<String> {
     if !is_planabrain_enabled() {
         return Err(anyhow!("planabrain 비활성화"));
@@ -46,9 +54,18 @@ pub(crate) async fn run_planabrain_ask(
 
     let question = question.to_string();
     let user_id = user_id.to_string();
+    let conversation_scope_id = conversation_scope_id.map(|value| value.to_string());
+    let image_input = image_input.clone();
 
-    let handle =
-        task::spawn_blocking(move || run_planabrain_ask_blocking(&question, &user_id, chat_id));
+    let handle = task::spawn_blocking(move || {
+        run_planabrain_ask_blocking(
+            &question,
+            &user_id,
+            chat_id,
+            conversation_scope_id.as_deref(),
+            image_input,
+        )
+    });
     handle
         .await
         .context("planabrain 실행 작업이 중단되었습니다")?
@@ -219,7 +236,13 @@ static ALLOWED_USER_IDS: Lazy<HashSet<i64>> = Lazy::new(|| {
         .collect()
 });
 
-fn run_planabrain_ask_blocking(question: &str, user_id: &str, chat_id: i64) -> Result<String> {
+fn run_planabrain_ask_blocking(
+    question: &str,
+    user_id: &str,
+    chat_id: i64,
+    conversation_scope_id: Option<&str>,
+    image_input: Option<ImageInput>,
+) -> Result<String> {
     const MAX_CLI_QUESTION_CHARS: usize = 2000;
     let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
     let chat_scope = format!("chat_{chat_id}");
@@ -227,7 +250,13 @@ fn run_planabrain_ask_blocking(question: &str, user_id: &str, chat_id: i64) -> R
     let mut final_question = question.to_string();
     let mut local_memory_ready = false;
     if is_local_memory_enabled() {
-        match prepare_question_with_planabrain_memory(&root, question, user_id, &chat_scope) {
+        match prepare_question_with_planabrain_memory(
+            &root,
+            question,
+            user_id,
+            &chat_scope,
+            conversation_scope_id,
+        ) {
             Ok(Some(prepared)) => {
                 final_question = prepared;
                 local_memory_ready = true;
@@ -249,6 +278,18 @@ fn run_planabrain_ask_blocking(question: &str, user_id: &str, chat_id: i64) -> R
     let command = command
         .current_dir(&root)
         .env("PLANABRAIN_USER_ID", user_id);
+    if let Some(image_input) = image_input.as_ref() {
+        let image_path = if image_input.path.is_absolute() {
+            image_input.path.clone()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&image_input.path))
+                .unwrap_or_else(|_| image_input.path.clone())
+        };
+        command
+            .env("PLANABRAIN_IMAGE_FILE", image_path)
+            .env("PLANABRAIN_IMAGE_MIME_TYPE", &image_input.mime_type);
+    }
     if local_memory_ready {
         command.env("PLANABRAIN_MEMORY_ENABLED", "0");
     }
@@ -270,7 +311,22 @@ fn run_planabrain_ask_blocking(question: &str, user_id: &str, chat_id: i64) -> R
         command.arg("ask").arg(&final_question);
     }
 
-    let output = command.output().context("planabrain 실행 실패")?;
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(err) => {
+            if let Some(path) = question_file.as_ref() {
+                let _ = std::fs::remove_file(path);
+            }
+            if let Some(image_input) = image_input.as_ref() {
+                let _ = std::fs::remove_file(&image_input.path);
+            }
+            return Err(err).context("planabrain 실행 실패");
+        }
+    };
+
+    if let Some(image_input) = image_input.as_ref() {
+        let _ = std::fs::remove_file(&image_input.path);
+    }
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -286,7 +342,13 @@ fn run_planabrain_ask_blocking(question: &str, user_id: &str, chat_id: i64) -> R
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let memory_save_result = if local_memory_ready {
-        remember_planabrain_memory_answer(&root, stdout.trim(), user_id, &chat_scope)
+        remember_planabrain_memory_answer(
+            &root,
+            stdout.trim(),
+            user_id,
+            &chat_scope,
+            conversation_scope_id,
+        )
     } else {
         Ok(())
     };
@@ -322,6 +384,7 @@ fn prepare_question_with_planabrain_memory(
     question: &str,
     user_id: &str,
     chat_scope: &str,
+    conversation_scope_id: Option<&str>,
 ) -> Result<Option<String>> {
     const MAX_LOCAL_MEMORY_TEXT_CHARS: usize = 2000;
     let mut command = build_planabrain_command(planabrain_root)?;
@@ -331,6 +394,9 @@ fn prepare_question_with_planabrain_memory(
         .arg("memory-prepare")
         .arg(user_id)
         .arg(chat_scope);
+    if let Some(conversation_scope_id) = conversation_scope_id {
+        command.env("PLANABRAIN_CONVERSATION_ID", conversation_scope_id);
+    }
 
     if question.chars().count() > MAX_LOCAL_MEMORY_TEXT_CHARS {
         let timestamp = std::time::SystemTime::now()
@@ -382,6 +448,7 @@ fn remember_planabrain_memory_answer(
     answer: &str,
     user_id: &str,
     chat_scope: &str,
+    conversation_scope_id: Option<&str>,
 ) -> Result<()> {
     const MAX_LOCAL_MEMORY_TEXT_CHARS: usize = 2000;
     let mut command = build_planabrain_command(planabrain_root)?;
@@ -391,6 +458,9 @@ fn remember_planabrain_memory_answer(
         .arg("memory-assistant")
         .arg(user_id)
         .arg(chat_scope);
+    if let Some(conversation_scope_id) = conversation_scope_id {
+        command.env("PLANABRAIN_CONVERSATION_ID", conversation_scope_id);
+    }
 
     if answer.chars().count() > MAX_LOCAL_MEMORY_TEXT_CHARS {
         let timestamp = std::time::SystemTime::now()

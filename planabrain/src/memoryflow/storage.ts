@@ -9,17 +9,33 @@ export function buildScopeId(params: ScopeParams): string {
   if (params.scopeKind === "group") {
     return `group__${chatId}`;
   }
+  if (params.scopeKind === "conversation") {
+    return `conversation__${chatId}__${safeId(params.conversationId ?? "default")}`;
+  }
   return `${safeId(params.userId)}__${chatId}`;
 }
 
 export function buildScopeDescriptor(params: ScopeParams): ScopeDescriptor {
-  const scopeKind = params.scopeKind === "group" ? "group" : "user";
+  const scopeKind =
+    params.scopeKind === "group"
+      ? "group"
+      : params.scopeKind === "conversation"
+        ? "conversation"
+        : "user";
   const chatId = safeId(params.chatId ?? "global");
-  const userId = scopeKind === "group" ? "group" : safeId(params.userId);
+  const conversationId =
+    scopeKind === "conversation" ? safeId(params.conversationId ?? "default") : undefined;
+  const userId =
+    scopeKind === "group"
+      ? "group"
+      : scopeKind === "conversation"
+        ? "conversation"
+        : safeId(params.userId);
   return {
-    scopeId: buildScopeId({ userId, chatId, scopeKind }),
+    scopeId: buildScopeId({ userId, chatId, conversationId, scopeKind }),
     userId,
     chatId,
+    conversationId,
     scopeKind
   };
 }
@@ -41,6 +57,30 @@ export function parseScopeId(scopeId: string): ScopeDescriptor | null {
       scopeKind: "group"
     };
   }
+  if (trimmed.startsWith("conversation__")) {
+    const payload = trimmed.slice("conversation__".length);
+    const parts = payload.split("__");
+    if (parts.length < 2) {
+      return null;
+    }
+    const chatId = safeId(parts[0]);
+    const conversationId = safeId(parts.slice(1).join("__"));
+    if (!chatId || !conversationId) {
+      return null;
+    }
+    return {
+      scopeId: buildScopeId({
+        userId: "conversation",
+        chatId,
+        conversationId,
+        scopeKind: "conversation"
+      }),
+      userId: "conversation",
+      chatId,
+      conversationId,
+      scopeKind: "conversation"
+    };
+  }
   const delimiter = "__";
   const idx = trimmed.indexOf(delimiter);
   if (idx <= 0 || idx + delimiter.length >= trimmed.length) {
@@ -52,6 +92,7 @@ export function parseScopeId(scopeId: string): ScopeDescriptor | null {
     scopeId: buildScopeId({ userId, chatId, scopeKind: "user" }),
     userId,
     chatId,
+    conversationId: undefined,
     scopeKind: "user"
   };
 }
