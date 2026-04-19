@@ -2,6 +2,7 @@ import type { Settings } from "../config/settings.js";
 import type { InputImage } from "../integrations/gemini/chat.js";
 import { buildSystemPrompt } from "../config/systemPrompt.js";
 import { invokeChat } from "../integrations/gemini/chat.js";
+import { finalizeAnswerForDelivery } from "./deliveryRewrite.js";
 import { appendUserMemory, loadUserMemory } from "../memory/userMemoryStore.js";
 
 export async function answerWithWebSearch(params: {
@@ -20,7 +21,7 @@ export async function answerWithWebSearch(params: {
         })
       : [];
 
-  const answer = await invokeChat({
+  const rawAnswer = await invokeChat({
     settings: params.settings,
     enableSearchTool: true,
     messages: [
@@ -35,6 +36,11 @@ export async function answerWithWebSearch(params: {
     ),
       { role: "user", content: params.question, images: params.images },
     ],
+  });
+  const answer = await finalizeAnswerForDelivery({
+    question: params.question,
+    answer: rawAnswer,
+    settings: params.settings,
   });
   const memoryQuestion = normalizeQuestionForMemory(params.question);
 

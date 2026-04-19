@@ -107,6 +107,7 @@ npm run dev
 - 이미지가 있으면 planabrain 쪽에서 직접 멀티모달 입력으로 처리합니다.
 - 최신 정보가 필요하면 provider별 웹 검색 경로를 사용합니다.
 - 응답이 길이 제한으로 끊기면 자동으로 이어서 받아 한 번 더 합칩니다.
+- 최종 텔레그램 전송 전에는 1024토큰 기준으로 한 번 더 정리해 문장 중간 출처 삽입과 과도한 장문 응답을 줄입니다.
 - 내부 메타 문장이나 reasoning 누출은 후처리에서 제거합니다.
 
 ## AI Provider
@@ -151,6 +152,8 @@ npm run dev
 - `PLANABRAIN_AI_PROVIDER`
 - `PLANABRAIN_CHAT_MODEL`
 - `PLANABRAIN_CHAT_MAX_OUTPUT_TOKENS`
+- `PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS`
+- `PLANABRAIN_DELIVERY_REWRITE_ENABLED`
 - `PLANABRAIN_CHAT_THINKING_MODE`
 - `PLANABRAIN_EMBEDDING_MODEL`
 - `PLANABRAIN_ALLOWED_CHAT_IDS`
@@ -165,6 +168,7 @@ npm run dev
 - `PLANABRAIN_VERTEX_EXPRESS_MODEL`
 - `PLANABRAIN_VERTEX_EXPRESS_EMBEDDING_MODEL`
 - `PLANABRAIN_VERTEX_EXPRESS_THINKING_LEVEL`
+- `gemini-3-flash-preview`에서는 `PLANABRAIN_VERTEX_EXPRESS_THINKING_LEVEL=off`가 사실상 `MINIMAL`로 적용됩니다.
 
 ### GeminiMock
 
@@ -267,13 +271,13 @@ mkdir -p .planabot
 ### 이미지 태그 지정 배포
 
 ```bash
-PLANABOT_IMAGE_TAG=0.1.6 ./deploy.sh
+PLANABOT_IMAGE_TAG=0.1.7 ./deploy.sh
 ```
 
 또는 `.env`에 아래 값을 넣어도 됩니다.
 
 ```dotenv
-PLANABOT_IMAGE_TAG=0.1.6
+PLANABOT_IMAGE_TAG=0.1.7
 ```
 
 ### ARM64 주의사항
@@ -293,7 +297,7 @@ PLANABOT_IMAGE_TAG=0.1.6
 이미지 위치:
 
 - `ghcr.io/yldst-dev/planabot:latest`
-- `ghcr.io/yldst-dev/planabot:0.1.6`
+- `ghcr.io/yldst-dev/planabot:0.1.7`
 
 ## 로컬 수동 릴리즈
 
@@ -307,26 +311,26 @@ GitHub Actions를 기다리지 않고 로컬에서 멀티아키 이미지를 직
 추가한 스크립트:
 
 ```bash
-./scripts/release-ghcr.sh 0.1.6
+./scripts/release-ghcr.sh 0.1.7
 ```
 
 동작:
 
 - `gh auth token` 또는 `GHCR_TOKEN`, `GITHUB_TOKEN`으로 GHCR 로그인
 - `linux/amd64,linux/arm64` 멀티아키 빌드
-- `ghcr.io/yldst-dev/planabot:0.1.6` 푸시
+- `ghcr.io/yldst-dev/planabot:0.1.7` 푸시
 - 기본값으로 `latest`도 함께 갱신
 
 `latest` 갱신 없이 버전 태그만 올리려면:
 
 ```bash
-PUSH_LATEST=0 ./scripts/release-ghcr.sh 0.1.6
+PUSH_LATEST=0 ./scripts/release-ghcr.sh 0.1.7
 ```
 
 릴리즈 생성 예시:
 
 ```bash
-gh release create v0.1.6 --title "v0.1.6" --notes-file RELEASE_NOTES.md
+gh release create v0.1.7 --title "v0.1.7" --notes-file RELEASE_NOTES.md
 ```
 
 ## 체크리스트

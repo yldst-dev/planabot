@@ -88,6 +88,7 @@ async function invokeVertexExpressChatWithOptions(params: {
     };
   }
   const thinkingConfig = buildVertexThinkingConfig(
+    params.settings.chatModel,
     params.settings.chatThinkingMode,
   );
   if (thinkingConfig) {
@@ -224,15 +225,26 @@ function normalizeVertexMessageText(message: VertexChatMessage): string {
 }
 
 function buildVertexThinkingConfig(
+  model: string,
   mode: Settings["chatThinkingMode"],
 ): Record<string, unknown> | undefined {
   if (mode === "default") {
     return undefined;
   }
   if (mode === "off") {
+    if (isGemini3Model(model)) {
+      return { thinkingLevel: "MINIMAL" };
+    }
     return { thinkingBudget: 0 };
   }
+  if (mode === "minimal") {
+    return { thinkingLevel: "MINIMAL" };
+  }
   return { thinkingLevel: mode };
+}
+
+function isGemini3Model(model: string): boolean {
+  return model.trim().toLowerCase().startsWith("gemini-3-");
 }
 
 function extractVertexResponseText(response: unknown): string | null {

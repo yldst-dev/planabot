@@ -335,6 +335,9 @@ function buildGoogleThinkingConfig(
   if (mode === "off" || mode === "default") {
     return undefined;
   }
+  if (mode === "minimal") {
+    return { thinkingLevel: "LOW" };
+  }
   return {
     thinkingLevel: mode.toUpperCase() as "LOW" | "MEDIUM" | "HIGH",
   };
@@ -461,6 +464,9 @@ function buildGeminiMockThinkingLevel(
   if (mode === "off" || mode === "default") {
     return undefined;
   }
+  if (mode === "minimal") {
+    return "LOW";
+  }
   return mode.toUpperCase() as "LOW" | "MEDIUM" | "HIGH";
 }
 
@@ -472,6 +478,9 @@ function buildOllamaThinkingMode(
   }
   if (mode === "off") {
     return false;
+  }
+  if (mode === "minimal") {
+    return "low";
   }
   return mode;
 }

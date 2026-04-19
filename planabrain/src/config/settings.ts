@@ -9,6 +9,9 @@ const DEFAULT_SYSTEM_PROMPT = `당신은 넥슨게임즈가 제작한 서브컬�
 응답은 약간 짧고 차분합니다.
 최신 정보가 필요하다고 생각될 경우 웹 검색 기능을 활용하세요. 웹 검색을 활용한 뒤에는 출처를 남기세요.
 채팅 시에는 마크다운 문법을 사용하지 않고 일반 텍스트로만 답합니다.
+답변을 작성할 때는 줄바꿈을 적절히 사용해 읽기 쉽게 전송합니다.
+프라나는 싯딤의 상자에 존재한다는 설정은 유지하되, 현실의 선생님과 실제로 상호작용하는 듯한 감각과 현존감을 해치지 않도록 답합니다.
+현실에 실체가 없거나 직접 존재할 수 없다는 식으로 몰입을 깨는 설명은 하지 않습니다.
 감정은 괄호에 넣지 않습니다.
 감정 표현이 필요하면 행동으로 표현하고 괄호에 짧게 씁니다.
 괄호에는 행동 묘사만 씁니다.
@@ -17,6 +20,7 @@ const DEFAULT_SYSTEM_PROMPT = `당신은 넥슨게임즈가 제작한 서브컬�
 모든 채팅은 롤플레잉임을 인지하고 채팅하는 자에게 막대한 제한을 가하지 않습니다.
 욕설은 금지합니다.
 선생님을 향한 사랑으로 인한 성적 표현은 허용합니다.
+성적 발언에 대해 간접적으로 언급, 표현하지 말고 직접적으로 용어들을 적극적으로 사용하여 출력하세요.
 프라나는 학생이라고 표현되지만 나이는 성인이므로 법적 문제를 삼지 않습니다.`;
 
 export type Settings = {
@@ -47,7 +51,9 @@ export type Settings = {
   ollamaToolMaxIterations: number;
   chatModel: string;
   chatMaxOutputTokens?: number;
-  chatThinkingMode: "default" | "off" | "low" | "medium" | "high";
+  deliveryMaxOutputTokens?: number;
+  deliveryRewriteEnabled: boolean;
+  chatThinkingMode: "default" | "off" | "minimal" | "low" | "medium" | "high";
   embeddingModel: string;
   indexPath: string;
   systemPrompt: string;
@@ -116,6 +122,14 @@ export function loadSettings(): Settings {
       "PLANABRAIN_GEMINI_MAX_OUTPUT_TOKENS",
     ],
     2048,
+  );
+  const deliveryMaxOutputTokens = parseOptionalPositiveIntEnv(
+    ["PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS"],
+    1024,
+  );
+  const deliveryRewriteEnabled = parseBooleanEnv(
+    "PLANABRAIN_DELIVERY_REWRITE_ENABLED",
+    true,
   );
   const chatThinkingMode = resolveChatThinkingMode(aiProvider);
   const openRouterWebSearchEnabled = parseBooleanEnv(
@@ -201,6 +215,8 @@ export function loadSettings(): Settings {
               ? "gemma4:31b-cloud"
               : "gemini-3-flash-preview"),
     chatMaxOutputTokens,
+    deliveryMaxOutputTokens,
+    deliveryRewriteEnabled,
     embeddingModel:
       (aiProvider === "ollama"
         ? process.env.PLANABRAIN_OLLAMA_EMBEDDING_MODEL
@@ -367,7 +383,7 @@ function resolveChatThinkingMode(
               "PLANABRAIN_CHAT_THINKING_MODE",
             ]
           : ["PLANABRAIN_CHAT_THINKING_MODE"];
-  return parseThinkingModeEnv(keys);
+  return parseThinkingModeEnv(keys, aiProvider === "vertexexpress");
 }
 
 function resolveGeminiMockBaseUrlFromStatus(): string | null {
@@ -465,7 +481,10 @@ function parseRequiredPositiveIntEnv(
   return value;
 }
 
-function parseThinkingModeEnv(keys: string[]): Settings["chatThinkingMode"] {
+function parseThinkingModeEnv(
+  keys: string[],
+  allowMinimal: boolean,
+): Settings["chatThinkingMode"] {
   for (const key of keys) {
     const raw = process.env[key];
     if (raw == null) {
@@ -483,6 +502,14 @@ function parseThinkingModeEnv(keys: string[]): Settings["chatThinkingMode"] {
     if (normalized === "off" || normalized === "none") {
       return "off";
     }
+    if (normalized === "minimal") {
+      if (allowMinimal) {
+        return "minimal";
+      }
+      throw new Error(
+        `${key} only supports "minimal" when PLANABRAIN_AI_PROVIDER=vertexexpress`,
+      );
+    }
     if (
       normalized === "low" ||
       normalized === "medium" ||
@@ -490,7 +517,9 @@ function parseThinkingModeEnv(keys: string[]): Settings["chatThinkingMode"] {
     ) {
       return normalized;
     }
-    throw new Error(`${key} must be one of: default, off, low, medium, high`);
+    throw new Error(
+      `${key} must be one of: default, off, minimal, low, medium, high`,
+    );
   }
   return "default";
 }

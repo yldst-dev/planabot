@@ -27,7 +27,7 @@ use super::telegram::{
 };
 use super::{AppState, HandlerResult};
 
-const PLANABRAIN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+const PLANABRAIN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub(crate) async fn handle_command<B>(
     bot: B,
@@ -345,7 +345,7 @@ where
                 let sent = send_reply_markdown_with_fallback(
                     &bot,
                     &msg,
-                    "지연 감지.\n선생님.\n응답 전송이 30초 이상 지연되었습니다.\n실패로 간주합니다.\n다시 시도해 주세요.",
+                    "지연 감지.\n선생님.\n응답 전송이 180초 이상 지연되었습니다.\n실패로 간주합니다.\n다시 시도해 주세요.",
                     SendOptions::default(),
                 )
                 .await?;
