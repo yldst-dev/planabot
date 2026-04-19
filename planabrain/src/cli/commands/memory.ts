@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 
 import { migrateJsonMemoryToSqlite } from "../../memoryflow/migrate-json.js";
 import { LocalMemoryEngine } from "../../memoryflow/memory-engine.js";
+import type { ScopeKind } from "../../memoryflow/types.js";
 
 export async function runMemoryPrepareCommand(args: string[]): Promise<void> {
   const [userId, chatId, ...parts] = args;
@@ -65,6 +66,58 @@ export async function runMemoryResetUserCommand(args: string[]): Promise<void> {
   }
 }
 
+export async function runMemoryResetAllCommand(): Promise<void> {
+  const engine = new LocalMemoryEngine();
+  try {
+    const result = await engine.resetAll();
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  } finally {
+    engine.close();
+  }
+}
+
+export async function runMemoryListFactsCommand(args: string[]): Promise<void> {
+  const parsed = parseScopedMemoryArgs(
+    args,
+    "Usage: planabrain memory-list-facts <userId> <chatId> [user|group|conversation]"
+  );
+  const engine = new LocalMemoryEngine();
+  try {
+    const result = await engine.listSemanticFacts(parsed);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  } finally {
+    engine.close();
+  }
+}
+
+export async function runMemoryDeleteFactCommand(args: string[]): Promise<void> {
+  const parsed = parseFactMutationArgs(
+    args,
+    "Usage: planabrain memory-delete-fact <userId> <chatId> <factId> [user|group|conversation]"
+  );
+  const engine = new LocalMemoryEngine();
+  try {
+    const result = await engine.deleteSemanticFact(parsed);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  } finally {
+    engine.close();
+  }
+}
+
+export async function runMemoryUpdateFactCommand(args: string[]): Promise<void> {
+  const parsed = parseFactUpdateArgs(
+    args,
+    "Usage: planabrain memory-update-fact <userId> <chatId> <factId> <value> [user|group|conversation]"
+  );
+  const engine = new LocalMemoryEngine();
+  try {
+    const result = await engine.updateSemanticFact(parsed);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  } finally {
+    engine.close();
+  }
+}
+
 export async function runMemoryMigrateJsonCommand(args: string[]): Promise<void> {
   const [sourceDir] = args;
   const result = await migrateJsonMemoryToSqlite({
@@ -120,4 +173,95 @@ function ensure(condition: boolean, message: string): void {
 function readConversationId(): string | undefined {
   const value = process.env.PLANABRAIN_CONVERSATION_ID?.trim();
   return value ? value : undefined;
+}
+
+function parseScopedMemoryArgs(
+  args: string[],
+  usage: string
+): {
+  userId: string;
+  chatId: string;
+  scopeKind: ScopeKind;
+  conversationId?: string;
+} {
+  const [userId, chatId, ...rest] = args;
+  ensure(Boolean(userId && chatId), usage);
+  const scopeKind = parseScopeKind(rest.at(-1));
+  if (scopeKind) {
+    rest.pop();
+  }
+  return {
+    userId: String(userId),
+    chatId: String(chatId),
+    scopeKind: scopeKind ?? "user",
+    conversationId: scopeKind === "conversation" ? readConversationId() : undefined
+  };
+}
+
+function parseFactMutationArgs(
+  args: string[],
+  usage: string
+): {
+  userId: string;
+  chatId: string;
+  factId: string;
+  scopeKind: ScopeKind;
+  conversationId?: string;
+} {
+  const [userId, chatId, factId, ...rest] = args;
+  ensure(Boolean(userId && chatId && factId), usage);
+  const scopeKind = parseScopeKind(rest.at(-1));
+  if (scopeKind) {
+    rest.pop();
+  }
+  return {
+    userId: String(userId),
+    chatId: String(chatId),
+    factId: String(factId),
+    scopeKind: scopeKind ?? "user",
+    conversationId: scopeKind === "conversation" ? readConversationId() : undefined
+  };
+}
+
+function parseFactUpdateArgs(
+  args: string[],
+  usage: string
+): {
+  userId: string;
+  chatId: string;
+  factId: string;
+  value: string;
+  scopeKind: ScopeKind;
+  conversationId?: string;
+} {
+  const [userId, chatId, factId, ...rest] = args;
+  ensure(Boolean(userId && chatId && factId && rest.length > 0), usage);
+  const scopeKind = parseScopeKind(rest.at(-1));
+  if (scopeKind) {
+    rest.pop();
+  }
+  const value = rest.join(" ").trim();
+  ensure(Boolean(value), usage);
+  return {
+    userId: String(userId),
+    chatId: String(chatId),
+    factId: String(factId),
+    value,
+    scopeKind: scopeKind ?? "user",
+    conversationId: scopeKind === "conversation" ? readConversationId() : undefined
+  };
+}
+
+function parseScopeKind(raw: string | undefined): ScopeKind | undefined {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (value === "group") {
+    return "group";
+  }
+  if (value === "conversation") {
+    return "conversation";
+  }
+  if (value === "user") {
+    return "user";
+  }
+  return undefined;
 }

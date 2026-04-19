@@ -7,7 +7,9 @@ import type {
   EpisodicStore,
   IngestTurnInput,
   MemoryState,
+  MemoryVisibility,
   SemanticStore,
+  ScopeKind,
   SummaryStore,
   Turn,
   WorkingStore
@@ -51,7 +53,7 @@ function normalizeRole(raw: IngestTurnInput["role"]): "user" | "assistant" {
 
 function normalizeWorking(input: unknown): WorkingStore {
   const turnsRaw = getArray((input as Record<string, unknown> | null)?.turns);
-  const turns: Turn[] = turnsRaw
+  const turns = turnsRaw
     .map((turnRaw) => {
       const turn = asObject(turnRaw);
       const text = String(turn.text ?? "").trim();
@@ -59,14 +61,16 @@ function normalizeWorking(input: unknown): WorkingStore {
         return null;
       }
       const at = toNumber(turn.at, Date.now());
-      return {
+      const normalizedTurn: Turn = {
         id: String(turn.id ?? `turn_${Date.now()}_${randomUUID().slice(0, 8)}`),
         role: normalizeRole(String(turn.role ?? "user") as IngestTurnInput["role"]),
         text,
         at,
         tokens: toNumber(turn.tokens, estimateTokens(text)),
-        salience: toNumber(turn.salience, scoreSalience(text))
-      } satisfies Turn;
+        salience: toNumber(turn.salience, scoreSalience(text)),
+        ownerUserId: normalizeOwnerUserId(turn.ownerUserId)
+      };
+      return normalizedTurn;
     })
     .filter(isTurn);
 
@@ -122,7 +126,11 @@ function normalizeSemantic(input: unknown): SemanticStore {
         lastConfirmedAt: toNumber(fact.lastConfirmedAt, at),
         confidence: toNumber(fact.confidence, 0.6),
         salience: toNumber(fact.salience, scoreSalience(text)),
-        embedding: asNumberArray(fact.embedding, embedText(value || text))
+        embedding: asNumberArray(fact.embedding, embedText(value || text)),
+        sourceTurnId: String(fact.sourceTurnId ?? "").trim(),
+        createdByUserId: normalizeOwnerUserId(fact.createdByUserId),
+        visibility: normalizeVisibility(fact.visibility),
+        scopeKind: normalizeScopeKind(fact.scopeKind)
       };
     })
     .filter(isRecord);
@@ -190,6 +198,33 @@ function asNumberArray(input: unknown, fallback: number[]): number[] {
     return fallback;
   }
   return out;
+}
+
+function normalizeOwnerUserId(input: unknown): string | undefined {
+  const value = String(input ?? "").trim();
+  return value ? value : undefined;
+}
+
+function normalizeVisibility(input: unknown): MemoryVisibility {
+  const value = String(input ?? "").trim().toLowerCase();
+  if (value === "conversation") {
+    return "conversation";
+  }
+  if (value === "shared") {
+    return "shared";
+  }
+  return "private";
+}
+
+function normalizeScopeKind(input: unknown): ScopeKind {
+  const value = String(input ?? "").trim().toLowerCase();
+  if (value === "conversation") {
+    return "conversation";
+  }
+  if (value === "group") {
+    return "group";
+  }
+  return "user";
 }
 
 function isRecord<T extends object>(value: T | null): value is T {

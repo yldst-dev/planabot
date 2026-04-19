@@ -3,6 +3,7 @@ export type MemoryRole = "user" | "assistant";
 export type MemoryLayer = "semantic" | "episodic" | "summary" | "working";
 export type MemoryStoreKind = "sqlite" | "json";
 export type ScopeKind = "user" | "group" | "conversation";
+export type MemoryVisibility = "private" | "conversation" | "shared";
 
 export interface EngineConfig {
   rootDir: string;
@@ -15,8 +16,10 @@ export interface EngineConfig {
   compactionEnabled: boolean;
   compactionKeepRecentTurns: number;
   compactionMinSourceTurns: number;
+  conversationTtlMs: number;
   defaultTokenBudget: number;
   groupMemoryEnabled: boolean;
+  retrievalLoggingEnabled: boolean;
 }
 
 export interface ScopeParams {
@@ -41,6 +44,7 @@ export interface Turn {
   at: number;
   tokens: number;
   salience: number;
+  ownerUserId?: string;
 }
 
 export interface SemanticFact {
@@ -53,6 +57,10 @@ export interface SemanticFact {
   confidence: number;
   salience: number;
   embedding: number[];
+  sourceTurnId: string;
+  createdByUserId?: string;
+  visibility: MemoryVisibility;
+  scopeKind: ScopeKind;
 }
 
 export interface EpisodicItem {
@@ -149,5 +157,6 @@ export interface MemoryStore {
   saveState(scope: ScopeDescriptor, state: MemoryState): Promise<void>;
   removeScope(scope: ScopeDescriptor): Promise<void>;
   resetUser(userId: string): Promise<boolean>;
+  resetAll(): Promise<boolean>;
   close(): void;
 }

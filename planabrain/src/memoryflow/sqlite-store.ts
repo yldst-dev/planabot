@@ -42,6 +42,7 @@ export class SqliteMemoryStore implements MemoryStore {
         at INTEGER NOT NULL,
         tokens INTEGER NOT NULL,
         salience REAL NOT NULL,
+        owner_user_id TEXT,
         FOREIGN KEY (scope_id) REFERENCES scopes(id) ON DELETE CASCADE
       );
 
@@ -56,6 +57,10 @@ export class SqliteMemoryStore implements MemoryStore {
         confidence REAL NOT NULL,
         salience REAL NOT NULL,
         embedding TEXT NOT NULL,
+        source_turn_id TEXT NOT NULL DEFAULT '',
+        created_by_user_id TEXT,
+        visibility TEXT NOT NULL DEFAULT 'private',
+        fact_scope_kind TEXT NOT NULL DEFAULT 'user',
         FOREIGN KEY (scope_id) REFERENCES scopes(id) ON DELETE CASCADE
       );
 
@@ -88,6 +93,21 @@ export class SqliteMemoryStore implements MemoryStore {
       CREATE INDEX IF NOT EXISTS idx_episodic_scope_at ON episodic_items(scope_id, at DESC);
       CREATE INDEX IF NOT EXISTS idx_summary_scope_at ON summary_items(scope_id, at DESC);
     `);
+    try {
+      this.db.exec("ALTER TABLE turns ADD COLUMN owner_user_id TEXT");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE semantic_facts ADD COLUMN source_turn_id TEXT NOT NULL DEFAULT ''");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE semantic_facts ADD COLUMN created_by_user_id TEXT");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE semantic_facts ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private'");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE semantic_facts ADD COLUMN fact_scope_kind TEXT NOT NULL DEFAULT 'user'");
+    } catch {}
   }
 
   async loadState(scope: ScopeDescriptor): Promise<MemoryState> {
@@ -96,13 +116,13 @@ export class SqliteMemoryStore implements MemoryStore {
 
     const turns = this.db
       .prepare(
-        "SELECT id, role, text, at, tokens, salience FROM turns WHERE scope_id = ? ORDER BY at ASC"
+        "SELECT id, role, text, at, tokens, salience, owner_user_id FROM turns WHERE scope_id = ? ORDER BY at ASC"
       )
       .all(scope.scopeId) as Array<Record<string, unknown>>;
 
     const semanticFacts = this.db
       .prepare(
-        "SELECT id, key, value, text, at, last_confirmed_at, confidence, salience, embedding FROM semantic_facts WHERE scope_id = ? ORDER BY last_confirmed_at DESC"
+        "SELECT id, key, value, text, at, last_confirmed_at, confidence, salience, embedding, source_turn_id, created_by_user_id, visibility, fact_scope_kind FROM semantic_facts WHERE scope_id = ? ORDER BY last_confirmed_at DESC"
       )
       .all(scope.scopeId) as Array<Record<string, unknown>>;
 
@@ -125,7 +145,8 @@ export class SqliteMemoryStore implements MemoryStore {
           text: String(row.text ?? ""),
           at: Number(row.at ?? 0),
           tokens: Number(row.tokens ?? 0),
-          salience: Number(row.salience ?? 0)
+          salience: Number(row.salience ?? 0),
+          ownerUserId: String(row.owner_user_id ?? "").trim() || undefined
         }))
       },
       semantic: {
@@ -139,7 +160,11 @@ export class SqliteMemoryStore implements MemoryStore {
           lastConfirmedAt: Number(row.last_confirmed_at ?? row.at ?? 0),
           confidence: Number(row.confidence ?? 0),
           salience: Number(row.salience ?? 0),
-          embedding: parseEmbedding(row.embedding)
+          embedding: parseEmbedding(row.embedding),
+          sourceTurnId: String(row.source_turn_id ?? "").trim(),
+          createdByUserId: String(row.created_by_user_id ?? "").trim() || undefined,
+          visibility: String(row.visibility ?? "private").trim(),
+          scopeKind: String(row.fact_scope_kind ?? "user").trim()
         }))
       },
       episodic: {
@@ -177,8 +202,8 @@ export class SqliteMemoryStore implements MemoryStore {
       this.db.prepare("DELETE FROM summary_items WHERE scope_id = ?").run(scope.scopeId);
 
       const insertTurn = this.db.prepare(`
-        INSERT INTO turns (id, scope_id, role, text, at, tokens, salience)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO turns (id, scope_id, role, text, at, tokens, salience, owner_user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const turn of normalized.working.turns) {
         insertTurn.run(
@@ -188,13 +213,14 @@ export class SqliteMemoryStore implements MemoryStore {
           turn.text,
           turn.at,
           turn.tokens,
-          turn.salience
+          turn.salience,
+          turn.ownerUserId ?? null
         );
       }
 
       const insertSemantic = this.db.prepare(`
-        INSERT INTO semantic_facts (id, scope_id, key, value, text, at, last_confirmed_at, confidence, salience, embedding)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO semantic_facts (id, scope_id, key, value, text, at, last_confirmed_at, confidence, salience, embedding, source_turn_id, created_by_user_id, visibility, fact_scope_kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const fact of normalized.semantic.facts) {
         insertSemantic.run(
@@ -207,7 +233,11 @@ export class SqliteMemoryStore implements MemoryStore {
           fact.lastConfirmedAt,
           fact.confidence,
           fact.salience,
-          JSON.stringify(fact.embedding)
+          JSON.stringify(fact.embedding),
+          fact.sourceTurnId,
+          fact.createdByUserId ?? null,
+          fact.visibility,
+          fact.scopeKind
         );
       }
 
@@ -265,6 +295,26 @@ export class SqliteMemoryStore implements MemoryStore {
     this.db
       .prepare("DELETE FROM scopes WHERE scope_kind = 'user' AND user_id = ?")
       .run(normalized);
+    return true;
+  }
+
+  async resetAll(): Promise<boolean> {
+    const row = this.db
+      .prepare("SELECT COUNT(1) AS count FROM scopes")
+      .get() as { count?: number } | undefined;
+    const count = Number(row?.count ?? 0);
+    if (!Number.isFinite(count) || count <= 0) {
+      return false;
+    }
+
+    this.transaction(() => {
+      this.db.prepare("DELETE FROM turns").run();
+      this.db.prepare("DELETE FROM semantic_facts").run();
+      this.db.prepare("DELETE FROM episodic_items").run();
+      this.db.prepare("DELETE FROM summary_items").run();
+      this.db.prepare("DELETE FROM scopes").run();
+    });
+
     return true;
   }
 

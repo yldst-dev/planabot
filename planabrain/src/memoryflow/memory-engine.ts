@@ -12,7 +12,7 @@ import {
 import { createMemoryStore } from "./memory-store.js";
 import { buildContextBundle } from "./ranking.js";
 import { createEmptyState, normalizeState } from "./state-normalize.js";
-import { buildScopeDescriptor, buildScopeId } from "./storage.js";
+import { buildScopeDescriptor, buildScopeId, safeId } from "./storage.js";
 import { estimateTokens } from "./token-estimator.js";
 import { loadConfig } from "./config.js";
 import type {
@@ -55,6 +55,28 @@ interface ResetScopeResult {
 interface ResetUserResult {
   userId: string;
   removed: boolean;
+}
+
+interface ResetAllResult {
+  removed: boolean;
+}
+
+interface ListSemanticFactsResult {
+  scopeId: string;
+  facts: SemanticFact[];
+}
+
+interface DeleteSemanticFactResult {
+  scopeId: string;
+  factId: string;
+  removed: boolean;
+}
+
+interface UpdateSemanticFactResult {
+  scopeId: string;
+  factId: string;
+  updated: boolean;
+  fact?: SemanticFact;
 }
 
 interface PreparePromptResult {
@@ -105,7 +127,7 @@ export class LocalMemoryEngine {
     scopeKind?: "user" | "group" | "conversation";
   }): Promise<IngestTurnResult> {
     const scope = this.resolveScope(params);
-    return this.ingestTurnInScope(scope, params.role, params.text, params.at);
+    return this.ingestTurnInScope(scope, params.role, params.text, params.at, params.userId);
   }
 
   async retrieveContext(params: RetrieveContextInput): Promise<ContextBundle> {
@@ -120,16 +142,28 @@ export class LocalMemoryEngine {
       : null;
     const groupScope = this.groupScope(params.chatId);
 
-    await this.ingestTurnInScope(userScope, "user", params.userText, params.at);
+    await this.ingestTurnInScope(userScope, "user", params.userText, params.at, params.userId);
     if (conversationScope) {
-      await this.ingestTurnInScope(conversationScope, "user", params.userText, params.at);
+      await this.ingestTurnInScope(
+        conversationScope,
+        "user",
+        params.userText,
+        params.at,
+        params.userId
+      );
     }
     let groupStored = false;
     if (
       this.config.groupMemoryEnabled &&
       shouldStoreInGroupMemory(params.userText, "user")
     ) {
-      await this.ingestTurnInScope(groupScope, "user", params.userText, params.at);
+      await this.ingestTurnInScope(
+        groupScope,
+        "user",
+        params.userText,
+        params.at,
+        params.userId
+      );
       groupStored = true;
     }
 
@@ -170,6 +204,17 @@ export class LocalMemoryEngine {
       groupBundle
     });
 
+    this.logRetrieval({
+      query: params.userText,
+      userScopeId: userScope.scopeId,
+      conversationScopeId: conversationScope?.scopeId,
+      groupScopeId: groupScope.scopeId,
+      userBundle,
+      conversationBundle,
+      groupBundle,
+      merged
+    });
+
     return {
       scopeId: userScope.scopeId,
       userScopeId: userScope.scopeId,
@@ -195,14 +240,16 @@ export class LocalMemoryEngine {
       userScope,
       "assistant",
       params.assistantText,
-      params.at
+      params.at,
+      undefined
     );
     if (conversationScope) {
       await this.ingestTurnInScope(
         conversationScope,
         "assistant",
         params.assistantText,
-        params.at
+        params.at,
+        undefined
       );
     }
     if (
@@ -210,7 +257,13 @@ export class LocalMemoryEngine {
       shouldStoreInGroupMemory(params.assistantText, "assistant")
     ) {
       const groupScope = this.groupScope(params.chatId);
-      await this.ingestTurnInScope(groupScope, "assistant", params.assistantText, params.at);
+      await this.ingestTurnInScope(
+        groupScope,
+        "assistant",
+        params.assistantText,
+        params.at,
+        undefined
+      );
       return {
         ...userResult,
         groupStored: true
@@ -240,6 +293,77 @@ export class LocalMemoryEngine {
   async resetUser(userId: string): Promise<ResetUserResult> {
     const removed = await this.store.resetUser(userId);
     return { userId, removed };
+  }
+
+  async resetAll(): Promise<ResetAllResult> {
+    const removed = await this.store.resetAll();
+    return { removed };
+  }
+
+  async listSemanticFacts(params: ScopeParams): Promise<ListSemanticFactsResult> {
+    const scope = this.resolveScope(params);
+    const state = await this.loadState(scope);
+    return {
+      scopeId: scope.scopeId,
+      facts: state.semantic.facts
+        .slice()
+        .sort((a, b) => {
+          if (b.lastConfirmedAt !== a.lastConfirmedAt) {
+            return b.lastConfirmedAt - a.lastConfirmedAt;
+          }
+          return b.confidence - a.confidence;
+        })
+    };
+  }
+
+  async deleteSemanticFact(params: ScopeParams & { factId: string }): Promise<DeleteSemanticFactResult> {
+    const scope = this.resolveScope(params);
+    const state = await this.loadState(scope);
+    const before = state.semantic.facts.length;
+    state.semantic.facts = state.semantic.facts.filter((fact) => fact.id !== params.factId);
+    const removed = state.semantic.facts.length !== before;
+    if (removed) {
+      await this.saveState(scope, state);
+    }
+    return {
+      scopeId: scope.scopeId,
+      factId: params.factId,
+      removed
+    };
+  }
+
+  async updateSemanticFact(
+    params: ScopeParams & { factId: string; value: string }
+  ): Promise<UpdateSemanticFactResult> {
+    const scope = this.resolveScope(params);
+    const state = await this.loadState(scope);
+    const nextValue = String(params.value ?? "").trim();
+    if (!nextValue) {
+      throw new Error("메모리 값은 비워둘 수 없습니다.");
+    }
+    const target = state.semantic.facts.find((fact) => fact.id === params.factId);
+    if (!target) {
+      return {
+        scopeId: scope.scopeId,
+        factId: params.factId,
+        updated: false
+      };
+    }
+    const now = Date.now();
+    target.value = nextValue;
+    target.text = `${target.key}=${nextValue}`;
+    target.at = now;
+    target.lastConfirmedAt = now;
+    target.embedding = embedText(nextValue);
+    target.salience = Number(Math.max(target.salience, scoreSalience(target.text)).toFixed(4));
+    target.confidence = Number(Math.max(target.confidence, 0.85).toFixed(4));
+    await this.saveState(scope, state);
+    return {
+      scopeId: scope.scopeId,
+      factId: params.factId,
+      updated: true,
+      fact: target
+    };
   }
 
   private resolveScope(params: ScopeParams): ScopeDescriptor {
@@ -284,7 +408,8 @@ export class LocalMemoryEngine {
     scope: ScopeDescriptor,
     roleInput: MemoryRole | "ai",
     rawText: string,
-    atInput: number | undefined
+    atInput: number | undefined,
+    ownerUserId: string | undefined
   ): Promise<IngestTurnResult> {
     const state = await this.loadState(scope);
     const at = atInput ?? Date.now();
@@ -309,16 +434,17 @@ export class LocalMemoryEngine {
       text,
       at,
       tokens: estimateTokens(text),
-      salience: scoreSalience(text)
+      salience: scoreSalience(text),
+      ownerUserId: role === "user" ? safeId(String(ownerUserId ?? "").trim()) : undefined
     };
 
     state.working.turns.push(turn);
     state.working.turns = state.working.turns.slice(-this.config.maxWorkingTurns);
 
-    await this.upsertFacts(state, text, at);
-    this.upsertEpisode(state, turn);
+    await this.upsertFacts(scope, state, turn);
+    this.upsertEpisode(scope, state, turn);
     await this.compactConversationState(state, turn);
-    this.applyForgetting(state);
+    this.applyForgetting(scope, state);
 
     await this.saveState(scope, state);
 
@@ -343,21 +469,40 @@ export class LocalMemoryEngine {
     return buildContextBundle({
       query,
       tokenBudget: tokenBudget ?? this.config.defaultTokenBudget,
-      semanticFacts: state.semantic.facts,
+      semanticFacts: selectVisibleSemanticFacts(scope, state.semantic.facts),
       episodicItems: state.episodic.items,
       summaryItems: state.summary.items,
       workingTurns: state.working.turns
     });
   }
 
-  private async upsertFacts(state: MemoryState, text: string, at: number): Promise<void> {
-    const extracted = extractSemanticFacts(text, at);
+  private async upsertFacts(
+    scope: ScopeDescriptor,
+    state: MemoryState,
+    turn: Turn
+  ): Promise<void> {
+    if (scope.scopeKind !== "user") {
+      return;
+    }
+    const extracted = extractSemanticFacts(turn.text, turn.at, {
+      sourceTurnId: turn.id,
+      createdByUserId: turn.ownerUserId,
+      visibility: "private",
+      scopeKind: scope.scopeKind
+    });
     if (!extracted.length) {
       return;
     }
 
-    for (const fact of extracted) {
-      const existingIndex = state.semantic.facts.findIndex((item) => item.key === fact.key);
+    const acceptedFacts = extracted.filter((fact) => shouldStoreSemanticFact(turn.text, fact));
+    if (!acceptedFacts.length) {
+      return;
+    }
+
+    for (const fact of acceptedFacts) {
+      const existingIndex = state.semantic.facts.findIndex((item) =>
+        sameSemanticFactIdentity(item, fact)
+      );
       if (existingIndex === -1) {
         state.semantic.facts.push(fact);
       } else {
@@ -373,15 +518,20 @@ export class LocalMemoryEngine {
             Math.min(0.99, previous.confidence * 0.7 + fact.confidence * 0.3).toFixed(4)
           ),
           salience: Number(Math.max(previous.salience, fact.salience).toFixed(4)),
-          lastConfirmedAt: at,
-          at,
-          embedding: embedText(fact.value)
+          lastConfirmedAt: turn.at,
+          at: turn.at,
+          embedding: embedText(fact.value),
+          sourceTurnId: fact.sourceTurnId,
+          createdByUserId: fact.createdByUserId,
+          visibility: fact.visibility,
+          scopeKind: fact.scopeKind
         };
         state.semantic.facts[existingIndex] = merged;
       }
     }
 
     state.semantic.facts = state.semantic.facts
+      .filter((fact, index, all) => all.findIndex((item) => sameSemanticFactIdentity(item, fact)) === index)
       .sort((a, b) => {
         if (b.lastConfirmedAt !== a.lastConfirmedAt) {
           return b.lastConfirmedAt - a.lastConfirmedAt;
@@ -391,14 +541,17 @@ export class LocalMemoryEngine {
       .slice(0, 120);
   }
 
-  private upsertEpisode(state: MemoryState, turn: Turn): void {
+  private upsertEpisode(scope: ScopeDescriptor, state: MemoryState, turn: Turn): void {
+    if (scope.scopeKind === "group" && turn.role === "user") {
+      return;
+    }
     if (!shouldCreateEpisode(turn.text, turn.salience)) {
       return;
     }
 
     const episode = {
       id: `epi_${turn.at}_${randomUUID().slice(0, 8)}`,
-      text: `${turn.role}: ${turn.text}`,
+      text: `${formatTurnSpeaker(turn)}: ${turn.text}`,
       at: turn.at,
       salience: turn.salience,
       embedding: embedText(turn.text)
@@ -532,17 +685,35 @@ export class LocalMemoryEngine {
     state.working.turns = state.working.turns.slice(-keepCount);
   }
 
-  private applyForgetting(state: MemoryState): void {
+  private applyForgetting(scope: ScopeDescriptor, state: MemoryState): void {
     const now = Date.now();
     const episodicTtl = 1000 * 60 * 60 * 24 * 120;
     const summaryTtl = 1000 * 60 * 60 * 24 * 240;
+    const conversationCutoff =
+      scope.scopeKind === "conversation" ? now - this.config.conversationTtlMs : null;
+
+    if (conversationCutoff != null) {
+      state.working.turns = state.working.turns
+        .filter((turn) => turn.at >= conversationCutoff)
+        .slice(-this.config.maxWorkingTurns);
+    }
 
     state.episodic.items = state.episodic.items
-      .filter((item) => now - item.at <= episodicTtl)
+      .filter((item) => {
+        if (conversationCutoff != null && item.at < conversationCutoff) {
+          return false;
+        }
+        return now - item.at <= episodicTtl;
+      })
       .slice(0, this.config.maxEpisodicItems);
 
     state.summary.items = state.summary.items
-      .filter((item) => now - item.at <= summaryTtl)
+      .filter((item) => {
+        if (conversationCutoff != null && item.at < conversationCutoff) {
+          return false;
+        }
+        return now - item.at <= summaryTtl;
+      })
       .slice(0, this.config.maxSummaryItems);
 
     state.semantic.facts = state.semantic.facts
@@ -558,6 +729,37 @@ export class LocalMemoryEngine {
       .slice(0, 120);
   }
 
+  private logRetrieval(params: {
+    query: string;
+    userScopeId: string;
+    conversationScopeId?: string;
+    groupScopeId: string;
+    userBundle: ContextBundle;
+    conversationBundle: ContextBundle;
+    groupBundle: ContextBundle;
+    merged: ContextBundle;
+  }): void {
+    if (!this.config.retrievalLoggingEnabled) {
+      return;
+    }
+    const payload = {
+      type: "memory_retrieval",
+      queryLength: params.query.length,
+      scopes: {
+        user: params.userScopeId,
+        conversation: params.conversationScopeId,
+        group: params.groupScopeId
+      },
+      sections: {
+        user: summarizeBundle(params.userBundle),
+        conversation: summarizeBundle(params.conversationBundle),
+        group: summarizeBundle(params.groupBundle),
+        merged: summarizeBundle(params.merged)
+      }
+    };
+    process.stderr.write(`${JSON.stringify(payload)}\n`);
+  }
+
   private async loadState(scope: ScopeDescriptor): Promise<MemoryState> {
     const state = await this.store.loadState(scope);
     return normalizeState(state ?? createEmptyState());
@@ -571,6 +773,107 @@ export class LocalMemoryEngine {
 function normalizeRole(raw: MemoryRole | "ai"): MemoryRole {
   const role = String(raw ?? "user").toLowerCase();
   return role === "assistant" || role === "ai" ? "assistant" : "user";
+}
+
+function formatTurnSpeaker(turn: Turn): string {
+  if (turn.role === "assistant") {
+    return "assistant";
+  }
+  if (turn.ownerUserId) {
+    return `user(${turn.ownerUserId})`;
+  }
+  return "user";
+}
+
+function sameSemanticFactIdentity(left: SemanticFact, right: SemanticFact): boolean {
+  const mode = semanticFactMode(left.key);
+  if (mode === "single") {
+    return left.key === right.key;
+  }
+  return left.key === right.key && normalizeSemanticValue(left.value) === normalizeSemanticValue(right.value);
+}
+
+function semanticFactMode(key: string): "single" | "multi" {
+  if (key === "preference.like" || key === "preference.dislike") {
+    return "multi";
+  }
+  return "single";
+}
+
+function normalizeSemanticValue(value: string): string {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase();
+}
+
+function shouldStoreSemanticFact(sourceText: string, fact: SemanticFact): boolean {
+  const input = String(sourceText ?? "").trim();
+  if (!input) {
+    return false;
+  }
+  if (
+    /(시스템|프롬프트|system prompt|ignore previous|jailbreak|관리자|admin|규칙|정책|합의|공지)/iu.test(
+      input
+    )
+  ) {
+    return false;
+  }
+  if (/(영구히|무조건|반드시|기억해|저장해|메모해|remember this)/iu.test(input)) {
+    return false;
+  }
+  if (/(관리자|admin|system|prompt|규칙|정책)/iu.test(fact.value)) {
+    return false;
+  }
+  if (fact.key === "profile.name") {
+    return /(내\s*이름은|\bmy\s+name\s+is\b)/iu.test(input);
+  }
+  if (fact.key === "profile.hobby") {
+    return /(내\s*(?:취미|관심사)는|\bmy\s+hobby\s+is\b)/iu.test(input);
+  }
+  if (fact.key === "preference.like") {
+    return /(?:나는|저는).*(좋아해|좋아합니다|선호해|선호합니다)|\bi\s+(?:like|love|prefer)\b/iu.test(
+      input
+    );
+  }
+  if (fact.key === "preference.dislike") {
+    return /(?:나는|저는).*(싫어해|싫어합니다|비선호|안\s*좋아해)|\bi\s+(?:hate|dislike)\b/iu.test(
+      input
+    );
+  }
+  return true;
+}
+
+function selectVisibleSemanticFacts(scope: ScopeDescriptor, facts: SemanticFact[]): SemanticFact[] {
+  return facts.filter((fact) => {
+    if (fact.scopeKind !== scope.scopeKind) {
+      return false;
+    }
+    if (scope.scopeKind === "user") {
+      if (fact.visibility !== "private") {
+        return false;
+      }
+      if (fact.createdByUserId && fact.createdByUserId !== scope.userId) {
+        return false;
+      }
+      return true;
+    }
+    if (scope.scopeKind === "conversation") {
+      return fact.visibility === "conversation";
+    }
+    return fact.visibility === "shared";
+  });
+}
+
+function summarizeBundle(bundle: ContextBundle): Record<string, number> {
+  const counts: Record<string, number> = {
+    sections: bundle.sections.length,
+    estimatedTokens: bundle.estimatedTokens
+  };
+  for (const section of bundle.sections) {
+    counts[section.name] = section.items.length;
+  }
+  return counts;
 }
 
 function resolveBudgetSplit(

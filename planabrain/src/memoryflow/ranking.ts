@@ -82,7 +82,7 @@ export function buildContextBundle(params: BuildContextBundleInput): ContextBund
 
   const workingRecent: RankedItem[] = params.workingTurns.slice(-8).map((turn) => ({
     id: turn.id,
-    text: `${turn.role}: ${String(turn.text ?? "").trim()}`,
+    text: `${formatWorkingSpeaker(turn)}: ${String(turn.text ?? "").trim()}`,
     at: turn.at,
     salience: turn.salience ?? 0.4,
     layer: "working",
@@ -225,6 +225,16 @@ function clamp01(value: number): number {
     return 1;
   }
   return value;
+}
+
+function formatWorkingSpeaker(turn: Turn): string {
+  if (turn.role === "assistant") {
+    return "assistant";
+  }
+  if (turn.ownerUserId) {
+    return `user(${turn.ownerUserId})`;
+  }
+  return "user";
 }
 
 function isRankedItem(value: RankedItem | null): value is RankedItem {

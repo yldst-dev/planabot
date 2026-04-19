@@ -79,6 +79,22 @@ export class JsonMemoryStore implements MemoryStore {
     return removed;
   }
 
+  async resetAll(): Promise<boolean> {
+    try {
+      await fs.rm(this.rootDir, {
+        recursive: true,
+        force: true
+      });
+      await fs.mkdir(this.rootDir, { recursive: true });
+      return true;
+    } catch (error: unknown) {
+      if (isEnoent(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   close(): void {}
 }
 

@@ -53,6 +53,7 @@ COPY --from=planabrain-builder /app/planabrain/dist /app/planabrain/dist
 EXPOSE 8080 8081
 
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY scripts/reset-local-memory.sh /usr/local/bin/reset-local-memory
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/reset-local-memory
 
 CMD ["/usr/local/bin/entrypoint.sh"]

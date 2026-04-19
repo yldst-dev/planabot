@@ -49,6 +49,12 @@ class SqliteWithJsonFallbackStore implements MemoryStore {
     return sqliteRemoved || jsonRemoved;
   }
 
+  async resetAll(): Promise<boolean> {
+    const sqliteRemoved = await this.sqliteStore.resetAll();
+    const jsonRemoved = await this.jsonStore.resetAll();
+    return sqliteRemoved || jsonRemoved;
+  }
+
   close(): void {
     this.sqliteStore.close();
     this.jsonStore.close();

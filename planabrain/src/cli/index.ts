@@ -29,9 +29,13 @@ import { runAskCommand } from "./commands/ask.js";
 import { runIngestCommand } from "./commands/ingest.js";
 import {
   runMemoryAssistantCommand,
+  runMemoryDeleteFactCommand,
+  runMemoryListFactsCommand,
   runMemoryMigrateJsonCommand,
   runMemoryPrepareCommand,
-  runMemoryResetUserCommand
+  runMemoryResetAllCommand,
+  runMemoryResetUserCommand,
+  runMemoryUpdateFactCommand
 } from "./commands/memory.js";
 import { runTokensCommand } from "./commands/tokens.js";
 import { parseCli } from "./parse.js";
@@ -53,6 +57,22 @@ export async function main(argv: string[]): Promise<void> {
   }
   if (parsed.command === "memory-reset-user") {
     await runMemoryResetUserCommand(parsed.args);
+    return;
+  }
+  if (parsed.command === "memory-reset-all") {
+    await runMemoryResetAllCommand();
+    return;
+  }
+  if (parsed.command === "memory-list-facts") {
+    await runMemoryListFactsCommand(parsed.args);
+    return;
+  }
+  if (parsed.command === "memory-delete-fact") {
+    await runMemoryDeleteFactCommand(parsed.args);
+    return;
+  }
+  if (parsed.command === "memory-update-fact") {
+    await runMemoryUpdateFactCommand(parsed.args);
     return;
   }
   if (parsed.command === "memory-migrate-json") {

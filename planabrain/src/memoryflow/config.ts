@@ -46,6 +46,10 @@ export function loadConfig(): EngineConfig {
     process.env.PLANABRAIN_LOCAL_MEMORY_COMPACTION_MIN_SOURCE_TURNS,
     summaryEveryTurns
   );
+  const conversationTtlDays = parsePositiveInt(
+    process.env.PLANABRAIN_LOCAL_MEMORY_CONVERSATION_TTL_DAYS,
+    14
+  );
   const defaultTokenBudget = parsePositiveInt(
     process.env.PLANABRAIN_LOCAL_MEMORY_DEFAULT_TOKEN_BUDGET ??
       process.env.MEMORY_FLOW_DEFAULT_TOKEN_BUDGET,
@@ -54,6 +58,10 @@ export function loadConfig(): EngineConfig {
   const groupMemoryEnabled = parseBoolean(
     process.env.PLANABRAIN_LOCAL_GROUP_MEMORY_ENABLED ?? process.env.MEMORY_FLOW_GROUP_ENABLED,
     true
+  );
+  const retrievalLoggingEnabled = parseBoolean(
+    process.env.PLANABRAIN_LOCAL_MEMORY_RETRIEVAL_LOGGING_ENABLED,
+    false
   );
   return {
     rootDir,
@@ -66,8 +74,10 @@ export function loadConfig(): EngineConfig {
     compactionEnabled,
     compactionKeepRecentTurns,
     compactionMinSourceTurns,
+    conversationTtlMs: conversationTtlDays * 24 * 60 * 60 * 1000,
     defaultTokenBudget,
-    groupMemoryEnabled
+    groupMemoryEnabled,
+    retrievalLoggingEnabled
   };
 }
 

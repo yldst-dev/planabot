@@ -1,13 +1,21 @@
 import { randomUUID } from "node:crypto";
 
 import { embedText } from "./embedding.js";
-import type { MemoryRole, SemanticFact, Turn } from "./types.js";
+import type { MemoryRole, MemoryVisibility, ScopeKind, SemanticFact, Turn } from "./types.js";
+
+type SemanticFactMetadata = {
+  sourceTurnId: string;
+  createdByUserId?: string;
+  visibility: MemoryVisibility;
+  scopeKind: ScopeKind;
+};
 
 interface ScoredTurn {
   role: MemoryRole;
   text: string;
   score: number;
   at: number;
+  ownerUserId?: string;
 }
 
 export function scoreSalience(text: string): number {
@@ -46,7 +54,11 @@ export function scoreSalience(text: string): number {
   return Number(score.toFixed(4));
 }
 
-export function extractSemanticFacts(text: string, at: number): SemanticFact[] {
+export function extractSemanticFacts(
+  text: string,
+  at: number,
+  metadata: SemanticFactMetadata
+): SemanticFact[] {
   const input = String(text ?? "").trim();
   if (!input) {
     return [];
@@ -56,12 +68,12 @@ export function extractSemanticFacts(text: string, at: number): SemanticFact[] {
 
   const koName = input.match(/내\s*이름은\s*([^\s.,!?]{1,32})/u);
   if (koName?.[1]) {
-    facts.push(buildFact("profile.name", koName[1], input, at, 0.95));
+    facts.push(buildFact("profile.name", koName[1], input, at, 0.95, metadata));
   }
 
   const enName = input.match(/\bmy\s+name\s+is\s+([a-z0-9_-]{1,32})\b/iu);
   if (enName?.[1]) {
-    facts.push(buildFact("profile.name", enName[1], input, at, 0.95));
+    facts.push(buildFact("profile.name", enName[1], input, at, 0.95, metadata));
   }
 
   collectMulti(
@@ -70,14 +82,14 @@ export function extractSemanticFacts(text: string, at: number): SemanticFact[] {
   ).forEach((item) => {
     const value = item[1];
     if (value) {
-      facts.push(buildFact("preference.like", sanitizeValue(value), input, at, 0.85));
+      facts.push(buildFact("preference.like", sanitizeValue(value), input, at, 0.85, metadata));
     }
   });
 
   collectMulti(input, /\bi\s+(?:like|love|prefer)\s+([^.!\n]{1,80})/giu).forEach((item) => {
     const value = item[1];
     if (value) {
-      facts.push(buildFact("preference.like", sanitizeValue(value), input, at, 0.85));
+      facts.push(buildFact("preference.like", sanitizeValue(value), input, at, 0.85, metadata));
     }
   });
 
@@ -87,25 +99,29 @@ export function extractSemanticFacts(text: string, at: number): SemanticFact[] {
   ).forEach((item) => {
     const value = item[1];
     if (value) {
-      facts.push(buildFact("preference.dislike", sanitizeValue(value), input, at, 0.85));
+      facts.push(
+        buildFact("preference.dislike", sanitizeValue(value), input, at, 0.85, metadata)
+      );
     }
   });
 
   collectMulti(input, /\bi\s+(?:hate|dislike)\s+([^.!\n]{1,80})/giu).forEach((item) => {
     const value = item[1];
     if (value) {
-      facts.push(buildFact("preference.dislike", sanitizeValue(value), input, at, 0.85));
+      facts.push(
+        buildFact("preference.dislike", sanitizeValue(value), input, at, 0.85, metadata)
+      );
     }
   });
 
   const koHobby = input.match(/내\s*(?:취미|관심사)는\s*([^\n.!?]{1,80})/u);
   if (koHobby?.[1]) {
-    facts.push(buildFact("profile.hobby", sanitizeValue(koHobby[1]), input, at, 0.8));
+    facts.push(buildFact("profile.hobby", sanitizeValue(koHobby[1]), input, at, 0.8, metadata));
   }
 
   const enHobby = input.match(/\bmy\s+hobby\s+is\s+([^.!\n]{1,80})/iu);
   if (enHobby?.[1]) {
-    facts.push(buildFact("profile.hobby", sanitizeValue(enHobby[1]), input, at, 0.8));
+    facts.push(buildFact("profile.hobby", sanitizeValue(enHobby[1]), input, at, 0.8, metadata));
   }
 
   return dedupeFacts(facts);
@@ -142,10 +158,13 @@ export function shouldStoreInGroupMemory(text: string, role: MemoryRole): boolea
     );
   const looksLikeQuestion = /[?？]\s*$/.test(input);
 
-  if (hasPersonalSignal && !hasSharedKeyword) {
+  if (hasPersonalSignal) {
     return false;
   }
-  if (hasSharedKeyword || hasGlobalDirective) {
+  if (hasSharedKeyword && !looksLikeQuestion) {
+    return true;
+  }
+  if (hasGlobalDirective && !looksLikeQuestion) {
     return true;
   }
   if (role === "assistant" && !looksLikeQuestion) {
@@ -165,7 +184,8 @@ export function summarizeTurns(turns: Turn[]): string {
         role: turn.role,
         text,
         score: scoreSalience(text),
-        at: turn.at
+        at: turn.at,
+        ownerUserId: turn.ownerUserId
       };
       return scored;
     })
@@ -183,7 +203,7 @@ export function summarizeTurns(turns: Turn[]): string {
       return b.at - a.at;
     })
     .slice(0, 4)
-    .map((item) => `${item.role === "user" ? "user" : "assistant"}: ${item.text}`);
+    .map((item) => `${formatSummarySpeaker(item)}: ${item.text}`);
 
   return picked.join("\n");
 }
@@ -193,7 +213,8 @@ function buildFact(
   value: string,
   sourceText: string,
   at: number,
-  confidence: number
+  confidence: number,
+  metadata: SemanticFactMetadata
 ): SemanticFact {
   const clean = sanitizeValue(value);
   return {
@@ -205,16 +226,29 @@ function buildFact(
     lastConfirmedAt: at,
     confidence,
     salience: scoreSalience(sourceText),
-    embedding: embedText(clean)
+    embedding: embedText(clean),
+    sourceTurnId: metadata.sourceTurnId,
+    createdByUserId: metadata.createdByUserId,
+    visibility: metadata.visibility,
+    scopeKind: metadata.scopeKind
   };
 }
 
 function sanitizeValue(value: string): string {
-  return String(value ?? "")
+  return stripTrailingParticles(
+    String(value ?? "")
     .replace(/[\n\r\t]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 120);
+    .slice(0, 120)
+  );
+}
+
+function stripTrailingParticles(value: string): string {
+  return value.replace(
+    /(?:이라고|라고|이란|란|으로|로|은|는|이|가|을|를|와|과|도|만|랑|이나|나)$/u,
+    ""
+  );
 }
 
 function collectMulti(text: string, regex: RegExp): RegExpExecArray[] {
@@ -239,6 +273,16 @@ function dedupeFacts(facts: SemanticFact[]): SemanticFact[] {
     out.push(fact);
   }
   return out;
+}
+
+function formatSummarySpeaker(item: ScoredTurn): string {
+  if (item.role === "assistant") {
+    return "assistant";
+  }
+  if (item.ownerUserId) {
+    return `user(${item.ownerUserId})`;
+  }
+  return "user";
 }
 
 function isScoredTurn(value: ScoredTurn | null): value is ScoredTurn {
