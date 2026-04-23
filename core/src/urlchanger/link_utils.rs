@@ -32,6 +32,7 @@ static INSTAGRAM_CAPTURE_RE: Lazy<Regex> =
 pub struct LinkConversion {
     pub original: String,
     pub converted: String,
+    pub cleaned_original: String,
     pub disable_preview: bool,
 }
 
@@ -199,7 +200,6 @@ fn has_tracking_params(url: &Url, raw: &str) -> bool {
 }
 
 pub fn convert_x_links(text: &str) -> Vec<LinkConversion> {
-    // capture optional dot prefix to allow opt-out of previews (e.g., ".https://x.com/...")
     let mut links = Vec::new();
 
     for cap in X_LINK_CAPTURE_RE.captures_iter(text) {
@@ -208,9 +208,12 @@ pub fn convert_x_links(text: &str) -> Vec<LinkConversion> {
             let original_url = url_match.as_str();
             match Url::parse(original_url) {
                 Ok(mut parsed) => {
+                    let cleaned_original = {
+                        parsed.set_query(None);
+                        parsed.set_fragment(None);
+                        parsed.to_string()
+                    };
                     parsed.set_host(Some("fxtwitter.com")).ok();
-                    parsed.set_query(None);
-                    parsed.set_fragment(None);
                     let original_in_text = if dot_prefix {
                         format!(".{}", original_url)
                     } else {
@@ -219,6 +222,7 @@ pub fn convert_x_links(text: &str) -> Vec<LinkConversion> {
                     links.push(LinkConversion {
                         original: original_in_text,
                         converted: parsed.to_string(),
+                        cleaned_original,
                         disable_preview: dot_prefix,
                     });
                 }
@@ -230,7 +234,7 @@ pub fn convert_x_links(text: &str) -> Vec<LinkConversion> {
     links
 }
 
-pub fn convert_instagram_links(text: &str) -> Vec<(String, String)> {
+pub fn convert_instagram_links(text: &str) -> Vec<LinkConversion> {
     let mut links = Vec::new();
 
     for cap in INSTAGRAM_CAPTURE_RE.captures_iter(text) {
@@ -238,10 +242,18 @@ pub fn convert_instagram_links(text: &str) -> Vec<(String, String)> {
             let original_url = m.as_str();
             match Url::parse(original_url) {
                 Ok(mut parsed) => {
+                    let cleaned_original = {
+                        parsed.set_query(None);
+                        parsed.set_fragment(None);
+                        parsed.to_string()
+                    };
                     parsed.set_host(Some("www.kkinstagram.com")).ok();
-                    parsed.set_query(None);
-                    parsed.set_fragment(None);
-                    links.push((original_url.to_string(), parsed.to_string()));
+                    links.push(LinkConversion {
+                        original: original_url.to_string(),
+                        converted: parsed.to_string(),
+                        cleaned_original,
+                        disable_preview: false,
+                    });
                 }
                 Err(e) => warn!("Instagram 링크 파싱 실패: {}", e),
             }
@@ -322,6 +334,10 @@ mod tests {
             pairs[0].converted,
             "https://fxtwitter.com/lettuce9094/status/1997610286262718819"
         );
+        assert_eq!(
+            pairs[0].cleaned_original,
+            "https://x.com/lettuce9094/status/1997610286262718819"
+        );
         assert!(!pairs[0].disable_preview);
         assert_eq!(
             pairs[0].original,
@@ -339,6 +355,7 @@ mod tests {
             pairs[0].converted,
             "https://fxtwitter.com/user/status/12345"
         );
+        assert_eq!(pairs[0].cleaned_original, "https://x.com/user/status/12345");
         assert_eq!(pairs[0].original, ".https://x.com/user/status/12345?s=99");
     }
 
@@ -347,6 +364,13 @@ mod tests {
         let text = "https://www.instagram.com/p/DR_uVJVklbf/?utm_source=ig_web_copy_link&igsh=Nm9hazRuaXNrdGo1";
         let pairs = convert_instagram_links(text);
         assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0].1, "https://www.kkinstagram.com/p/DR_uVJVklbf/");
+        assert_eq!(
+            pairs[0].converted,
+            "https://www.kkinstagram.com/p/DR_uVJVklbf/"
+        );
+        assert_eq!(
+            pairs[0].cleaned_original,
+            "https://www.instagram.com/p/DR_uVJVklbf/"
+        );
     }
 }

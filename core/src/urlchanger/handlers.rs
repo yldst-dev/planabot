@@ -148,7 +148,7 @@ where
     let username = display_name(msg);
     let cleaned_text = build_cleaned_message_text(msg.text().unwrap_or(""), links);
     let message = format!("정리 완료.\n선생님.\n{}: {}", username, cleaned_text);
-    let reply_markup = build_music_keyboard(links, false);
+    let reply_markup = build_music_keyboard(links);
 
     let mut request = send_in_thread(bot, msg, message);
     if let Some(markup) = reply_markup {
@@ -183,8 +183,12 @@ where
     } else {
         format!("정리 완료.\n선생님.\n{}: {}", username, cleaned_text)
     };
-
-    send_in_thread(bot, msg, message).await?;
+    let reply_markup = build_youtube_keyboard(links);
+    let mut request = send_in_thread(bot, msg, message);
+    if let Some(markup) = reply_markup {
+        request = request.reply_markup(markup);
+    }
+    request.await?;
     Ok(())
 }
 
@@ -212,7 +216,7 @@ where
     } else {
         format!("정리 완료.\n선생님.\n{}: {}", username, cleaned_text)
     };
-    let reply_markup = build_music_keyboard(links, true);
+    let reply_markup = build_music_keyboard(links);
 
     let mut request = send_in_thread(bot, msg, message);
     if let Some(markup) = reply_markup {
@@ -234,7 +238,7 @@ where
     <B as Requester>::SendMessage: Send,
 {
     let text = build_cleaned_links_text(links);
-    let markup = build_music_keyboard(links, false);
+    let markup = build_music_keyboard(links);
 
     send_reply_with_fallback(
         bot,
@@ -265,7 +269,7 @@ where
     let text = if had_tracking {
         "정리 완료.\n선생님.\n추적 파라미터를 제거했습니다.\n확인 바랍니다."
     } else {
-        "확인 완료.\n선생님.\n유튜브 링크입니다.\n임베드 버튼을 제공합니다."
+        "확인 완료.\n선생님.\n유튜브 링크입니다.\n원본 링크 버튼을 제공합니다."
     };
     send_reply_with_fallback(
         bot,
@@ -295,9 +299,9 @@ where
     let text = if had_tracking {
         "정리 완료.\n선생님.\n추적 파라미터를 제거했습니다.\n확인 바랍니다."
     } else {
-        "확인 완료.\n선생님.\n음악 플랫폼 링크입니다.\n플랫폼 링크를 제공합니다."
+        "확인 완료.\n선생님.\n음악 플랫폼 링크입니다.\n원본 링크와 플랫폼 링크를 제공합니다."
     };
-    let markup = build_music_keyboard(links, true);
+    let markup = build_music_keyboard(links);
     send_reply_with_fallback(
         bot,
         msg,
@@ -347,10 +351,7 @@ fn build_cleaned_links_text(links: &[ResolvedMusicLink]) -> String {
     }
 }
 
-fn build_music_keyboard(
-    links: &[ResolvedMusicLink],
-    include_original: bool,
-) -> Option<InlineKeyboardMarkup> {
+fn build_music_keyboard(links: &[ResolvedMusicLink]) -> Option<InlineKeyboardMarkup> {
     let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
     let multi = links.len() > 1;
 
@@ -360,9 +361,17 @@ fn build_music_keyboard(
         } else {
             String::new()
         };
+        if let Ok(parsed) = reqwest::Url::parse(&link.cleaned) {
+            rows.push(vec![InlineKeyboardButton::url(
+                format!("원본{}", suffix),
+                parsed,
+            )]);
+        } else {
+            warn!("원본 음악 URL 파싱 오류: {}", link.cleaned);
+        }
         let mut current_row: Vec<InlineKeyboardButton> = Vec::new();
         for platform in music_platform_order() {
-            if !include_original && platform == link.platform {
+            if platform == link.platform {
                 continue;
             }
             let Some(url) = link.platform_links.get(&platform) else {
@@ -399,9 +408,9 @@ fn build_youtube_keyboard(links: &[ResolvedMusicLink]) -> Option<InlineKeyboardM
 
     for (idx, link) in links.iter().enumerate() {
         let label = if multi {
-            format!("유튜브 #{}", idx + 1)
+            format!("원본 #{}", idx + 1)
         } else {
-            "유튜브".to_string()
+            "원본".to_string()
         };
         match reqwest::Url::parse(&link.cleaned) {
             Ok(parsed) => {
@@ -529,14 +538,18 @@ where
     }
 
     let disable_preview = links.iter().any(|l| l.disable_preview);
+    let markup = build_social_keyboard(links);
 
-    send_in_thread(
+    let mut request = send_in_thread(
         bot,
         msg,
         format!("정리 완료.\n선생님.\n{}: {}", username, converted_text),
     )
-    .disable_link_preview(disable_preview)
-    .await?;
+    .disable_link_preview(disable_preview);
+    if let Some(markup) = markup {
+        request = request.reply_markup(markup);
+    }
+    request.await?;
 
     Ok(())
 }
@@ -557,6 +570,7 @@ where
     }
 
     let disable_preview = links.iter().any(|l| l.disable_preview);
+    let markup = build_social_keyboard(links);
 
     send_reply_with_fallback(
         bot,
@@ -566,6 +580,7 @@ where
             converted_text
         ),
         SendOptions {
+            reply_markup: markup,
             disable_preview: Some(disable_preview),
             ..SendOptions::default()
         },
@@ -610,7 +625,7 @@ where
 async fn handle_instagram_with_admin<B>(
     bot: &B,
     msg: &Message,
-    links: &[(String, String)],
+    links: &[LinkConversion],
 ) -> HandlerResult
 where
     B: Requester + ?Sized,
@@ -625,16 +640,20 @@ where
 
     let username = display_name(msg);
     let mut converted_text = msg.text().unwrap_or("").to_string();
-    for (original, converted) in links {
-        converted_text = converted_text.replace(original, converted);
+    for link in links {
+        converted_text = converted_text.replace(&link.original, &link.converted);
     }
+    let reply_markup = build_social_keyboard(links);
 
-    send_in_thread(
+    let mut request = send_in_thread(
         bot,
         msg,
         format!("정리 완료.\n선생님.\n{}: {}", username, converted_text),
-    )
-    .await?;
+    );
+    if let Some(markup) = reply_markup {
+        request = request.reply_markup(markup);
+    }
+    request.await?;
 
     Ok(())
 }
@@ -642,7 +661,7 @@ where
 async fn handle_instagram_without_admin<B>(
     bot: &B,
     msg: &Message,
-    links: &[(String, String)],
+    links: &[LinkConversion],
 ) -> HandlerResult
 where
     B: Requester + ?Sized,
@@ -650,8 +669,8 @@ where
     <B as Requester>::SendMessage: Send,
 {
     let mut converted_text = msg.text().unwrap_or("").to_string();
-    for (original, converted) in links {
-        converted_text = converted_text.replace(original, converted);
+    for link in links {
+        converted_text = converted_text.replace(&link.original, &link.converted);
     }
 
     send_reply_with_fallback(
@@ -661,11 +680,51 @@ where
             "정리 완료.\n선생님.\n임베드 링크입니다.\n{}",
             converted_text
         ),
-        SendOptions::default(),
+        SendOptions {
+            reply_markup: build_social_keyboard(links),
+            ..SendOptions::default()
+        },
     )
     .await?;
 
     Ok(())
+}
+
+fn build_social_keyboard(links: &[LinkConversion]) -> Option<InlineKeyboardMarkup> {
+    let mut rows = Vec::new();
+    let multi = links.len() > 1;
+
+    for (idx, link) in links.iter().enumerate() {
+        let suffix = if multi {
+            format!(" #{}", idx + 1)
+        } else {
+            String::new()
+        };
+        let embed = match reqwest::Url::parse(&link.converted) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                warn!("임베드 URL 파싱 오류: {}, URL: {}", e, link.converted);
+                continue;
+            }
+        };
+        let original = match reqwest::Url::parse(&link.cleaned_original) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                warn!("원본 URL 파싱 오류: {}, URL: {}", e, link.cleaned_original);
+                continue;
+            }
+        };
+        rows.push(vec![
+            InlineKeyboardButton::url(format!("임베드{}", suffix), embed),
+            InlineKeyboardButton::url(format!("원본{}", suffix), original),
+        ]);
+    }
+
+    if rows.is_empty() {
+        None
+    } else {
+        Some(InlineKeyboardMarkup::new(rows))
+    }
 }
 
 fn display_name(msg: &Message) -> String {
