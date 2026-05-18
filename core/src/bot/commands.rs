@@ -13,6 +13,8 @@ pub(crate) enum Command {
     Token,
     #[command(description = "내 대화 메모리 초기화")]
     MemoryReset,
+    #[command(description = "오늘 할 일 확인")]
+    Todo,
     #[command(description = "현재 그룹 ID 확인")]
     GroupInfo,
 }

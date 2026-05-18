@@ -38,6 +38,14 @@ import {
   runMemoryUpdateFactCommand
 } from "./commands/memory.js";
 import { runTokensCommand } from "./commands/tokens.js";
+import {
+  runTodoAddCommand,
+  runTodoCompleteCommand,
+  runTodoDeleteCommand,
+  runTodoInterpretCommand,
+  runTodoListCommand,
+  runTodoUpdateCommand
+} from "./commands/todo.js";
 import { parseCli } from "./parse.js";
 
 export async function main(argv: string[]): Promise<void> {
@@ -77,6 +85,30 @@ export async function main(argv: string[]): Promise<void> {
   }
   if (parsed.command === "memory-migrate-json") {
     await runMemoryMigrateJsonCommand(parsed.args);
+    return;
+  }
+  if (parsed.command === "todo-list") {
+    await runTodoListCommand(parsed.args);
+    return;
+  }
+  if (parsed.command === "todo-add") {
+    await runTodoAddCommand(parsed.args);
+    return;
+  }
+  if (parsed.command === "todo-complete") {
+    await runTodoCompleteCommand(parsed.args);
+    return;
+  }
+  if (parsed.command === "todo-update") {
+    await runTodoUpdateCommand(parsed.args);
+    return;
+  }
+  if (parsed.command === "todo-delete") {
+    await runTodoDeleteCommand(parsed.args);
+    return;
+  }
+  if (parsed.command === "todo-interpret") {
+    await runTodoInterpretCommand(parsed.args);
     return;
   }
 

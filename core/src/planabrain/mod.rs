@@ -19,6 +19,19 @@ struct LocalMemoryResetOutput {
     removed: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct TodoListOutput {
+    pub items: Vec<serde_json::Value>,
+    pub markdown: String,
+    pub context: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct TodoInterpretOutput {
+    pub handled: bool,
+    pub message: String,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ImageInput {
     pub path: PathBuf,
@@ -93,6 +106,40 @@ pub(crate) async fn reset_user_memory(user_id: &str) -> Result<bool> {
             .context("로컬 장기 메모리 정리 작업이 중단되었습니다")??;
 
     Ok(removed_planabrain || removed_local.removed)
+}
+
+pub(crate) async fn list_user_todos(user_id: &str) -> Result<TodoListOutput> {
+    if !is_planabrain_enabled() {
+        return Err(anyhow!("planabrain 비활성화"));
+    }
+
+    let user_id = user_id.to_string();
+    task::spawn_blocking(move || {
+        let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
+        let stdout = run_planabrain_simple_command(&root, &["todo-list", &user_id], None)?;
+        serde_json::from_str(stdout.trim()).context("todo-list 결과 파싱 실패")
+    })
+    .await
+    .context("todo-list 실행 작업이 중단되었습니다")?
+}
+
+pub(crate) async fn interpret_todo_request(
+    user_id: &str,
+    text: &str,
+) -> Result<TodoInterpretOutput> {
+    if !is_planabrain_enabled() {
+        return Err(anyhow!("planabrain 비활성화"));
+    }
+
+    let user_id = user_id.to_string();
+    let text = text.to_string();
+    task::spawn_blocking(move || {
+        let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
+        let stdout = run_planabrain_text_command(&root, "todo-interpret", &user_id, &text)?;
+        serde_json::from_str(stdout.trim()).context("todo-interpret 결과 파싱 실패")
+    })
+    .await
+    .context("todo-interpret 실행 작업이 중단되었습니다")?
 }
 
 pub(crate) fn is_planabrain_allowed(chat_id: i64, user_id: Option<i64>, is_private: bool) -> bool {
@@ -377,6 +424,61 @@ fn build_planabrain_command(root: &Path) -> Result<ProcessCommand> {
     let mut cmd = ProcessCommand::new(tsx_path);
     cmd.arg(src_entry);
     Ok(cmd)
+}
+
+fn run_planabrain_simple_command(
+    root: &Path,
+    args: &[&str],
+    envs: Option<Vec<(&str, PathBuf)>>,
+) -> Result<String> {
+    let mut command = build_planabrain_command(root)?;
+    command.current_dir(root);
+    for arg in args {
+        command.arg(arg);
+    }
+    let repo_root = root.parent().unwrap_or(root);
+    let dotenv_path = repo_root.join(".env");
+    if dotenv_path.exists() {
+        command.env("DOTENV_CONFIG_PATH", dotenv_path);
+    }
+    if let Some(envs) = envs {
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+    }
+
+    let output = command.output().context("planabrain 명령 실행 실패")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("planabrain 오류: {}", stderr.trim()));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn run_planabrain_text_command(
+    root: &Path,
+    command_name: &str,
+    user_id: &str,
+    text: &str,
+) -> Result<String> {
+    const MAX_CLI_TEXT_CHARS: usize = 2000;
+    if text.chars().count() <= MAX_CLI_TEXT_CHARS {
+        return run_planabrain_simple_command(root, &[command_name, user_id, text], None);
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("planabrain_todo_text_{timestamp}.txt"));
+    std::fs::write(&path, text).context("todo 텍스트 파일 저장 실패")?;
+    let result = run_planabrain_simple_command(
+        root,
+        &[command_name, user_id],
+        Some(vec![("PLANABRAIN_TODO_TEXT_FILE", path.clone())]),
+    );
+    let _ = std::fs::remove_file(path);
+    result
 }
 
 fn prepare_question_with_planabrain_memory(
