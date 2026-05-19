@@ -23,6 +23,12 @@ coverage/
 # planabot data
 /.planabot
 
+# local agent/tooling
+/.codex/skills
+/.github/workflows
+/.sisyphus
+/.skills
+
 # planabrain build/deps
 /planabrain/dist
 /planabrain/node_modules
