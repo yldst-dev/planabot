@@ -69,6 +69,8 @@ struct PlanabrainReplyRecord {
     message_id: i32,
     #[serde(default)]
     conversation_scope_id: String,
+    #[serde(default)]
+    owner_user_id: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -149,7 +151,38 @@ impl AppState {
         format!("reply_{}", reply.id.0)
     }
 
+    pub(crate) fn planabrain_todo_reply_owner_user_id(&self, msg: &Message) -> Option<u64> {
+        let reply = msg.reply_to_message()?;
+        let tracker = self.planabrain_replies.read().ok()?;
+        let record = tracker.get(reply.chat.id, reply.id)?;
+        let raw_owner = record
+            .conversation_scope_id
+            .strip_prefix("todo_")
+            .and_then(|value| value.parse::<u64>().ok())?;
+        Some(record.owner_user_id.unwrap_or(raw_owner))
+    }
+
     pub(crate) async fn record_planabrain_reply(&self, msg: &Message, conversation_scope_id: &str) {
+        self.record_planabrain_reply_with_owner(msg, conversation_scope_id, None)
+            .await;
+    }
+
+    pub(crate) async fn record_planabrain_reply_for_user(
+        &self,
+        msg: &Message,
+        conversation_scope_id: &str,
+        owner_user_id: u64,
+    ) {
+        self.record_planabrain_reply_with_owner(msg, conversation_scope_id, Some(owner_user_id))
+            .await;
+    }
+
+    async fn record_planabrain_reply_with_owner(
+        &self,
+        msg: &Message,
+        conversation_scope_id: &str,
+        owner_user_id: Option<u64>,
+    ) {
         let snapshot = {
             let mut tracker = match self.planabrain_replies.write() {
                 Ok(tracker) => tracker,
@@ -159,6 +192,7 @@ impl AppState {
                 chat_id: msg.chat.id.0,
                 message_id: msg.id.0,
                 conversation_scope_id: conversation_scope_id.to_string(),
+                owner_user_id,
             });
             tracker.records()
         };
@@ -333,6 +367,7 @@ mod tests {
             chat_id: 100,
             message_id: 42,
             conversation_scope_id: "msg_40".to_string(),
+            owner_user_id: None,
         });
 
         let record = tracker.get(ChatId(100), MessageId(42)).unwrap();
@@ -345,5 +380,15 @@ mod tests {
         let parsed: Vec<PlanabrainReplyRecord> = serde_json::from_str(raw).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].conversation_scope_id, "");
+        assert_eq!(parsed[0].owner_user_id, None);
+    }
+
+    #[test]
+    fn reply_records_deserialize_with_owner_user_id() {
+        let raw = r#"[{"chat_id":1,"message_id":2,"conversation_scope_id":"todo_10","owner_user_id":10}]"#;
+        let parsed: Vec<PlanabrainReplyRecord> = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].conversation_scope_id, "todo_10");
+        assert_eq!(parsed[0].owner_user_id, Some(10));
     }
 }

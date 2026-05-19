@@ -240,8 +240,20 @@ where
 
             match planabrain::list_user_todos(&user.id.to_string()).await {
                 Ok(result) => {
-                    send_reply_with_fallback(&bot, &msg, result.markdown, SendOptions::default())
-                        .await?;
+                    let sent = send_reply_with_fallback(
+                        &bot,
+                        &msg,
+                        result.markdown,
+                        SendOptions::default(),
+                    )
+                    .await?;
+                    state
+                        .record_planabrain_reply_for_user(
+                            &sent,
+                            &format!("todo_{}", user.id.0),
+                            user.id.0,
+                        )
+                        .await;
                 }
                 Err(err) => {
                     error!("todo 목록 조회 실패: {}", err);
@@ -310,7 +322,13 @@ where
         return Ok(());
     }
 
-    add_heart_reaction(&bot, &msg).await;
+    let requester_user_id = msg.from.as_ref().map(|user| user.id.0);
+    if state
+        .planabrain_todo_reply_owner_user_id(&msg)
+        .is_some_and(|owner_user_id| requester_user_id != Some(owner_user_id))
+    {
+        return Ok(());
+    }
 
     let user_id = msg
         .from
@@ -327,6 +345,8 @@ where
         .await?;
         return Ok(());
     }
+
+    add_heart_reaction(&bot, &msg).await;
 
     let conversation_scope_id = state.planabrain_conversation_scope_id(&msg);
     let question = question.trim().to_string();
@@ -355,9 +375,19 @@ where
         Ok(todo) if todo.handled => {
             let sent =
                 send_reply_with_fallback(&bot, &msg, todo.message, SendOptions::default()).await?;
-            state
-                .record_planabrain_reply(&sent, &conversation_scope_id)
-                .await;
+            if let Some(owner_user_id) = requester_user_id {
+                state
+                    .record_planabrain_reply_for_user(
+                        &sent,
+                        &format!("todo_{owner_user_id}"),
+                        owner_user_id,
+                    )
+                    .await;
+            } else {
+                state
+                    .record_planabrain_reply(&sent, &conversation_scope_id)
+                    .await;
+            }
             return Ok(());
         }
         Ok(_) => {}
