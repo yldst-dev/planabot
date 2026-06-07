@@ -4,6 +4,7 @@ mod health;
 mod hitomi;
 mod planabrain;
 mod reboot;
+mod schedule;
 mod time;
 mod token;
 mod urlchanger;
@@ -44,6 +45,7 @@ async fn main() -> Result<()> {
         notice_chat_id,
         notice_url,
     );
+    schedule::spawn_schedule_worker(bot.clone(), state.schedule_store.clone());
 
     if let Err(err) = bot::run(bot, state).await {
         log::error!("치명적인 오류 발생: {:?}", err);

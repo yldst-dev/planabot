@@ -37,6 +37,7 @@ import {
   runMemoryResetUserCommand,
   runMemoryUpdateFactCommand
 } from "./commands/memory.js";
+import { runScheduleInterpretCommand } from "./commands/schedule.js";
 import { runTokensCommand } from "./commands/tokens.js";
 import {
   runTodoAddCommand,
@@ -109,6 +110,10 @@ export async function main(argv: string[]): Promise<void> {
   }
   if (parsed.command === "todo-interpret") {
     await runTodoInterpretCommand(parsed.args);
+    return;
+  }
+  if (parsed.command === "schedule-interpret") {
+    await runScheduleInterpretCommand(parsed.args);
     return;
   }
 

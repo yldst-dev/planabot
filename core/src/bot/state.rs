@@ -9,6 +9,7 @@ use teloxide::types::{ChatId, ChatKind, Message, MessageId, PublicChatKind, User
 use tokio::fs;
 
 use crate::hitomi::GalleryClient;
+use crate::schedule::ScheduleStore;
 
 #[derive(Debug)]
 struct PlanabrainReplyTracker {
@@ -86,6 +87,7 @@ pub struct AppState {
     group_registry: Arc<RwLock<HashSet<ChatId>>>,
     group_registry_path: PathBuf,
     image_rate_limiter: Arc<Mutex<ImageRateLimiter>>,
+    pub(crate) schedule_store: ScheduleStore,
 }
 
 impl AppState {
@@ -106,6 +108,7 @@ impl AppState {
         let planabrain_replies_path = resolve_planabrain_replies_path();
         let planabrain_replies = load_planabrain_replies(&planabrain_replies_path);
         let image_rate_limiter = ImageRateLimiter::new(2, Duration::from_secs(60));
+        let schedule_store = ScheduleStore::new();
 
         Self {
             bot_username,
@@ -119,6 +122,7 @@ impl AppState {
             group_registry: Arc::new(RwLock::new(group_registry)),
             group_registry_path,
             image_rate_limiter: Arc::new(Mutex::new(image_rate_limiter)),
+            schedule_store,
         }
     }
 

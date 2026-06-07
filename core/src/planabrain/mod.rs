@@ -32,6 +32,19 @@ pub(crate) struct TodoInterpretOutput {
     pub message: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ScheduleInterpretOutput {
+    pub handled: bool,
+    pub action: String,
+    pub kind: Option<String>,
+    pub title: Option<String>,
+    pub due_at_ms: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub target: Option<String>,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ImageInput {
     pub path: PathBuf,
@@ -135,11 +148,42 @@ pub(crate) async fn interpret_todo_request(
     let text = text.to_string();
     task::spawn_blocking(move || {
         let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
-        let stdout = run_planabrain_text_command(&root, "todo-interpret", &user_id, &text)?;
+        let stdout = run_planabrain_text_command(
+            &root,
+            "todo-interpret",
+            &[&user_id],
+            &text,
+            "PLANABRAIN_TODO_TEXT_FILE",
+            "planabrain_todo_text",
+        )?;
         serde_json::from_str(stdout.trim()).context("todo-interpret 결과 파싱 실패")
     })
     .await
     .context("todo-interpret 실행 작업이 중단되었습니다")?
+}
+
+pub(crate) async fn interpret_schedule_request(text: &str) -> Result<ScheduleInterpretOutput> {
+    if !is_planabrain_enabled() {
+        return Err(anyhow!("planabrain 비활성화"));
+    }
+
+    let text = text.to_string();
+    task::spawn_blocking(move || {
+        let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
+        let now = crate::schedule::now_ms().to_string();
+        let stdout = run_planabrain_text_command_with_string_env(
+            &root,
+            "schedule-interpret",
+            &[],
+            &text,
+            "PLANABRAIN_SCHEDULE_TEXT_FILE",
+            "planabrain_schedule_text",
+            Some(vec![("PLANABRAIN_NOW_MS", now)]),
+        )?;
+        serde_json::from_str(stdout.trim()).context("schedule-interpret 결과 파싱 실패")
+    })
+    .await
+    .context("schedule-interpret 실행 작업이 중단되었습니다")?
 }
 
 pub(crate) fn is_planabrain_allowed(chat_id: i64, user_id: Option<i64>, is_private: bool) -> bool {
@@ -431,6 +475,15 @@ fn run_planabrain_simple_command(
     args: &[&str],
     envs: Option<Vec<(&str, PathBuf)>>,
 ) -> Result<String> {
+    run_planabrain_simple_command_with_string_env(root, args, envs, None)
+}
+
+fn run_planabrain_simple_command_with_string_env(
+    root: &Path,
+    args: &[&str],
+    envs: Option<Vec<(&str, PathBuf)>>,
+    string_envs: Option<Vec<(&str, String)>>,
+) -> Result<String> {
     let mut command = build_planabrain_command(root)?;
     command.current_dir(root);
     for arg in args {
@@ -446,6 +499,11 @@ fn run_planabrain_simple_command(
             command.env(key, value);
         }
     }
+    if let Some(string_envs) = string_envs {
+        for (key, value) in string_envs {
+            command.env(key, value);
+        }
+    }
 
     let output = command.output().context("planabrain 명령 실행 실패")?;
     if !output.status.success() {
@@ -458,24 +516,54 @@ fn run_planabrain_simple_command(
 fn run_planabrain_text_command(
     root: &Path,
     command_name: &str,
-    user_id: &str,
+    leading_args: &[&str],
     text: &str,
+    text_file_env: &str,
+    temp_prefix: &str,
+) -> Result<String> {
+    run_planabrain_text_command_with_string_env(
+        root,
+        command_name,
+        leading_args,
+        text,
+        text_file_env,
+        temp_prefix,
+        None,
+    )
+}
+
+fn run_planabrain_text_command_with_string_env(
+    root: &Path,
+    command_name: &str,
+    leading_args: &[&str],
+    text: &str,
+    text_file_env: &str,
+    temp_prefix: &str,
+    extra_envs: Option<Vec<(&str, String)>>,
 ) -> Result<String> {
     const MAX_CLI_TEXT_CHARS: usize = 2000;
     if text.chars().count() <= MAX_CLI_TEXT_CHARS {
-        return run_planabrain_simple_command(root, &[command_name, user_id, text], None);
+        let mut args = Vec::with_capacity(leading_args.len() + 2);
+        args.push(command_name);
+        args.extend_from_slice(leading_args);
+        args.push(text);
+        return run_planabrain_simple_command_with_string_env(root, &args, None, extra_envs);
     }
 
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!("planabrain_todo_text_{timestamp}.txt"));
-    std::fs::write(&path, text).context("todo 텍스트 파일 저장 실패")?;
-    let result = run_planabrain_simple_command(
+    let path = std::env::temp_dir().join(format!("{temp_prefix}_{timestamp}.txt"));
+    std::fs::write(&path, text).context("planabrain 텍스트 파일 저장 실패")?;
+    let mut args = Vec::with_capacity(leading_args.len() + 1);
+    args.push(command_name);
+    args.extend_from_slice(leading_args);
+    let result = run_planabrain_simple_command_with_string_env(
         root,
-        &[command_name, user_id],
-        Some(vec![("PLANABRAIN_TODO_TEXT_FILE", path.clone())]),
+        &args,
+        Some(vec![(text_file_env, path.clone())]),
+        extra_envs,
     );
     let _ = std::fs::remove_file(path);
     result

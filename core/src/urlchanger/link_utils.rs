@@ -27,6 +27,14 @@ static INSTAGRAM_LINK_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"https?://(?:www\.)?instagram\.com/\S+").unwrap());
 static INSTAGRAM_CAPTURE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(https?://(?:www\.)?instagram\.com/\S+)").unwrap());
+static THREADS_LINK_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"https?://(?:www\.)?threads\.(?:com|net)/(?:@[\w.]+/post|t)/\S+").unwrap()
+});
+static THREADS_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(https?://(?:www\.)?threads\.(?:com|net)/(?:@[\w.]+/post|t)/\S+)").unwrap()
+});
+
+const INSTAGRAM_PRIMARY_HOST: &str = "vxinstagram.com";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkConversion {
@@ -65,6 +73,10 @@ pub fn contains_x_link(text: &str) -> bool {
 
 pub fn contains_instagram_link(text: &str) -> bool {
     INSTAGRAM_LINK_RE.is_match(text)
+}
+
+pub fn contains_threads_link(text: &str) -> bool {
+    THREADS_LINK_RE.is_match(text)
 }
 
 pub fn clean_music_url(url_str: &str) -> String {
@@ -183,6 +195,7 @@ fn is_tracking_param(key: &str) -> bool {
             | "itsct"
             | "ls"
             | "uo"
+            | "xmt"
     ) || key.starts_with("utm_")
 }
 
@@ -234,28 +247,91 @@ pub fn convert_x_links(text: &str) -> Vec<LinkConversion> {
     links
 }
 
+fn build_social_conversion(
+    original_url: &str,
+    primary_host: &str,
+) -> Result<LinkConversion, url::ParseError> {
+    let mut parsed = Url::parse(original_url)?;
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    let cleaned_original = parsed.to_string();
+
+    parsed.set_host(Some(primary_host)).ok();
+    Ok(LinkConversion {
+        original: original_url.to_string(),
+        converted: parsed.to_string(),
+        cleaned_original,
+        disable_preview: false,
+    })
+}
+
+fn build_threads_tracking_cleanup(
+    original_url: &str,
+) -> Result<Option<LinkConversion>, url::ParseError> {
+    let mut parsed = Url::parse(original_url)?;
+    let had_fragment = parsed.fragment().is_some();
+    let had_tracking_query = parsed
+        .query_pairs()
+        .any(|(key, _)| is_tracking_param(key.as_ref()));
+
+    if !had_fragment && !had_tracking_query {
+        return Ok(None);
+    }
+
+    if parsed.query().is_some() {
+        let query_pairs: Vec<(String, String)> = parsed
+            .query_pairs()
+            .filter(|(key, _)| !is_tracking_param(key.as_ref()))
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+
+        if query_pairs.is_empty() {
+            parsed.set_query(None);
+        } else {
+            let mut pairs = parsed.query_pairs_mut();
+            pairs.clear();
+            for (key, value) in query_pairs {
+                pairs.append_pair(&key, &value);
+            }
+        }
+    }
+    parsed.set_fragment(None);
+    let cleaned = parsed.to_string();
+
+    Ok(Some(LinkConversion {
+        original: original_url.to_string(),
+        converted: cleaned.clone(),
+        cleaned_original: cleaned,
+        disable_preview: false,
+    }))
+}
+
 pub fn convert_instagram_links(text: &str) -> Vec<LinkConversion> {
     let mut links = Vec::new();
 
     for cap in INSTAGRAM_CAPTURE_RE.captures_iter(text) {
         if let Some(m) = cap.get(1) {
             let original_url = m.as_str();
-            match Url::parse(original_url) {
-                Ok(mut parsed) => {
-                    let cleaned_original = {
-                        parsed.set_query(None);
-                        parsed.set_fragment(None);
-                        parsed.to_string()
-                    };
-                    parsed.set_host(Some("www.kkinstagram.com")).ok();
-                    links.push(LinkConversion {
-                        original: original_url.to_string(),
-                        converted: parsed.to_string(),
-                        cleaned_original,
-                        disable_preview: false,
-                    });
-                }
+            match build_social_conversion(original_url, INSTAGRAM_PRIMARY_HOST) {
+                Ok(link) => links.push(link),
                 Err(e) => warn!("Instagram 링크 파싱 실패: {}", e),
+            }
+        }
+    }
+
+    links
+}
+
+pub fn convert_threads_links(text: &str) -> Vec<LinkConversion> {
+    let mut links = Vec::new();
+
+    for cap in THREADS_CAPTURE_RE.captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            let original_url = m.as_str();
+            match build_threads_tracking_cleanup(original_url) {
+                Ok(Some(link)) => links.push(link),
+                Ok(None) => {}
+                Err(e) => warn!("Threads 링크 파싱 실패: {}", e),
             }
         }
     }
@@ -364,13 +440,62 @@ mod tests {
         let text = "https://www.instagram.com/p/DR_uVJVklbf/?utm_source=ig_web_copy_link&igsh=Nm9hazRuaXNrdGo1";
         let pairs = convert_instagram_links(text);
         assert_eq!(pairs.len(), 1);
-        assert_eq!(
-            pairs[0].converted,
-            "https://www.kkinstagram.com/p/DR_uVJVklbf/"
-        );
+        assert_eq!(pairs[0].converted, "https://vxinstagram.com/p/DR_uVJVklbf/");
         assert_eq!(
             pairs[0].cleaned_original,
             "https://www.instagram.com/p/DR_uVJVklbf/"
         );
+    }
+
+    #[test]
+    fn test_convert_threads_post_links_rewrites_host_and_strips_query() {
+        let text = "https://www.threads.com/@meta/post/DG7ABCDxyz1?igshid=test";
+        let pairs = convert_threads_links(text);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(
+            pairs[0].converted,
+            "https://www.threads.com/@meta/post/DG7ABCDxyz1"
+        );
+        assert_eq!(
+            pairs[0].cleaned_original,
+            "https://www.threads.com/@meta/post/DG7ABCDxyz1"
+        );
+    }
+
+    #[test]
+    fn test_convert_threads_share_links_rewrites_threads_net() {
+        let text = "https://threads.net/t/DWLAqGNknz8?xmt=AQGz";
+        let pairs = convert_threads_links(text);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].converted, "https://threads.net/t/DWLAqGNknz8");
+        assert_eq!(
+            pairs[0].cleaned_original,
+            "https://threads.net/t/DWLAqGNknz8"
+        );
+    }
+
+    #[test]
+    fn test_convert_threads_links_keeps_non_tracking_query() {
+        let text = "https://threads.net/t/DWLAqGNknz8?foo=bar&xmt=AQGz#section";
+        let pairs = convert_threads_links(text);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(
+            pairs[0].converted,
+            "https://threads.net/t/DWLAqGNknz8?foo=bar"
+        );
+    }
+
+    #[test]
+    fn test_threads_links_without_tracking_are_ignored() {
+        let text = "https://www.threads.com/@meta/post/DG7ABCDxyz1";
+        assert!(contains_threads_link(text));
+        assert!(convert_threads_links(text).is_empty());
+    }
+
+    #[test]
+    fn test_threads_profile_only_links_are_ignored() {
+        let text = "https://www.threads.com/@meta";
+        assert!(!contains_threads_link(text));
+        assert!(convert_threads_links(text).is_empty());
     }
 }

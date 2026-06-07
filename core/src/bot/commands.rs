@@ -15,6 +15,10 @@ pub(crate) enum Command {
     MemoryReset,
     #[command(description = "오늘 할 일 확인")]
     Todo,
+    #[command(description = "일정 확인 또는 등록")]
+    Schedule,
+    #[command(description = "타이머 등록")]
+    Timer,
     #[command(description = "현재 그룹 ID 확인")]
     GroupInfo,
 }

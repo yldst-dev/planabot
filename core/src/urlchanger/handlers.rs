@@ -1,7 +1,8 @@
 use crate::bot::{AppState, HandlerResult, SendOptions, send_in_thread, send_reply_with_fallback};
 use crate::urlchanger::link_utils::{
-    LinkConversion, MusicPlatform, contains_instagram_link, contains_music_link, contains_x_link,
-    convert_instagram_links, convert_x_links, extract_music_links,
+    LinkConversion, MusicPlatform, contains_instagram_link, contains_music_link,
+    contains_threads_link, contains_x_link, convert_instagram_links, convert_threads_links,
+    convert_x_links, extract_music_links,
 };
 use crate::urlchanger::music_resolver::{ResolvedMusicLink, music_http, resolve_music_links};
 use chrono::Utc;
@@ -47,6 +48,12 @@ where
                 msg.text().is_some() && contains_instagram_link(msg.text().unwrap())
             })
             .endpoint(handle_instagram_links::<B>),
+        )
+        .branch(
+            dptree::filter(|msg: Message| {
+                msg.text().is_some() && contains_threads_link(msg.text().unwrap())
+            })
+            .endpoint(handle_threads_links::<B>),
         ),
     )
 }
@@ -682,6 +689,101 @@ where
         ),
         SendOptions {
             reply_markup: build_social_keyboard(links),
+            ..SendOptions::default()
+        },
+    )
+    .await?;
+
+    Ok(())
+}
+
+pub async fn handle_threads_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
+where
+    B: Requester + Clone + Send + Sync + 'static,
+    B::Err: std::error::Error + Send + Sync + 'static,
+    <B as Requester>::GetChatMember: Send,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
+{
+    state.record_group_chat(&msg).await;
+
+    let text = msg.text().unwrap_or("");
+    let links = convert_threads_links(text);
+
+    if links.is_empty() {
+        return Ok(());
+    }
+
+    let chat_member = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
+        Ok(member) => member,
+        Err(e) => {
+            error!("관리자 권한 확인 중 오류 발생(Threads): {:?}", e);
+            return handle_threads_without_admin(&bot, &msg, &links).await;
+        }
+    };
+
+    if chat_member.kind.is_privileged() {
+        handle_threads_with_admin(&bot, &msg, &links).await
+    } else {
+        handle_threads_without_admin(&bot, &msg, &links).await
+    }
+}
+
+async fn handle_threads_with_admin<B>(
+    bot: &B,
+    msg: &Message,
+    links: &[LinkConversion],
+) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: Send + Sync + 'static,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
+{
+    if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
+        warn!("Threads 메시지 삭제 실패: {:?}", e);
+        return handle_threads_without_admin(bot, msg, links).await;
+    }
+
+    let username = display_name(msg);
+    let mut converted_text = msg.text().unwrap_or("").to_string();
+    for link in links {
+        converted_text = converted_text.replace(&link.original, &link.converted);
+    }
+
+    let request = send_in_thread(
+        bot,
+        msg,
+        format!("정리 완료.\n선생님.\n{}: {}", username, converted_text),
+    );
+    request.await?;
+
+    Ok(())
+}
+
+async fn handle_threads_without_admin<B>(
+    bot: &B,
+    msg: &Message,
+    links: &[LinkConversion],
+) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: Send + Sync + 'static,
+    <B as Requester>::SendMessage: Send,
+{
+    let mut converted_text = msg.text().unwrap_or("").to_string();
+    for link in links {
+        converted_text = converted_text.replace(&link.original, &link.converted);
+    }
+
+    send_reply_with_fallback(
+        bot,
+        msg,
+        format!(
+            "정리 완료.\n선생님.\n추적 파라미터를 제거했습니다.\n{}",
+            converted_text
+        ),
+        SendOptions {
             ..SendOptions::default()
         },
     )

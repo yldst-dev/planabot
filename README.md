@@ -10,7 +10,9 @@
 
 - Hitomi 갤러리 조회
 - YouTube, Spotify, Apple Music 추적 파라미터 정리
-- X/Twitter → `fxtwitter`, Instagram → `kkinstagram` 변환
+- X/Twitter → `fxtwitter`, Instagram → `vxinstagram` 변환
+- Threads 포스트 링크 추적 파라미터 정리
+- 일정/타이머 등록과 예약 메시지 전송
 - `프라나야` 호출 기반 AI 응답
 - 그룹 채팅 답장 체인 기준 맥락 유지
 - 이미지 입력 분석
@@ -94,10 +96,17 @@ npm run dev
   - `/version`
   - `/token`
   - `/memoryreset`
+  - `/schedule`
+  - `/timer`
   - `/groupinfo`
 - AI 호출
   - `프라나야`로 시작하는 메시지
   - 일반 텍스트, 캡션, 답장, 답장 이미지까지 함께 반영
+- 일정/타이머
+  - `/schedule`로 등록된 일정 확인
+  - `/schedule 내일 오후 3시 회의 준비`처럼 일정 등록
+  - `/timer 10분 물 확인`처럼 타이머 등록
+  - 자연어로 일정 취소와 목록 확인
 
 ## 프라나 AI 동작
 
@@ -296,13 +305,13 @@ mkdir -p .planabot
 ### 이미지 태그 지정 배포
 
 ```bash
-PLANABOT_IMAGE_TAG=0.1.12 ./deploy.sh
+PLANABOT_IMAGE_TAG=0.1.13 ./deploy.sh
 ```
 
 또는 `.env`에 아래 값을 넣어도 됩니다.
 
 ```dotenv
-PLANABOT_IMAGE_TAG=0.1.12
+PLANABOT_IMAGE_TAG=0.1.13
 ```
 
 ### ARM64 주의사항
@@ -322,7 +331,7 @@ PLANABOT_IMAGE_TAG=0.1.12
 이미지 위치:
 
 - `ghcr.io/yldst-dev/planabot:latest`
-- `ghcr.io/yldst-dev/planabot:0.1.12`
+- `ghcr.io/yldst-dev/planabot:0.1.13`
 
 ## 로컬 수동 릴리즈
 
@@ -336,26 +345,26 @@ GitHub Actions를 기다리지 않고 로컬에서 멀티아키 이미지를 직
 추가한 스크립트:
 
 ```bash
-./scripts/release-ghcr.sh 0.1.12
+./scripts/release-ghcr.sh 0.1.13
 ```
 
 동작:
 
 - `gh auth token` 또는 `GHCR_TOKEN`, `GITHUB_TOKEN`으로 GHCR 로그인
 - `linux/amd64,linux/arm64` 멀티아키 빌드
-- `ghcr.io/yldst-dev/planabot:0.1.12` 푸시
+- `ghcr.io/yldst-dev/planabot:0.1.13` 푸시
 - 기본값으로 `latest`도 함께 갱신
 
 `latest` 갱신 없이 버전 태그만 올리려면:
 
 ```bash
-PUSH_LATEST=0 ./scripts/release-ghcr.sh 0.1.12
+PUSH_LATEST=0 ./scripts/release-ghcr.sh 0.1.13
 ```
 
 릴리즈 생성 예시:
 
 ```bash
-gh release create v0.1.12 --title "v0.1.12" --notes-file RELEASE_NOTES.md
+gh release create v0.1.13 --title "v0.1.13" --notes-file RELEASE_NOTES.md
 ```
 
 ## 체크리스트
@@ -380,4 +389,7 @@ cd planabrain && npm run typecheck && npm run build
 - 30초 응답 지연 감지
 - 내부 메타 응답 누출 필터링
 - 응답 잘림 자동 이어쓰기
+- `/schedule`, `/timer` 기반 일정/타이머 예약
+- Instagram 임베드 변환 도메인 `vxinstagram` 적용
+- Threads 포스트 링크 추적 파라미터 정리
 - `/version` 명령으로 현재 실행 버전 확인
