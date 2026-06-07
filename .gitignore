@@ -25,7 +25,6 @@ coverage/
 
 # local agent/tooling
 /.codex/skills
-/.github/workflows
 /.sisyphus
 /.skills
 
