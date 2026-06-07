@@ -336,9 +336,7 @@ pub(crate) fn render_schedule_list(items: &[ScheduleItem]) -> String {
 }
 
 pub(crate) fn render_schedule_add_result(result: &ScheduleMutation) -> String {
-    if result.ok
-        && let Some(item) = result.item.as_ref()
-    {
+    if let (true, Some(item)) = (result.ok, result.item.as_ref()) {
         return format!(
             "등록 완료.\n선생님.\n{}에 알려드리겠습니다.\n\n{}",
             format_kst(item.due_at_ms),
