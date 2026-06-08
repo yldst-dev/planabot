@@ -5,6 +5,7 @@ const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const MAX_TIMER_MS = 30 * DAY_MS;
 const MAX_SCHEDULE_MS = 366 * DAY_MS;
+const DEFAULT_SCHEDULE_TITLE = "요청하신 내용";
 
 export type ScheduleInterpretOutput = {
   handled: boolean;
@@ -84,7 +85,7 @@ export function interpretScheduleRequest(text: string): ScheduleInterpretOutput 
     handled: true,
     action: "add",
     kind: parsedTime.kind,
-    title: title || (parsedTime.kind === "timer" ? "타이머" : "일정"),
+    title: title || DEFAULT_SCHEDULE_TITLE,
     dueAtMs: parsedTime.dueAtMs,
     ...(parsedTime.durationMs ? { durationMs: parsedTime.durationMs } : {})
   };
@@ -227,9 +228,11 @@ function extractScheduleTitle(text: string, parsedTime: ParsedTime): string {
   }
   value = value
     .replace(/프라나야/g, " ")
+    .replace(/^\s*(?:(?:알려\s*줘|알려\s*주세요|알림|타이머|리마인더|리마인드|예약|등록|추가|생성|설정|맞춰)(?:\s*(?:해줘|해주세요|해|줘))?\s*)+/gi, " ")
     .replace(/(?:일정|스케줄|타이머|알림|리마인더|리마인드|예약)(?:을|를|에|로)?/gi, " ")
     .replace(/(?:등록|추가|생성|설정|맞춰|알려|예약)(?:해줘|해주세요|해|합니다|해라|줘)?$/gi, " ")
     .replace(/(?:해줘|해주세요|해|줘|부탁)$/gi, " ")
+    .replace(/\s*(?:이라고요|라고요|이라고|라고|이라)\s*$/g, " ")
     .replace(/(?:에|때|쯤)$/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -388,7 +391,7 @@ function extractUserText(text: string): string {
 function cleanupText(text: string): string {
   return text
     .replace(/^[\s:：,.\-에때쯤]+/, "")
-    .replace(/(?:을|를|은|는|이|가|도|좀|제발|부탁)$/g, "")
+    .replace(/(?:을|를|은|는|도|좀|제발|부탁)$/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 500);

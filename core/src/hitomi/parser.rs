@@ -5,7 +5,7 @@ use log::{error, warn};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::{Client, StatusCode};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 #[derive(Clone)]
 pub struct GalleryClient {
@@ -131,12 +131,16 @@ struct GalleryRaw {
     #[serde(default)]
     n: Option<String>,
     #[serde(default)]
+    #[serde(deserialize_with = "null_to_empty_vec")]
     tags: Vec<Tag>,
     #[serde(default)]
+    #[serde(deserialize_with = "null_to_empty_vec")]
     t: Vec<Tag>,
     #[serde(default)]
+    #[serde(deserialize_with = "null_to_empty_vec")]
     artists: Vec<Artist>,
     #[serde(default)]
+    #[serde(deserialize_with = "null_to_empty_vec")]
     a: Vec<Artist>,
     #[serde(default)]
     language_localname: Option<String>,
@@ -194,10 +198,49 @@ fn merge_artists(a: Vec<Artist>, b: Vec<Artist>) -> Vec<String> {
     out
 }
 
+fn null_to_empty_vec<'de, D, T>(deserializer: D) -> std::result::Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 fn normalize_js_payload(raw: String) -> String {
     static PREFIX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*var\s+galleryinfo\s*=\s*").unwrap());
 
     let without_prefix = PREFIX.replace(raw.trim_start(), "");
     let trimmed = without_prefix.trim();
     trimmed.trim_end_matches(';').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GalleryInfo, GalleryRaw, normalize_js_payload};
+
+    #[test]
+    fn parses_gallery_with_null_artists() {
+        let raw = r#"var galleryinfo = {"title":"Sample","tags":[{"tag":"korean"}],"artists":null,"a":null,"language_localname":"한국어"};"#;
+        let normalized = normalize_js_payload(raw.to_string());
+        let parsed: GalleryRaw = serde_json::from_str(&normalized).unwrap();
+        let info = GalleryInfo::from_raw("2732349".to_string(), parsed);
+
+        assert_eq!(info.id, "2732349");
+        assert_eq!(info.title, "Sample");
+        assert_eq!(info.artists, "정보 없음");
+        assert_eq!(info.language, "한국어");
+        assert_eq!(info.tags, vec!["korean"]);
+    }
+
+    #[test]
+    fn parses_gallery_with_null_tags_and_artist_aliases() {
+        let raw = r#"{"n":"Fallback","tags":null,"t":null,"artists":null,"a":[{"artist":"alpha"}],"language":"korean"}"#;
+        let parsed: GalleryRaw = serde_json::from_str(raw).unwrap();
+        let info = GalleryInfo::from_raw("100".to_string(), parsed);
+
+        assert_eq!(info.title, "Fallback");
+        assert_eq!(info.artists, "alpha");
+        assert_eq!(info.language, "korean");
+        assert!(info.tags.is_empty());
+    }
 }

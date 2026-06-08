@@ -1,22 +1,33 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use chrono::{FixedOffset, TimeZone};
 use log::{error, info, warn};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, MessageId, ThreadId};
+use teloxide::types::{ChatId, MessageId, ParseMode, ReplyParameters, ThreadId};
+use teloxide::utils::html;
 use tokio::fs;
 use tokio::time::{self, Duration};
 
 const MAX_SCHEDULE_ITEMS: usize = 500;
 const MAX_USER_PENDING_ITEMS: usize = 100;
 const SCHEDULE_POLL_SECONDS: u64 = 15;
+const DEFAULT_SCHEDULE_TITLE: &str = "요청하신 내용";
 
 static SCHEDULE_ID_SEQ: AtomicU64 = AtomicU64::new(1);
+static TITLE_COMMAND_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:(?:프라나야|프라나)\s*)?(?:(?:알려\s*줘|알려\s*주세요|알림|타이머|리마인더|리마인드|예약|등록|추가|생성|설정|맞춰)(?:\s*(?:해줘|해주세요|해|줘))?\s*)+")
+        .expect("title command prefix regex should be valid")
+});
+static TITLE_COMMAND_SUFFIX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\s*(?:(?:알려\s*줘|알려\s*주세요|알림|타이머|리마인더|리마인드|예약|등록|추가|생성|설정|맞춰)(?:\s*(?:해줘|해주세요|해|줘))?|(?:해줘|해주세요|부탁|줘))+$")
+        .expect("title command suffix regex should be valid")
+});
 
 #[derive(Clone)]
 pub(crate) struct ScheduleStore {
@@ -96,9 +107,9 @@ impl ScheduleStore {
 
     pub(crate) async fn add(&self, input: NewSchedule) -> Result<ScheduleMutation> {
         let now = now_ms();
-        let title = normalize_title(&input.title);
+        let mut title = normalize_title(&input.title);
         if title.is_empty() {
-            return Ok(self.mutation_error(input.owner_user_id, "내용을 확인하지 못했습니다."));
+            title = default_schedule_title().to_string();
         }
         if input.due_at_ms <= now {
             return Ok(
@@ -379,9 +390,11 @@ pub(crate) fn now_ms() -> i64 {
 }
 
 fn render_due_message(item: &ScheduleItem) -> String {
+    let owner = format!("<a href=\"tg://user?id={}\">선생님</a>", item.owner_user_id);
+    let title = html::escape(&item.title);
     match item.kind {
-        ScheduleKind::Schedule => format!("알림.\n선생님.\n{}", item.title),
-        ScheduleKind::Timer => format!("타이머 완료.\n선생님.\n{}", item.title),
+        ScheduleKind::Schedule => format!("알림.\n{owner}.\n{title}"),
+        ScheduleKind::Timer => format!("타이머 완료.\n{owner}.\n{title}"),
     }
 }
 
@@ -393,18 +406,28 @@ where
 {
     let chat_id = ChatId(item.chat_id);
     let mut req = bot.send_message(chat_id, text.clone());
+    req = req.parse_mode(ParseMode::Html);
     if let Some(thread_id) = item.message_thread_id {
         req = req.message_thread_id(thread_id);
+    }
+    if let Some(message_id) = item.source_message_id {
+        req = req.reply_parameters(ReplyParameters::new(message_id).allow_sending_without_reply());
     }
     match req.await {
         Ok(_) => Ok(()),
         Err(err) => {
-            if err
-                .to_string()
-                .to_lowercase()
-                .contains("message thread not found")
-            {
-                bot.send_message(chat_id, text).await?;
+            let err_text = err.to_string().to_lowercase();
+            if err_text.contains("message thread not found") {
+                bot.send_message(chat_id, text)
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                Ok(())
+            } else if err_text.contains("message to be replied not found") {
+                let mut fallback = bot.send_message(chat_id, text).parse_mode(ParseMode::Html);
+                if let Some(thread_id) = item.message_thread_id {
+                    fallback = fallback.message_thread_id(thread_id);
+                }
+                fallback.await?;
                 Ok(())
             } else {
                 Err(err.into())
@@ -622,13 +645,27 @@ fn create_schedule_id() -> String {
 }
 
 fn normalize_title(value: &str) -> String {
-    value
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(500)
-        .collect()
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    strip_title_commands(&compact).chars().take(500).collect()
+}
+
+fn default_schedule_title() -> &'static str {
+    DEFAULT_SCHEDULE_TITLE
+}
+
+fn strip_title_commands(value: &str) -> String {
+    let mut text = value.trim().to_string();
+    loop {
+        let next = TITLE_COMMAND_SUFFIX
+            .replace(&TITLE_COMMAND_PREFIX.replace(&text, " "), " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if next == text {
+            return next;
+        }
+        text = next;
+    }
 }
 
 fn normalize_match_text(value: &str) -> String {
@@ -678,7 +715,7 @@ mod tests {
 
     use super::{
         NewSchedule, ScheduleKind, ScheduleStore, find_schedule_match, list_pending_for_user,
-        now_ms,
+        normalize_title, now_ms,
     };
     use teloxide::types::ChatId;
 
@@ -741,6 +778,39 @@ mod tests {
             .await
             .unwrap();
         assert!(!result.ok);
+        let _ = std::fs::remove_file(store.path);
+    }
+
+    #[test]
+    fn normalize_title_removes_schedule_commands() {
+        assert_eq!(normalize_title("알려줘 라면먹을거야"), "라면먹을거야");
+        assert_eq!(normalize_title("라면먹을거야 알려줘"), "라면먹을거야");
+        assert_eq!(
+            normalize_title("프라나야 알려줘 라면먹을거야"),
+            "라면먹을거야"
+        );
+    }
+
+    #[tokio::test]
+    async fn add_uses_default_title_when_command_only() {
+        let store = ScheduleStore {
+            path: std::env::temp_dir().join(format!("planabot_schedule_test_{}.json", now_ms())),
+            items: Arc::new(Mutex::new(Vec::new())),
+        };
+        let result = store
+            .add(NewSchedule {
+                owner_user_id: 1,
+                chat_id: ChatId(10),
+                message_thread_id: None,
+                source_message_id: None,
+                kind: ScheduleKind::Timer,
+                title: "알려줘".to_string(),
+                due_at_ms: now_ms() + 1000,
+            })
+            .await
+            .unwrap();
+        assert!(result.ok);
+        assert_eq!(result.item.unwrap().title, "요청하신 내용");
         let _ = std::fs::remove_file(store.path);
     }
 }
