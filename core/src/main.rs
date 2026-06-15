@@ -15,6 +15,7 @@ use chrono::{FixedOffset, TimeZone, Utc};
 use config::Config;
 use hitomi::GalleryClient;
 use log::info;
+use std::time::Duration;
 use teloxide::Bot;
 use teloxide::prelude::Requester;
 use tokio::time::sleep;
@@ -56,14 +57,32 @@ async fn main() -> Result<()> {
 }
 
 async fn get_me_or_reboot(bot: &Bot) -> Result<teloxide::types::Me> {
-    match bot.get_me().await {
-        Ok(me) => Ok(me),
-        Err(err) => {
-            log::error!("GetMe 요청 실패: {:?}", err);
-            if bot::should_reboot_on_request_error(&err) {
-                reboot::trigger_failure_reboot("텔레그램 GetMe 통신 오류로 인한 재시동");
+    const MAX_ATTEMPTS: u32 = 6;
+    let mut attempt = 1;
+    loop {
+        match bot.get_me().await {
+            Ok(me) => return Ok(me),
+            Err(err) => {
+                if bot::is_transient_request_error(&err) && attempt < MAX_ATTEMPTS {
+                    let backoff =
+                        Duration::from_secs(1u64 << (attempt - 1)).min(Duration::from_secs(16));
+                    log::warn!(
+                        "GetMe 요청 일시 실패 (시도 {}/{}, {}초 후 재시도): {:?}",
+                        attempt,
+                        MAX_ATTEMPTS,
+                        backoff.as_secs(),
+                        err
+                    );
+                    sleep(backoff).await;
+                    attempt += 1;
+                    continue;
+                }
+                log::error!("GetMe 요청 실패: {:?}", err);
+                if bot::should_reboot_on_request_error(&err) {
+                    reboot::trigger_failure_reboot("텔레그램 GetMe 통신 오류로 인한 재시동");
+                }
+                return Err(err.into());
             }
-            Err(err.into())
         }
     }
 }

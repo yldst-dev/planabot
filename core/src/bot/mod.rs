@@ -94,6 +94,13 @@ where
     Ok(())
 }
 
+pub(crate) fn is_transient_request_error(err: &teloxide::RequestError) -> bool {
+    matches!(
+        err,
+        teloxide::RequestError::Network(_) | teloxide::RequestError::Io(_)
+    )
+}
+
 pub(crate) fn should_reboot_on_request_error(err: &teloxide::RequestError) -> bool {
     match err {
         teloxide::RequestError::Network(network_err) => !network_err.is_timeout(),
