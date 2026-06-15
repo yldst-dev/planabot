@@ -5,7 +5,9 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
-use teloxide::types::{InlineKeyboardMarkup, Message, ParseMode, ReplyParameters, ThreadId};
+use teloxide::types::{
+    ChatId, InlineKeyboardMarkup, Message, MessageId, ParseMode, ReplyParameters, ThreadId,
+};
 use teloxide::utils::markdown;
 
 #[derive(Clone, Default)]
@@ -70,6 +72,110 @@ impl PrivateDraftStatus {
                 false
             }
         }
+    }
+}
+
+/// 그룹 채팅 로딩 스피너.
+/// draft API(개인 전용)를 쓸 수 없는 그룹에서 실제 메시지를 보내고
+/// `/ | \ -` 프레임으로 편집하다가, 응답이 오면 최종 답변으로 바꾼다.
+pub(crate) struct GroupSpinner {
+    chat_id: ChatId,
+    message_id: MessageId,
+    frame: usize,
+}
+
+const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+fn spinner_text(frame: &str) -> String {
+    format!("응답 생성 중 {}\n선생님.", frame)
+}
+
+impl GroupSpinner {
+    /// 그룹 채팅에서만 시작한다. 개인 채팅이거나 비활성/실패 시 None.
+    pub(crate) async fn start<B>(bot: &B, msg: &Message) -> Option<Self>
+    where
+        B: Requester + ?Sized,
+        B::Err: std::error::Error + Send + Sync + 'static,
+    {
+        if !is_group_spinner_enabled() || msg.chat.is_private() {
+            return None;
+        }
+        let opts = SendOptions {
+            disable_notification: Some(true),
+            ..SendOptions::default()
+        };
+        match send_reply_with_fallback(bot, msg, spinner_text(SPINNER_FRAMES[0]), opts).await {
+            Ok(message) => Some(Self {
+                chat_id: message.chat.id,
+                message_id: message.id,
+                frame: 0,
+            }),
+            Err(err) => {
+                warn!("그룹 로딩 스피너 시작 실패: {}", err);
+                None
+            }
+        }
+    }
+
+    /// 다음 프레임으로 편집한다. 편집 실패(레이트리밋 등)는 무시한다.
+    pub(crate) async fn tick<B>(&mut self, bot: &B)
+    where
+        B: Requester + ?Sized,
+        B::EditMessageText: Send,
+    {
+        self.frame = (self.frame + 1) % SPINNER_FRAMES.len();
+        if let Err(err) = bot
+            .edit_message_text(
+                self.chat_id,
+                self.message_id,
+                spinner_text(SPINNER_FRAMES[self.frame]),
+            )
+            .await
+        {
+            log::debug!("그룹 스피너 편집 실패 (chat {}): {}", self.chat_id, err);
+        }
+    }
+
+    /// 로딩 메시지를 최종 답변으로 교체한다(MarkdownV2, 실패 시 이스케이프 재시도).
+    pub(crate) async fn finish_markdown<B>(self, bot: &B, text: String) -> Result<Message>
+    where
+        B: Requester + ?Sized,
+        B::Err: std::error::Error + Send + Sync + 'static,
+        B::EditMessageText: Send,
+    {
+        match bot
+            .edit_message_text(self.chat_id, self.message_id, text.clone())
+            .parse_mode(ParseMode::MarkdownV2)
+            .await
+        {
+            Ok(message) => Ok(message),
+            Err(err) => {
+                let err: anyhow::Error = err.into();
+                if is_markdown_error(&err) {
+                    let escaped = markdown::escape(&text);
+                    Ok(bot
+                        .edit_message_text(self.chat_id, self.message_id, escaped)
+                        .parse_mode(ParseMode::MarkdownV2)
+                        .await?)
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+}
+
+fn is_group_spinner_enabled() -> bool {
+    match std::env::var("PLANABOT_GROUP_SPINNER") {
+        Ok(raw) => {
+            let normalized = raw.trim().to_ascii_lowercase();
+            !(normalized.is_empty()
+                || normalized == "0"
+                || normalized == "false"
+                || normalized == "off"
+                || normalized == "no")
+        }
+        Err(_) => true,
     }
 }
 
