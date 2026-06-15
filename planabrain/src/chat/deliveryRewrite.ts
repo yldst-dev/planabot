@@ -8,7 +8,28 @@ type Params = {
   settings: Settings;
 };
 
-const DEFAULT_DELIVERY_MAX_TOKENS = 1024;
+export const DEFAULT_DELIVERY_MAX_TOKENS = 1024;
+
+// 생성/재작성 양쪽에서 공유하는 전송 포맷 규칙(문구 중복 방지)
+export function deliveryRuleLines(): string[] {
+  return [
+    `사실관계, 날짜, 수치, 고유명사, 출처는 유지하십시오.`,
+    `문장 중간에 출처를 끼워 넣지 말고, 출처는 마지막에 한 번만 "출처:" 줄로 정리하십시오.`,
+    `메타 설명, 내부 판단, 마크다운, 목록 기호는 금지합니다.`,
+  ];
+}
+
+// 1패스 생성 시 시스템 프롬프트에 주입할 전송 규칙(길이 제약을 생성 단계에서 강제)
+export function buildDeliveryGenerationRules(
+  deliveryMaxOutputTokens: number | undefined,
+): string {
+  const limit = deliveryMaxOutputTokens ?? DEFAULT_DELIVERY_MAX_TOKENS;
+  return [
+    `[전송 형식] 답변은 텔레그램 전송용 최종본입니다.`,
+    `반드시 ${limit}토큰(약 ${Math.floor(limit * 0.7)}자) 이내로 작성하십시오.`,
+    ...deliveryRuleLines(),
+  ].join("\n");
+}
 
 export async function finalizeAnswerForDelivery(params: Params): Promise<string> {
   const normalized = normalizeDeliveryText(params.answer);
@@ -29,10 +50,8 @@ export async function finalizeAnswerForDelivery(params: Params): Promise<string>
   const rewritePrompt = [
     buildSystemPrompt(params.settings),
     `다음 초안을 텔레그램 전송용 최종 답변으로 다시 작성하십시오.`,
-    `사실관계, 날짜, 수치, 고유명사, 출처는 유지하십시오.`,
     `반드시 ${deliveryTokenLimit}토큰 이내로 줄이십시오.`,
-    `문장 중간에 출처를 끼워 넣지 말고, 출처는 마지막에 한 번만 "출처:" 줄로 정리하십시오.`,
-    `메타 설명, 내부 판단, 마크다운, 목록 기호는 금지합니다.`,
+    ...deliveryRuleLines(),
   ].join("\n");
 
   try {
@@ -90,7 +109,7 @@ function normalizeDeliveryText(raw: string): string {
   if (!text) {
     return text;
   }
-  text = text.replace(/([^\n])\s*출처:\s*/g, "$1\n\n출처: ");
+  text = text.replace(/([^\n])[^\S\n]*출처:[^\S\n]*/g, "$1\n\n출처: ");
   text = text.replace(/\n{3,}/g, "\n\n").trim();
   const sourceLines = text
     .split("\n")
@@ -109,7 +128,8 @@ function normalizeDeliveryText(raw: string): string {
 }
 
 function hasInlineSourceMarker(answer: string): boolean {
-  return /[^\n]\s*출처:\s*/.test(answer);
+  // 같은 줄에 본문과 "출처:"가 섞인 경우만 인라인으로 본다(줄바꿈 분리는 정상).
+  return /[^\n][^\S\n]*출처:/.test(answer);
 }
 
 function countSourceMarkers(answer: string): number {
