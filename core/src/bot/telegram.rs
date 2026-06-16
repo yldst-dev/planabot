@@ -75,20 +75,15 @@ impl PrivateDraftStatus {
     }
 }
 
-/// 그룹 채팅 로딩 스피너.
-/// draft API(개인 전용)를 쓸 수 없는 그룹에서 실제 메시지를 보내고
-/// `/ | \ -` 프레임으로 편집하다가, 응답이 오면 최종 답변으로 바꾼다.
+/// 그룹 채팅 로딩 메시지.
+/// draft API(개인 전용)를 쓸 수 없는 그룹에서 정적 로딩 메시지를 한 번 보내두고,
+/// 응답이 오면 그 메시지를 최종 답변으로 한 번만 편집한다.
 pub(crate) struct GroupSpinner {
     chat_id: ChatId,
     message_id: MessageId,
-    frame: usize,
 }
 
-const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-fn spinner_text(frame: &str) -> String {
-    format!("응답 생성 중 {}\n선생님.", frame)
-}
+const SPINNER_LOADING_TEXT: &str = "응답 생성 중.\n선생님.";
 
 impl GroupSpinner {
     /// 그룹 채팅에서만 시작한다. 개인 채팅이거나 비활성/실패 시 None.
@@ -104,35 +99,15 @@ impl GroupSpinner {
             disable_notification: Some(true),
             ..SendOptions::default()
         };
-        match send_reply_with_fallback(bot, msg, spinner_text(SPINNER_FRAMES[0]), opts).await {
+        match send_reply_with_fallback(bot, msg, SPINNER_LOADING_TEXT, opts).await {
             Ok(message) => Some(Self {
                 chat_id: message.chat.id,
                 message_id: message.id,
-                frame: 0,
             }),
             Err(err) => {
-                warn!("그룹 로딩 스피너 시작 실패: {}", err);
+                warn!("그룹 로딩 메시지 시작 실패: {}", err);
                 None
             }
-        }
-    }
-
-    /// 다음 프레임으로 편집한다. 편집 실패(레이트리밋 등)는 무시한다.
-    pub(crate) async fn tick<B>(&mut self, bot: &B)
-    where
-        B: Requester + ?Sized,
-        B::EditMessageText: Send,
-    {
-        self.frame = (self.frame + 1) % SPINNER_FRAMES.len();
-        if let Err(err) = bot
-            .edit_message_text(
-                self.chat_id,
-                self.message_id,
-                spinner_text(SPINNER_FRAMES[self.frame]),
-            )
-            .await
-        {
-            log::debug!("그룹 스피너 편집 실패 (chat {}): {}", self.chat_id, err);
         }
     }
 

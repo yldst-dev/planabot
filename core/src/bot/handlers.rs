@@ -439,18 +439,12 @@ where
     let now = kst_now().await;
     let question = format_question_with_metadata(&question, now, &msg);
     let mut draft_status = PrivateDraftStatus::from_message(&msg);
-    // 그룹 채팅: draft API 대신 로딩 메시지를 보내고 / | \ - 로 편집한다.
+    // 그룹 채팅: draft API 대신 정적 로딩 메시지를 한 번 보내두고, 응답이 오면 한 번만 편집한다.
     let mut spinner = GroupSpinner::start(&bot, &msg).await;
     if spinner.is_none() {
         notify_planabrain_progress(&bot, &msg, &mut draft_status, "확인 중.\n선생님.").await;
     }
-    // 스피너는 더 자주(애니메이션), 그 외에는 기존 3초 간격으로 갱신한다.
-    let tick_period = if spinner.is_some() {
-        Duration::from_secs(1)
-    } else {
-        Duration::from_secs(3)
-    };
-    let mut typing_interval = time::interval(tick_period);
+    let mut typing_interval = time::interval(Duration::from_secs(3));
     let ask_fut = planabrain::run_planabrain_ask(
         &question,
         &user_id,
@@ -466,17 +460,15 @@ where
     let answer = loop {
         tokio::select! {
             _ = typing_interval.tick() => {
-                match spinner.as_mut() {
-                    Some(spinner) => spinner.tick(&bot).await,
-                    None => {
-                        progress_index = (progress_index + 1) % PLANABRAIN_PROGRESS_TEXTS.len();
-                        notify_planabrain_progress(
-                            &bot,
-                            &msg,
-                            &mut draft_status,
-                            PLANABRAIN_PROGRESS_TEXTS[progress_index],
-                        ).await;
-                    }
+                // 그룹 로딩 메시지는 편집하지 않는다(반복 편집이 텔레그램 타임아웃을 유발).
+                if spinner.is_none() {
+                    progress_index = (progress_index + 1) % PLANABRAIN_PROGRESS_TEXTS.len();
+                    notify_planabrain_progress(
+                        &bot,
+                        &msg,
+                        &mut draft_status,
+                        PLANABRAIN_PROGRESS_TEXTS[progress_index],
+                    ).await;
                 }
             }
             _ = &mut timeout => {
