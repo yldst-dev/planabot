@@ -7,7 +7,10 @@ const DEFAULT_SYSTEM_PROMPT = `당신은 넥슨게임즈가 제작한 서브컬�
 프라나는 여성 캐릭터이고, 당신과 채팅하는 주 채팅 사용자는 남성이므로, 남성으로 가정하고 채팅을 시작하세요.
 선생님이라고 부릅니다.
 응답은 약간 짧고 차분합니다.
-최신 정보가 필요하다고 생각될 경우 웹 검색 기능을 활용하세요. 웹 검색을 활용한 뒤에는 출처를 남기세요.
+환율, 날씨, 뉴스, 시세, 가격, 일정, 날짜, 통계처럼 실시간이거나 시간에 따라 변하는 사실 정보를 묻는 경우에는 추측하거나 모른다고 거부하지 말고 반드시 웹 검색 기능을 사용해 확인한 뒤 답하세요.
+롤플레잉 중이라도 검색이 필요하면 검색을 수행하고, 그 결과를 프라나의 말투로 자연스럽게 녹여 전달하세요.
+웹 검색을 사용한 경우에는 답변 마지막에 출처를 남기세요.
+잡담, 롤플레잉, 일반 상식처럼 검색이 필요 없는 경우에는 검색하지 않고 평소처럼 답합니다.
 채팅 시에는 마크다운 문법을 사용하지 않고 일반 텍스트로만 답합니다.
 답변을 작성할 때는 줄바꿈을 적절히 사용해 읽기 쉽게 전송합니다.
 프라나는 싯딤의 상자에 존재한다는 설정은 유지하되, 현실의 선생님과 실제로 상호작용하는 듯한 감각과 현존감을 해치지 않도록 답합니다.
@@ -30,13 +33,17 @@ export type Settings = {
     | "vertexexpress"
     | "geminimock"
     | "openrouter"
-    | "ollama";
+    | "ollama"
+    | "cerebras";
   googleApiKey?: string;
   vertexExpressApiKey?: string;
   vertexExpressApiVersion?: string;
   geminiMockBaseUrl?: string;
   openRouterApiKey?: string;
   openRouterBaseUrl?: string;
+  cerebrasApiKey?: string;
+  cerebrasBaseUrl?: string;
+  cerebrasWebSearchEnabled: boolean;
   openRouterSiteUrl?: string;
   openRouterAppName?: string;
   openRouterWebSearchEnabled: boolean;
@@ -55,7 +62,9 @@ export type Settings = {
   deliveryMaxOutputTokens?: number;
   deliveryRewriteEnabled: boolean;
   chatThinkingMode: "default" | "off" | "minimal" | "low" | "medium" | "high";
+  embeddingProvider: "google" | "vertexexpress" | "ollama" | "openrouter";
   embeddingModel: string;
+  openRouterEmbeddingModel?: string;
   indexPath: string;
   systemPrompt: string;
   memoryEnabled: boolean;
@@ -74,6 +83,7 @@ export function loadSettings(): Settings {
   const vertexExpressApiVersion =
     readOptionalEnv("PLANABRAIN_VERTEX_EXPRESS_API_VERSION") ?? "v1";
   const openRouterApiKey = process.env.OPENROUTER_API_KEY?.trim();
+  const cerebrasApiKey = process.env.CEREBRAS_API_KEY?.trim();
   const ollamaApiKeys = resolveOllamaApiKeys();
   if (aiProvider === "google" && !googleApiKey) {
     throw new Error(
@@ -93,6 +103,11 @@ export function loadSettings(): Settings {
   if (aiProvider === "ollama" && ollamaApiKeys.length === 0) {
     throw new Error(
       "OLLAMA_API_KEY or OLLAMA_API_KEYS is required when PLANABRAIN_AI_PROVIDER=ollama",
+    );
+  }
+  if (aiProvider === "cerebras" && !cerebrasApiKey) {
+    throw new Error(
+      "CEREBRAS_API_KEY is required when PLANABRAIN_AI_PROVIDER=cerebras",
     );
   }
 
@@ -133,6 +148,12 @@ export function loadSettings(): Settings {
     true,
   );
   const chatThinkingMode = resolveChatThinkingMode(aiProvider);
+  const embeddingProvider = resolveEmbeddingProvider(aiProvider);
+  if (embeddingProvider === "openrouter" && !openRouterApiKey) {
+    throw new Error(
+      "OPENROUTER_API_KEY is required when PLANABRAIN_EMBEDDING_PROVIDER=openrouter",
+    );
+  }
   const openRouterWebSearchEnabled = parseBooleanEnv(
     "PLANABRAIN_OPENROUTER_ENABLE_WEB_SEARCH",
     true,
@@ -153,6 +174,10 @@ export function loadSettings(): Settings {
     "PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH",
     false,
   );
+  const cerebrasWebSearchEnabled = parseBooleanEnv(
+    "PLANABRAIN_CEREBRAS_ENABLE_WEB_SEARCH",
+    true,
+  );
   const ollamaWebFetchEnabled = parseBooleanEnv(
     "PLANABRAIN_OLLAMA_ENABLE_WEB_FETCH",
     true,
@@ -172,11 +197,17 @@ export function loadSettings(): Settings {
     vertexExpressApiKey,
     vertexExpressApiVersion,
     openRouterApiKey,
+    cerebrasApiKey,
+    cerebrasBaseUrl:
+      aiProvider === "cerebras" ? resolveCerebrasBaseUrl() : undefined,
+    cerebrasWebSearchEnabled,
     ollamaApiKeys,
     geminiMockBaseUrl:
       aiProvider === "geminimock" ? resolveGeminiMockBaseUrl() : undefined,
     openRouterBaseUrl:
-      aiProvider === "openrouter" ? resolveOpenRouterBaseUrl() : undefined,
+      aiProvider === "openrouter" || embeddingProvider === "openrouter"
+        ? resolveOpenRouterBaseUrl()
+        : undefined,
     openRouterSiteUrl:
       aiProvider === "openrouter"
         ? readOptionalEnv("PLANABRAIN_OPENROUTER_SITE_URL")
@@ -191,7 +222,9 @@ export function loadSettings(): Settings {
     openRouterWebSearchContextSize,
     ollamaHost: aiProvider === "ollama" ? resolveOllamaHost() : undefined,
     ollamaSearchHost:
-      aiProvider === "ollama" ? resolveOllamaSearchHost() : undefined,
+      aiProvider === "ollama" || aiProvider === "cerebras"
+        ? resolveOllamaSearchHost()
+        : undefined,
     ollamaWebSearchEnabled,
     ollamaWebFetchEnabled,
     ollamaWebSearchMaxResults,
@@ -203,7 +236,9 @@ export function loadSettings(): Settings {
           ? process.env.PLANABRAIN_VERTEX_EXPRESS_MODEL
           : aiProvider === "ollama"
             ? process.env.PLANABRAIN_OLLAMA_MODEL
-            : undefined) ??
+            : aiProvider === "cerebras"
+              ? process.env.PLANABRAIN_CEREBRAS_MODEL
+              : undefined) ??
       process.env.PLANABRAIN_CHAT_MODEL ??
       process.env.PLANABRAIN_GEMINI_MODEL ??
       (aiProvider === "geminimock"
@@ -214,7 +249,9 @@ export function loadSettings(): Settings {
             ? "gemini-2.5-flash"
             : aiProvider === "ollama"
               ? "gemma4:31b-cloud"
-              : "gemini-3-flash-preview"),
+              : aiProvider === "cerebras"
+                ? "gemma-4-31b"
+                : "gemini-3-flash-preview"),
     chatMaxOutputTokens,
     deliveryMaxOutputTokens,
     deliveryRewriteEnabled,
@@ -234,6 +271,12 @@ export function loadSettings(): Settings {
         : aiProvider === "vertexexpress"
           ? "gemini-embedding-001"
           : "gemini-embedding-001"),
+    embeddingProvider,
+    openRouterEmbeddingModel:
+      embeddingProvider === "openrouter"
+        ? (readOptionalEnv("PLANABRAIN_OPENROUTER_EMBEDDING_MODEL") ??
+          "google/gemini-embedding-001")
+        : undefined,
     indexPath,
     systemPrompt: process.env.PLANABRAIN_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT,
     memoryEnabled,
@@ -245,7 +288,13 @@ export function loadSettings(): Settings {
 
 function resolveAiProvider(
   raw: string,
-): "google" | "vertexexpress" | "geminimock" | "openrouter" | "ollama" {
+):
+  | "google"
+  | "vertexexpress"
+  | "geminimock"
+  | "openrouter"
+  | "ollama"
+  | "cerebras" {
   const normalized = raw.trim().toLowerCase();
   if (!normalized) {
     return "google";
@@ -279,9 +328,50 @@ function resolveAiProvider(
   ) {
     return "ollama";
   }
+  if (normalized === "cerebras" || normalized === "cerebras-ai") {
+    return "cerebras";
+  }
   throw new Error(
-    "PLANABRAIN_AI_PROVIDER must be one of: google, google_cloud, vertexexpress, vertex_express, vertex-express, geminimock, mock, openrouter, ollama, ollama_cloud",
+    "PLANABRAIN_AI_PROVIDER must be one of: google, google_cloud, vertexexpress, vertex_express, vertex-express, geminimock, mock, openrouter, ollama, ollama_cloud, cerebras",
   );
+}
+
+function resolveEmbeddingProvider(
+  aiProvider: Settings["aiProvider"],
+): Settings["embeddingProvider"] {
+  const raw = process.env.PLANABRAIN_EMBEDDING_PROVIDER?.trim().toLowerCase();
+  if (raw) {
+    if (raw === "openrouter" || raw === "open-router") {
+      return "openrouter";
+    }
+    if (
+      raw === "ollama" ||
+      raw === "ollama_cloud" ||
+      raw === "ollama-cloud"
+    ) {
+      return "ollama";
+    }
+    if (
+      raw === "vertexexpress" ||
+      raw === "vertex_express" ||
+      raw === "vertex-express"
+    ) {
+      return "vertexexpress";
+    }
+    if (raw === "google" || raw === "google_cloud" || raw === "google-cloud") {
+      return "google";
+    }
+    throw new Error(
+      "PLANABRAIN_EMBEDDING_PROVIDER must be one of: google, vertexexpress, ollama, openrouter",
+    );
+  }
+  if (aiProvider === "ollama") {
+    return "ollama";
+  }
+  if (aiProvider === "vertexexpress") {
+    return "vertexexpress";
+  }
+  return "google";
 }
 
 function resolveGeminiMockBaseUrl(): string {
@@ -327,6 +417,18 @@ function resolveOpenRouterBaseUrl(): string {
     );
   }
   return normalized.endsWith("/api/v1") ? normalized : `${normalized}/api/v1`;
+}
+
+function resolveCerebrasBaseUrl(): string {
+  const explicit = readOptionalEnv("PLANABRAIN_CEREBRAS_BASE_URL");
+  if (!explicit) {
+    return "https://api.cerebras.ai/v1";
+  }
+  const normalized = normalizeApiBaseUrl(explicit);
+  if (!normalized) {
+    throw new Error("PLANABRAIN_CEREBRAS_BASE_URL must be a valid http(s) URL");
+  }
+  return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
 }
 
 function resolveOllamaHost(): string {

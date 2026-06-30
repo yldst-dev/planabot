@@ -1,7 +1,7 @@
 import type { Settings } from "../config/settings.js";
 import type { InputImage } from "../integrations/gemini/chat.js";
 import { buildSystemPrompt } from "../config/systemPrompt.js";
-import { invokeChat } from "../integrations/gemini/chat.js";
+import { ProviderRateLimitError, invokeChat } from "../integrations/gemini/chat.js";
 import {
   DEFAULT_DELIVERY_MAX_TOKENS,
   buildDeliveryGenerationRules,
@@ -46,22 +46,30 @@ export async function answerWithWebSearch(params: {
       }
     : params.settings;
 
-  const rawAnswer = await invokeChat({
-    settings: generationSettings,
-    enableSearchTool: true,
-    messages: [
-      {
-        role: "system",
-        content: systemContent,
-      },
-    ...history.map((m) =>
-        m.role === "ai"
-          ? { role: "assistant" as const, content: wrapMemoryContent(m.content, "assistant") }
-          : { role: "user" as const, content: wrapMemoryContent(m.content, "user") }
-    ),
-      { role: "user", content: params.question, images: params.images },
-    ],
-  });
+  let rawAnswer: string;
+  try {
+    rawAnswer = await invokeChat({
+      settings: generationSettings,
+      enableSearchTool: true,
+      messages: [
+        {
+          role: "system",
+          content: systemContent,
+        },
+      ...history.map((m) =>
+          m.role === "ai"
+            ? { role: "assistant" as const, content: wrapMemoryContent(m.content, "assistant") }
+            : { role: "user" as const, content: wrapMemoryContent(m.content, "user") }
+      ),
+        { role: "user", content: params.question, images: params.images },
+      ],
+    });
+  } catch (error) {
+    if (error instanceof ProviderRateLimitError) {
+      return error.message;
+    }
+    throw error;
+  }
   const answer = await finalizeAnswerForDelivery({
     question: params.question,
     answer: rawAnswer,

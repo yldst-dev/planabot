@@ -10,6 +10,44 @@ import { invokeOllamaApi } from "../ollama/api.js";
 const DEFAULT_CHAT_TEMPERATURE = 1.0;
 const DEFAULT_CHAT_TOP_P = 0.7;
 
+const RATE_LIMIT_MAX_RETRIES = 2;
+const RATE_LIMIT_RETRY_CAP_MS = 8000;
+const RATE_LIMIT_MESSAGE = [
+  "선생님.",
+  "지금 요청이 한꺼번에 몰려서 처리 용량이 잠시 가득 찼습니다.",
+  "조금만 기다렸다가 다시 말씀해 주시겠어요.",
+  "금방 정리하고 다시 도와드리겠습니다.",
+].join("\n");
+
+export class ProviderRateLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderRateLimitError";
+  }
+}
+
+async function withRateLimitRetry<T>(fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      const status = (error as { status?: number }).status;
+      if (status !== 429) {
+        throw error;
+      }
+      if (attempt >= RATE_LIMIT_MAX_RETRIES) {
+        throw new ProviderRateLimitError(RATE_LIMIT_MESSAGE);
+      }
+      const retryAfterMs = (error as { retryAfterMs?: number }).retryAfterMs;
+      const backoffMs = Math.min(
+        retryAfterMs ?? 1000 * 2 ** attempt,
+        RATE_LIMIT_RETRY_CAP_MS,
+      );
+      await sleep(backoffMs);
+    }
+  }
+}
+
 type GeminiSafetySetting = {
   category: string;
   threshold: string;
@@ -107,6 +145,9 @@ async function invokeChatOnce(params: {
   }
   if (params.settings.aiProvider === "openrouter") {
     return invokeOpenRouterChat(params.settings, params.messages, params.enableSearchTool);
+  }
+  if (params.settings.aiProvider === "cerebras") {
+    return invokeCerebrasChat(params.settings, params.messages, params.enableSearchTool);
   }
   if (params.settings.aiProvider === "geminimock" && hasImages) {
     throw new Error("이미지 입력은 현재 openrouter 또는 ollama provider에서만 지원합니다.");
@@ -235,12 +276,94 @@ async function invokeOpenRouterChat(
     headers["x-title"] = settings.openRouterAppName;
   }
 
-  return invokeOpenAICompatibleChat({
-    providerName: "OpenRouter",
-    url: `${settings.openRouterBaseUrl}/chat/completions`,
-    headers,
-    payload,
-  });
+  return withRateLimitRetry(() =>
+    invokeOpenAICompatibleChat({
+      providerName: "OpenRouter",
+      url: `${settings.openRouterBaseUrl}/chat/completions`,
+      headers,
+      payload,
+    }),
+  );
+}
+
+async function invokeCerebrasChat(
+  settings: Settings,
+  messages: ChatMessage[],
+  enableSearchTool: boolean | undefined,
+): Promise<ChatInvocationResult> {
+  if (!settings.cerebrasApiKey) {
+    throw new Error(
+      "CEREBRAS_API_KEY is required when PLANABRAIN_AI_PROVIDER=cerebras",
+    );
+  }
+  if (!settings.cerebrasBaseUrl) {
+    throw new Error(
+      "PLANABRAIN_CEREBRAS_BASE_URL is required when PLANABRAIN_AI_PROVIDER=cerebras",
+    );
+  }
+
+  const searchEnabled = Boolean(
+    enableSearchTool &&
+      settings.cerebrasWebSearchEnabled &&
+      settings.ollamaApiKeys.length > 0,
+  );
+  const tools = searchEnabled
+    ? buildOllamaSearchTools(settings.ollamaWebFetchEnabled)
+    : undefined;
+  const maxIterations = searchEnabled
+    ? Math.max(1, settings.ollamaToolMaxIterations)
+    : 1;
+  const url = `${settings.cerebrasBaseUrl}/chat/completions`;
+  const headers = { authorization: `Bearer ${settings.cerebrasApiKey}` };
+  const workingMessages: Array<Record<string, unknown>> = messages.map(
+    (message) => ({
+      role: normalizeOpenAIRole(message.role),
+      content: message.content,
+    }),
+  );
+
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    const payload: Record<string, unknown> = {
+      model: settings.chatModel,
+      temperature: DEFAULT_CHAT_TEMPERATURE,
+      top_p: DEFAULT_CHAT_TOP_P,
+      messages: workingMessages,
+    };
+    if (tools) {
+      payload.tools = tools;
+    }
+    if (settings.chatMaxOutputTokens) {
+      payload.max_tokens = settings.chatMaxOutputTokens;
+    }
+
+    const choice = await withRateLimitRetry(() =>
+      postOpenAIChatChoice({ providerName: "Cerebras", url, headers, payload }),
+    );
+    const toolCalls = tools ? extractOllamaToolCalls(choice.message) : [];
+    if (toolCalls.length === 0) {
+      const result = extractOpenAIResult({
+        choices: [{ message: choice.message, finish_reason: choice.finishReason }],
+      });
+      if (!result.content) {
+        throw new Error(
+          "Cerebras API response missing choices[0].message.content",
+        );
+      }
+      return result;
+    }
+
+    workingMessages.push(choice.message);
+    for (const toolCall of toolCalls) {
+      const result = await executeOllamaToolCall(settings, toolCall);
+      workingMessages.push({
+        role: "tool",
+        tool_call_id: toolCall.id,
+        content: JSON.stringify(result),
+      });
+    }
+  }
+
+  throw new Error("Cerebras tool-calling exceeded iteration limit");
 }
 
 function buildOpenRouterWebSearchTool(
@@ -295,13 +418,15 @@ async function invokeOllamaChat(
       };
     }
 
-    const response = await invokeOllamaApi({
-      providerName: "Ollama",
-      host: settings.ollamaHost,
-      apiKeys: settings.ollamaApiKeys,
-      path: "/api/chat",
-      payload,
-    });
+    const response = await withRateLimitRetry(() =>
+      invokeOllamaApi({
+        providerName: "Ollama",
+        host: settings.ollamaHost,
+        apiKeys: settings.ollamaApiKeys,
+        path: "/api/chat",
+        payload,
+      }),
+    );
     const message = extractOllamaMessage(response);
     const toolCalls = extractOllamaToolCalls(message);
     if (toolCalls.length === 0) {
@@ -773,7 +898,7 @@ async function invokeOpenAICompatibleChat(params: {
 
   const body = await readJsonOrText(response);
   if (!response.ok) {
-    throw new Error(buildApiErrorMessage(params.providerName, body, response.status));
+    throw buildProviderApiError(params.providerName, body, response);
   }
 
   const result = extractOpenAIResult(body);
@@ -783,6 +908,67 @@ async function invokeOpenAICompatibleChat(params: {
     );
   }
   return result;
+}
+
+async function postOpenAIChatChoice(params: {
+  providerName: string;
+  url: string;
+  payload: Record<string, unknown>;
+  headers?: Record<string, string>;
+}): Promise<{ message: Record<string, unknown>; finishReason?: string }> {
+  const response = await fetch(params.url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...params.headers,
+    },
+    body: JSON.stringify(params.payload),
+  });
+
+  const body = await readJsonOrText(response);
+  if (!response.ok) {
+    throw buildProviderApiError(params.providerName, body, response);
+  }
+
+  const record = asRecord(body);
+  const choices = record?.choices;
+  const firstChoice = Array.isArray(choices) ? asRecord(choices[0]) : null;
+  const message = asRecord(firstChoice?.message) ?? {};
+  const finishReason =
+    typeof firstChoice?.finish_reason === "string"
+      ? firstChoice.finish_reason
+      : typeof firstChoice?.finishReason === "string"
+        ? firstChoice.finishReason
+        : undefined;
+  return { message, finishReason };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(headerValue: string | null): number | undefined {
+  if (!headerValue) {
+    return undefined;
+  }
+  const seconds = Number.parseFloat(headerValue.trim());
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+  return undefined;
+}
+
+function buildProviderApiError(
+  providerName: string,
+  body: unknown,
+  response: Response,
+): Error & { status?: number; retryAfterMs?: number } {
+  const error = new Error(
+    buildApiErrorMessage(providerName, body, response.status),
+  ) as Error & { status?: number; retryAfterMs?: number };
+  error.status = response.status;
+  error.retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+  return error;
 }
 
 function buildApiErrorMessage(
