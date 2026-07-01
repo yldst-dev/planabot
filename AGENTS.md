@@ -55,11 +55,10 @@
 ## CI/CD & Deployment
 - GitHub Actions 워크플로우: `.github/workflows/ci.yml`
 - PR/push 시 테스트 자동 실행 (Rust fmt/clippy/test + TypeScript typecheck/build)
-- 테스트 통과 후에만 main/태그에서 Docker 이미지 빌드
-- 이미지는 GHCR(`ghcr.io/yldst-dev/planabot`)에 푸시
-- 프로덕션 서버: `docker-compose.prod.yml` + `deploy.sh` 사용
-- 서버에서 빌드하지 않음 (이미지 pull만 수행)
-- 롤백: `docker-compose.prod.yml`에서 이미지 태그 변경 후 재배포
+- `v*` 태그 push 시 변경 로그 기반 GitHub Release 생성
+- 프로덕션 배포: Dokploy 빌드-온-푸시 (`docker-compose.dokploy.yml`)
+- `main` push 시 Dokploy가 소스에서 직접 빌드 후 재배포 (GHCR 미사용)
+- 상태/메모리는 명명 볼륨(`planabot-state`, `planabrain-data`)으로 영속화
 
 ## 오늘 작업 (2026-01-16)
 - 프라나 톤: 봇의 모든 사용자 메시지를 프라나 말투로 통일.

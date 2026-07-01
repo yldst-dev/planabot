@@ -4,7 +4,7 @@
 
 - Rust 봇 본체: `core/`
 - TypeScript 기반 planabrain CLI: `planabrain/`
-- 운영 배포: GHCR 이미지 + `docker-compose.prod.yml`
+- 운영 배포: Dokploy 빌드-온-푸시 (`docker-compose.dokploy.yml`)
 
 ## 주요 기능
 
@@ -24,12 +24,11 @@
 ## 저장소 구조
 
 ```text
-core/                    Rust 텔레그램 봇
-planabrain/              TypeScript CLI, 메모리, 검색, provider 연동
-scripts/                 로컬 빌드/배포 보조 스크립트
-docker-compose.yml       로컬 개발용 compose
-docker-compose.prod.yml  운영 배포용 compose
-deploy.sh                서버 재배포 스크립트
+core/                       Rust 텔레그램 봇
+planabrain/                 TypeScript CLI, 메모리, 검색, provider 연동
+scripts/                    로컬 빌드 보조 스크립트
+docker-compose.yml          로컬 개발용 compose
+docker-compose.dokploy.yml  Dokploy 빌드-온-푸시용 compose
 ```
 
 ## 빠른 시작
@@ -265,18 +264,24 @@ docker compose up --build -d
 docker compose exec planabot reset-local-memory
 ```
 
-### 운영용
+## 운영 배포 (Dokploy)
 
-운영 서버는 GHCR 이미지를 직접 사용합니다.
+운영 서버는 Dokploy에서 소스를 직접 빌드하는 빌드-온-푸시 방식을 사용합니다.
 
-```yaml
-image: ghcr.io/yldst-dev/planabot:${PLANABOT_IMAGE_TAG:-latest}
-```
+### Dokploy 설정
 
-기본 서비스:
+- 서비스 타입: Docker Compose
+- Repository: `planabot`, Branch: `main`
+- Compose Path: `./docker-compose.dokploy.yml`
+- Trigger Type: On Push
+- Environment: `.env`의 모든 키를 입력 (Dokploy가 `.env`로 주입)
 
-- `planabot`
-- `cloudflared`
+`docker-compose.dokploy.yml`은 명명 볼륨으로 상태와 메모리를 영속화합니다.
+
+- `planabot-state` → `/app/.planabot`
+- `planabrain-data` → `/app/.planabrain` (로컬 메모리 sqlite, 대화 메모리)
+
+`main`에 push하면 Dokploy가 Dockerfile로 빌드 후 재배포합니다. Rust 빌드는 메모리를 많이 사용하므로 호스트 RAM 2GB 이상을 권장합니다.
 
 운영 컨테이너에서 메모리 전체 초기화:
 
@@ -284,88 +289,13 @@ image: ghcr.io/yldst-dev/planabot:${PLANABOT_IMAGE_TAG:-latest}
 docker exec planabot reset-local-memory
 ```
 
-## 운영 배포
+## 릴리즈
 
-### 서버 초기 설정
+1. 버전을 올립니다 (`Cargo.toml`, `Cargo.lock`).
+2. 커밋 후 `main`에 push합니다.
+3. Dokploy가 자동으로 빌드·배포합니다.
 
-```bash
-mkdir -p /path/to/planabot && cd /path/to/planabot
-curl -O https://raw.githubusercontent.com/yldst-dev/planabot/main/docker-compose.prod.yml
-curl -O https://raw.githubusercontent.com/yldst-dev/planabot/main/deploy.sh
-chmod +x deploy.sh
-mkdir -p .planabot
-```
-
-`.env`를 준비한 뒤 아래 명령으로 배포합니다.
-
-```bash
-./deploy.sh
-```
-
-### 이미지 태그 지정 배포
-
-```bash
-PLANABOT_IMAGE_TAG=0.1.14 ./deploy.sh
-```
-
-또는 `.env`에 아래 값을 넣어도 됩니다.
-
-```dotenv
-PLANABOT_IMAGE_TAG=0.1.14
-```
-
-### ARM64 주의사항
-
-- `latest`는 단일 아키텍처일 수 있습니다.
-- `deploy.sh`는 ARM64에서 `latest`를 못 받으면 최신 GitHub Release 태그를 조회한 뒤 해당 버전 이미지로 폴백합니다.
-- 멀티아키 운영을 원하면 릴리즈 버전 이미지를 함께 올려야 합니다.
-
-## GitHub Actions
-
-기본 자동화 흐름은 아래와 같습니다.
-
-- PR: 테스트만 실행
-- `main` push: 테스트 후 `latest` 이미지 빌드
-- `v*` 태그 push: 테스트 후 멀티아키 이미지 빌드 + GitHub Release 생성
-
-이미지 위치:
-
-- `ghcr.io/yldst-dev/planabot:latest`
-- `ghcr.io/yldst-dev/planabot:0.1.14`
-
-## 로컬 수동 릴리즈
-
-GitHub Actions를 기다리지 않고 로컬에서 멀티아키 이미지를 직접 GHCR에 푸시할 수 있습니다.
-
-1. 버전을 올립니다.
-2. 커밋과 태그를 만듭니다.
-3. 멀티아키 이미지를 푸시합니다.
-4. GitHub Release를 생성합니다.
-
-추가한 스크립트:
-
-```bash
-./scripts/release-ghcr.sh 0.1.14
-```
-
-동작:
-
-- `gh auth token` 또는 `GHCR_TOKEN`, `GITHUB_TOKEN`으로 GHCR 로그인
-- `linux/amd64,linux/arm64` 멀티아키 빌드
-- `ghcr.io/yldst-dev/planabot:0.1.14` 푸시
-- 기본값으로 `latest`도 함께 갱신
-
-`latest` 갱신 없이 버전 태그만 올리려면:
-
-```bash
-PUSH_LATEST=0 ./scripts/release-ghcr.sh 0.1.14
-```
-
-릴리즈 생성 예시:
-
-```bash
-gh release create v0.1.14 --title "v0.1.14" --notes-file RELEASE_NOTES.md
-```
+`v*` 태그를 push하면 GitHub Actions가 변경 로그 기반 GitHub Release를 생성합니다.
 
 ## 체크리스트
 
