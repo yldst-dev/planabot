@@ -5,7 +5,7 @@ use log::{error, warn};
 use teloxide::prelude::*;
 use teloxide::types::FileId;
 use teloxide::types::{
-    CallbackQuery, ChatAction, InlineKeyboardButton, InlineKeyboardMarkup, Message, ParseMode,
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ParseMode,
     ReactionType,
 };
 use teloxide::utils::html;
@@ -27,8 +27,7 @@ use super::gallery::{
     render_gallery_message, render_gallery_message_for_user,
 };
 use super::telegram::{
-    GroupSpinner, PrivateDraftStatus, SendOptions, send_reply_markdown_with_fallback,
-    send_reply_with_fallback,
+    SendOptions, send_reply_markdown_with_fallback, send_reply_with_fallback,
 };
 use super::{AppState, HandlerResult};
 
@@ -381,6 +380,8 @@ where
         .map(|user| user.id.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
+    add_heart_reaction(&bot, &msg).await;
+
     match planabrain::interpret_todo_request(&user_id, &question).await {
         Ok(todo) if todo.handled => {
             let sent =
@@ -398,7 +399,6 @@ where
                     .record_planabrain_reply(&sent, &conversation_scope_id)
                     .await;
             }
-            add_heart_reaction(&bot, &msg).await;
             return Ok(());
         }
         Ok(_) => {}
@@ -408,7 +408,6 @@ where
     }
 
     if handle_schedule_interpretation(&bot, &msg, &state, requester_user_id, &question).await? {
-        add_heart_reaction(&bot, &msg).await;
         return Ok(());
     }
 
@@ -438,13 +437,6 @@ where
     };
     let now = kst_now().await;
     let question = format_question_with_metadata(&question, now, &msg);
-    let mut draft_status = PrivateDraftStatus::from_message(&msg);
-    // 그룹 채팅: draft API 대신 정적 로딩 메시지를 한 번 보내두고, 응답이 오면 한 번만 편집한다.
-    let mut spinner = GroupSpinner::start(&bot, &msg).await;
-    if spinner.is_none() {
-        notify_planabrain_progress(&bot, &msg, &mut draft_status, "확인 중.\n선생님.").await;
-    }
-    let mut typing_interval = time::interval(Duration::from_secs(3));
     let ask_fut = planabrain::run_planabrain_ask(
         &question,
         &user_id,
@@ -455,62 +447,41 @@ where
     tokio::pin!(ask_fut);
     let timeout = time::sleep(PLANABRAIN_RESPONSE_TIMEOUT);
     tokio::pin!(timeout);
-    let mut progress_index = 0usize;
 
-    let answer = loop {
-        tokio::select! {
-            _ = typing_interval.tick() => {
-                // 그룹 로딩 메시지는 편집하지 않는다(반복 편집이 텔레그램 타임아웃을 유발).
-                if spinner.is_none() {
-                    progress_index = (progress_index + 1) % PLANABRAIN_PROGRESS_TEXTS.len();
-                    notify_planabrain_progress(
-                        &bot,
-                        &msg,
-                        &mut draft_status,
-                        PLANABRAIN_PROGRESS_TEXTS[progress_index],
-                    ).await;
-                }
-            }
-            _ = &mut timeout => {
-                error!(
-                    "planabrain 응답 시간 초과: chat_id={}, user_id={}",
-                    msg.chat.id.0,
-                    user_id
-                );
-                let sent = deliver_planabrain_answer(
-                    &bot,
-                    &msg,
-                    spinner.take(),
-                    "지연 감지.\n선생님.\n응답 전송이 180초 이상 지연되었습니다.\n실패로 간주합니다.\n다시 시도해 주세요.".to_string(),
-                )
-                .await?;
-                state
-                    .record_planabrain_reply(&sent, &conversation_scope_id)
-                    .await;
-                return Ok(());
-            }
-            result = &mut ask_fut => {
-                break result;
-            }
+    let answer = tokio::select! {
+        _ = &mut timeout => {
+            error!(
+                "planabrain 응답 시간 초과: chat_id={}, user_id={}",
+                msg.chat.id.0,
+                user_id
+            );
+            let sent = deliver_planabrain_answer(
+                &bot,
+                &msg,
+                "지연 감지.\n선생님.\n응답 전송이 180초 이상 지연되었습니다.\n실패로 간주합니다.\n다시 시도해 주세요.".to_string(),
+            )
+            .await?;
+            state
+                .record_planabrain_reply(&sent, &conversation_scope_id)
+                .await;
+            return Ok(());
         }
+        result = &mut ask_fut => result,
     };
 
     match answer {
         Ok(answer) => {
             let reply = planabrain::truncate_message(answer.trim(), 4000);
-            let sent = deliver_planabrain_answer(&bot, &msg, spinner.take(), reply).await?;
+            let sent = deliver_planabrain_answer(&bot, &msg, reply).await?;
             state
                 .record_planabrain_reply(&sent, &conversation_scope_id)
                 .await;
-            // 최종 답변이 완전히 달린 뒤 원본 메시지에 하트를 단다(알림 트리거 겸 완료 표시).
-            add_heart_reaction(&bot, &msg).await;
         }
         Err(err) => {
             error!("planabrain 응답 실패: {}", err);
             let sent = deliver_planabrain_answer(
                 &bot,
                 &msg,
-                spinner.take(),
                 "오류.\n선생님.\n응답 생성에 실패했습니다.\n잠시 후 다시 시도해 주세요."
                     .to_string(),
             )
@@ -524,28 +495,25 @@ where
     Ok(())
 }
 
-/// 그룹 스피너가 있으면 로딩 메시지를 최종 답변으로 교체하고,
-/// 없으면(개인 채팅 등) 새 메시지로 답변을 전송한다.
 async fn deliver_planabrain_answer<B>(
     bot: &B,
     msg: &Message,
-    spinner: Option<GroupSpinner>,
     text: String,
 ) -> anyhow::Result<Message>
 where
     B: Requester + ?Sized,
     B::Err: std::error::Error + Send + Sync + 'static,
-    B::EditMessageText: Send,
 {
-    if let Some(spinner) = spinner {
-        match spinner.finish_markdown(bot, text.clone()).await {
-            Ok(message) => return Ok(message),
-            Err(err) => {
-                warn!("그룹 스피너 최종 편집 실패, 새 메시지로 전송: {}", err);
-            }
-        }
-    }
-    send_reply_markdown_with_fallback(bot, msg, text, SendOptions::default()).await
+    send_reply_markdown_with_fallback(
+        bot,
+        msg,
+        text,
+        SendOptions {
+            disable_preview: Some(true),
+            ..SendOptions::default()
+        },
+    )
+    .await
 }
 
 async fn handle_schedule_command<B>(
@@ -1048,46 +1016,6 @@ pub(crate) fn is_plana_trigger(msg: &Message, state: &AppState) -> bool {
     }
 
     state.is_reply_to_planabrain(msg)
-}
-
-async fn send_typing_in_thread<B>(bot: &B, msg: &Message)
-where
-    B: Requester + ?Sized,
-    B::SendChatAction: Send,
-{
-    let mut req = bot.send_chat_action(msg.chat.id, ChatAction::Typing);
-    if let Some(thread_id) = msg.thread_id {
-        req = req.message_thread_id(thread_id);
-    }
-    if let Err(err) = req.await {
-        log::debug!("입력중 상태 전송 실패 (chat {}): {}", msg.chat.id, err);
-    }
-}
-
-const PLANABRAIN_PROGRESS_TEXTS: [&str; 3] = [
-    "응답 생성 중.\n선생님.",
-    "정리 중.\n선생님.",
-    "전송 준비 중.\n선생님.",
-];
-
-async fn notify_planabrain_progress<B>(
-    bot: &B,
-    msg: &Message,
-    draft_status: &mut Option<PrivateDraftStatus>,
-    text: &str,
-) where
-    B: Requester + ?Sized,
-    B::SendChatAction: Send,
-{
-    let sent_via_draft = match draft_status.as_mut() {
-        Some(status) => status.send(text).await,
-        None => false,
-    };
-    if sent_via_draft {
-        return;
-    }
-
-    send_typing_in_thread(bot, msg).await;
 }
 
 async fn add_heart_reaction<B>(bot: &B, msg: &Message)
