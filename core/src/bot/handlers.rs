@@ -329,7 +329,12 @@ where
         None => return Ok(()),
     };
 
-    if msg.from.as_ref().map(|user| user.is_bot).unwrap_or(false) {
+    let is_anonymous_admin = msg
+        .sender_chat
+        .as_ref()
+        .map(|chat| chat.id == msg.chat.id)
+        .unwrap_or(false);
+    if !is_anonymous_admin && msg.from.as_ref().map(|user| user.is_bot).unwrap_or(false) {
         return Ok(());
     }
 
