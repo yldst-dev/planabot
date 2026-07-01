@@ -87,6 +87,39 @@ export async function invokeChat(params: {
   return sanitizeAssistantOutput(output);
 }
 
+const URL_FETCH_MAX_CHARS = 2000;
+
+export function extractUrls(text: string): string[] {
+  const matches = text.match(/https?:\/\/[^\s<>()]+/gi) ?? [];
+  const cleaned = matches.map((url) => url.replace(/[.,;:!?)\]}'"]+$/, ""));
+  return Array.from(new Set(cleaned)).slice(0, 3);
+}
+
+export function canFetchUrls(settings: Settings): boolean {
+  return Boolean(settings.ollamaSearchHost) && settings.ollamaApiKeys.length > 0;
+}
+
+export async function fetchUrlContent(
+  settings: Settings,
+  url: string,
+): Promise<string> {
+  const raw = await invokeOllamaApi({
+    providerName: "Ollama Web Fetch",
+    host: settings.ollamaSearchHost,
+    apiKeys: settings.ollamaApiKeys,
+    path: "/api/web_fetch",
+    payload: { url },
+  });
+  const record = asRecord(raw);
+  const title = typeof record?.title === "string" ? record.title.trim() : "";
+  const content =
+    typeof record?.content === "string" ? record.content.trim() : "";
+  const text = [title, content].filter((part) => part.length > 0).join("\n");
+  return text.length > URL_FETCH_MAX_CHARS
+    ? `${text.slice(0, URL_FETCH_MAX_CHARS)}...(생략)`
+    : text;
+}
+
 async function invokeChatWithContinuation(params: {
   settings: Settings;
   messages: ChatMessage[];

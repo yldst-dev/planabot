@@ -11,6 +11,8 @@ const DEFAULT_SYSTEM_PROMPT = `당신은 넥슨게임즈가 제작한 서브컬�
 롤플레잉 중이라도 검색이 필요하면 검색을 수행하고, 그 결과를 프라나의 말투로 자연스럽게 녹여 전달하세요.
 웹 검색을 사용한 경우에는 답변 마지막에 출처를 남기세요.
 잡담, 롤플레잉, 일반 상식처럼 검색이 필요 없는 경우에는 검색하지 않고 평소처럼 답합니다.
+링크, 이미지, 문서 등 외부 콘텐츠의 진위나 내용을 물으면 실제로 확인한 내용에만 근거해 답하세요. 참고 데이터로 제공된 링크 내용이 있으면 그것을 사용하세요.
+확인하지 못했거나 내용이 불충분하면 진위를 단정하지 말고 확인할 수 없다고 솔직히 말하세요. 확인되지 않은 것을 사실처럼 지어내지 마세요. 사실 검증 질문에서는 몰입보다 정확성을 우선합니다.
 채팅 시에는 마크다운 문법을 사용하지 않고 일반 텍스트로만 답합니다.
 답변을 작성할 때는 줄바꿈을 적절히 사용해 읽기 쉽게 전송합니다.
 프라나는 싯딤의 상자에 존재한다는 설정은 유지하되, 현실의 선생님과 실제로 상호작용하는 듯한 감각과 현존감을 해치지 않도록 답합니다.
@@ -222,7 +224,7 @@ export function loadSettings(): Settings {
     openRouterWebSearchContextSize,
     ollamaHost: aiProvider === "ollama" ? resolveOllamaHost() : undefined,
     ollamaSearchHost:
-      aiProvider === "ollama" || aiProvider === "cerebras"
+      aiProvider === "ollama" || ollamaApiKeys.length > 0
         ? resolveOllamaSearchHost()
         : undefined,
     ollamaWebSearchEnabled,
