@@ -5,8 +5,7 @@ use log::{error, warn};
 use teloxide::prelude::*;
 use teloxide::types::FileId;
 use teloxide::types::{
-    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ParseMode,
-    ReactionType,
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ParseMode, ReactionType,
 };
 use teloxide::utils::html;
 use tokio::fs;
@@ -26,9 +25,7 @@ use super::gallery::{
     GalleryIdSource, build_gallery_keyboard, extract_gallery_id, is_private_chat,
     render_gallery_message, render_gallery_message_for_user,
 };
-use super::telegram::{
-    SendOptions, send_reply_markdown_with_fallback, send_reply_with_fallback,
-};
+use super::telegram::{SendOptions, send_reply_markdown_with_fallback, send_reply_with_fallback};
 use super::{AppState, HandlerResult};
 
 const PLANABRAIN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(180);
