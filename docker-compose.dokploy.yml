@@ -1,0 +1,30 @@
+services:
+  planabot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        RUST_IMAGE: ${PLANABOT_RUST_IMAGE:-rust:1.86-slim-bookworm}
+        RUNTIME_IMAGE: ${PLANABOT_RUNTIME_IMAGE:-debian:bookworm-slim}
+        NODE_IMAGE: ${PLANABOT_NODE_IMAGE:-node:22-bookworm-slim}
+    container_name: planabot
+    restart: unless-stopped
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    expose:
+      - "8080"
+      - "8081"
+    volumes:
+      - planabot-state:/app/.planabot
+      - planabrain-data:/app/.planabrain
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  planabot-state:
+  planabrain-data:
