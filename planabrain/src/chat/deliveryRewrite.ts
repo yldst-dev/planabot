@@ -117,14 +117,24 @@ function normalizeDeliveryText(raw: string): string {
   const sourceIndexes = sourceLines
     .map((line, index) => (line.trimStart().startsWith("출처:") ? index : -1))
     .filter((index) => index >= 0);
-  if (sourceIndexes.length <= 1) {
-    return sourceLines.join("\n").trim();
+  let lines = sourceLines;
+  if (sourceIndexes.length > 1) {
+    const keepIndex = sourceIndexes[sourceIndexes.length - 1] ?? -1;
+    lines = sourceLines.filter(
+      (_, index) => !sourceIndexes.includes(index) || index === keepIndex,
+    );
   }
-  const keepIndex = sourceIndexes[sourceIndexes.length - 1] ?? -1;
-  return sourceLines
-    .filter((_, index) => !sourceIndexes.includes(index) || index === keepIndex)
-    .join("\n")
-    .trim();
+  return lines.map(breakIntoSentenceLines).join("\n").trim();
+}
+
+function breakIntoSentenceLines(line: string): string {
+  const content = line.trimStart();
+  if (!content || content.startsWith("출처:") || /https?:\/\//i.test(line)) {
+    return line;
+  }
+  return line
+    .replace(/([^\s.!?][.!?]+["'”’)\]]*)[ \t]+(?=\S)/g, "$1\n")
+    .replace(/([。！？]+["'”’)\]）」』》]*)[ \t]*(?=\S)/g, "$1\n");
 }
 
 function hasInlineSourceMarker(answer: string): boolean {
