@@ -611,8 +611,9 @@ fn should_send_admin_notice(kind: planabrain::PlanabrainErrorKind) -> bool {
         Err(poisoned) => poisoned.into_inner(),
     };
     let now = Instant::now();
-    if let Some(last) = guard.get(&kind)
-        && now.duration_since(*last) < ADMIN_NOTICE_MIN_INTERVAL
+    if guard
+        .get(&kind)
+        .is_some_and(|last| now.duration_since(*last) < ADMIN_NOTICE_MIN_INTERVAL)
     {
         return false;
     }
