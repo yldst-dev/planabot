@@ -6,6 +6,12 @@ import { sanitizeAssistantOutput } from "../../chat/sanitizeOutput.js";
 import { createGoogleSearchTool } from "../googleSearch/retrievalTool.js";
 import { invokeVertexExpressChat } from "../google/vertexExpress.js";
 import { invokeOllamaApi } from "../ollama/api.js";
+import {
+  ProviderApiError,
+  classifyHttpStatus,
+  fetchWithTimeout,
+  isRetryable,
+} from "../providerError.js";
 
 const DEFAULT_CHAT_TEMPERATURE = 1.0;
 const DEFAULT_CHAT_TOP_P = 0.7;
@@ -19,9 +25,14 @@ const RATE_LIMIT_MESSAGE = [
   "금방 정리하고 다시 도와드리겠습니다.",
 ].join("\n");
 
-export class ProviderRateLimitError extends Error {
+export class ProviderRateLimitError extends ProviderApiError {
   constructor(message: string) {
-    super(message);
+    super({
+      kind: "rate_limited",
+      status: 429,
+      retryable: true,
+      message,
+    });
     this.name = "ProviderRateLimitError";
   }
 }
@@ -378,9 +389,12 @@ async function invokeCerebrasChat(
         choices: [{ message: choice.message, finish_reason: choice.finishReason }],
       });
       if (!result.content) {
-        throw new Error(
-          "Cerebras API response missing choices[0].message.content",
-        );
+        throw new ProviderApiError({
+          kind: "empty_or_filtered",
+          provider: "Cerebras",
+          status: 200,
+          message: "Cerebras API response missing choices[0].message.content",
+        });
       }
       return result;
     }
@@ -465,7 +479,12 @@ async function invokeOllamaChat(
     if (toolCalls.length === 0) {
       const content = normalizeOllamaContent(message.content);
       if (!content) {
-        throw new Error("Ollama API response missing message.content");
+        throw new ProviderApiError({
+          kind: "empty_or_filtered",
+          provider: "Ollama",
+          status: 200,
+          message: "Ollama API response missing message.content",
+        });
       }
       return {
         content,
@@ -814,7 +833,12 @@ function extractOllamaMessage(payload: unknown): Record<string, unknown> {
   const record = asRecord(payload);
   const message = asRecord(record?.message);
   if (!message) {
-    throw new Error("Ollama API response missing message");
+    throw new ProviderApiError({
+      kind: "empty_or_filtered",
+      provider: "Ollama",
+      status: 200,
+      message: "Ollama API response missing message",
+    });
   }
   return message;
 }
@@ -920,7 +944,7 @@ async function invokeOpenAICompatibleChat(params: {
   payload: Record<string, unknown>;
   headers?: Record<string, string>;
 }): Promise<ChatInvocationResult> {
-  const response = await fetch(params.url, {
+  const response = await fetchWithTimeout(params.url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -936,9 +960,12 @@ async function invokeOpenAICompatibleChat(params: {
 
   const result = extractOpenAIResult(body);
   if (!result.content) {
-    throw new Error(
-      `${params.providerName} API response missing choices[0].message.content`,
-    );
+    throw new ProviderApiError({
+      kind: "empty_or_filtered",
+      provider: params.providerName,
+      status: 200,
+      message: `${params.providerName} API response missing choices[0].message.content`,
+    });
   }
   return result;
 }
@@ -949,7 +976,7 @@ async function postOpenAIChatChoice(params: {
   payload: Record<string, unknown>;
   headers?: Record<string, string>;
 }): Promise<{ message: Record<string, unknown>; finishReason?: string }> {
-  const response = await fetch(params.url, {
+  const response = await fetchWithTimeout(params.url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -995,13 +1022,40 @@ function buildProviderApiError(
   providerName: string,
   body: unknown,
   response: Response,
-): Error & { status?: number; retryAfterMs?: number } {
-  const error = new Error(
-    buildApiErrorMessage(providerName, body, response.status),
-  ) as Error & { status?: number; retryAfterMs?: number };
-  error.status = response.status;
+): ProviderApiError {
+  const apiMessage = extractProviderErrorText(body);
+  const kind = classifyHttpStatus(response.status, apiMessage);
+  const error = new ProviderApiError({
+    kind,
+    provider: providerName,
+    status: response.status,
+    apiMessage,
+    retryable: isRetryable(kind),
+    message: buildApiErrorMessage(providerName, body, response.status),
+  });
   error.retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
   return error;
+}
+
+function extractProviderErrorText(body: unknown): string {
+  const record = asRecord(body);
+  const nestedError = asRecord(record?.error);
+  const nestedMessage = nestedError?.message;
+  if (typeof nestedMessage === "string" && nestedMessage.trim()) {
+    return nestedMessage.trim();
+  }
+  const errorValue = record?.error;
+  if (typeof errorValue === "string" && errorValue.trim()) {
+    return errorValue.trim();
+  }
+  const message = record?.message;
+  if (typeof message === "string" && message.trim()) {
+    return message.trim();
+  }
+  if (typeof body === "string" && body.trim()) {
+    return body.trim();
+  }
+  return "";
 }
 
 function buildApiErrorMessage(

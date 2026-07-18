@@ -1,3 +1,10 @@
+import {
+  ProviderApiError,
+  classifyHttpStatus,
+  fetchWithTimeout,
+  isRetryable,
+} from "../providerError.js";
+
 export async function invokeOllamaApi(params: {
   providerName: string;
   host?: string;
@@ -44,7 +51,7 @@ async function invokeOllamaApiOnce(params: {
   path: string;
   payload: Record<string, unknown>;
 }): Promise<unknown> {
-  const response = await fetch(`${params.host}${params.path}`, {
+  const response = await fetchWithTimeout(`${params.host}${params.path}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -58,19 +65,31 @@ async function invokeOllamaApiOnce(params: {
       buildApiErrorMessage(params.providerName, body, response.status),
       response.status,
       extractApiErrorText(body),
+      params.providerName,
     );
   }
   return body;
 }
 
-class OllamaApiError extends Error {
-  readonly status: number;
+class OllamaApiError extends ProviderApiError {
   readonly apiErrorText: string;
 
-  constructor(message: string, status: number, apiErrorText: string) {
-    super(message);
+  constructor(
+    message: string,
+    status: number,
+    apiErrorText: string,
+    provider: string,
+  ) {
+    const kind = classifyHttpStatus(status, apiErrorText);
+    super({
+      kind,
+      provider,
+      status,
+      apiMessage: apiErrorText,
+      retryable: isRetryable(kind),
+      message,
+    });
     this.name = "OllamaApiError";
-    this.status = status;
     this.apiErrorText = apiErrorText;
   }
 }

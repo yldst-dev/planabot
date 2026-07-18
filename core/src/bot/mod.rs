@@ -31,6 +31,7 @@ where
     <B as Requester>::GetFile: Send,
     <B as Requester>::DeleteMessage: Send,
     <B as Requester>::SendMessage: Send,
+    <B as Requester>::SendPhoto: Send,
     <B as Requester>::EditMessageText: Send,
     <B as Requester>::EditMessageCaption: Send,
     <B as Requester>::SetMessageReaction: Send,

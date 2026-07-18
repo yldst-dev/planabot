@@ -51,6 +51,68 @@ pub(crate) struct ImageInput {
     pub mime_type: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PlanabrainErrorKind {
+    CreditExhausted,
+    AuthFailed,
+    RateLimited,
+    ProviderUnavailable,
+    NetworkTimeout,
+    InvalidRequest,
+    EmptyOrFiltered,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct PlanabrainError {
+    pub kind: PlanabrainErrorKind,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub status: Option<u16>,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub retryable: bool,
+}
+
+impl std::fmt::Display for PlanabrainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "planabrain 오류[{:?}]", self.kind)?;
+        if let Some(provider) = self.provider.as_deref() {
+            write!(f, " provider={provider}")?;
+        }
+        if let Some(status) = self.status {
+            write!(f, " status={status}")?;
+        }
+        write!(f, " retryable={}: {}", self.retryable, self.message)
+    }
+}
+
+impl std::error::Error for PlanabrainError {}
+
+const PLANABRAIN_ERROR_JSON_PREFIX: &str = "PLANABRAIN_ERROR_JSON:";
+
+fn parse_planabrain_error(stderr: &str) -> Option<PlanabrainError> {
+    let json = stderr
+        .lines()
+        .rev()
+        .find_map(|line| line.trim().strip_prefix(PLANABRAIN_ERROR_JSON_PREFIX))?;
+    serde_json::from_str::<PlanabrainError>(json.trim()).ok()
+}
+
+fn stderr_without_error_json(stderr: &str) -> String {
+    stderr
+        .lines()
+        .filter(|line| !line.trim().starts_with(PLANABRAIN_ERROR_JSON_PREFIX))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
 pub(crate) fn extract_plana_question(text: &str) -> Option<String> {
     let trimmed = text.trim_start();
     let prefixes = ["프라나야"];
@@ -423,6 +485,12 @@ fn run_planabrain_ask_blocking(
         let stderr = String::from_utf8_lossy(&output.stderr);
         if let Some(path) = question_file.as_ref() {
             let _ = std::fs::remove_file(path);
+        }
+        if let Some(mut structured) = parse_planabrain_error(&stderr) {
+            if structured.message.trim().is_empty() {
+                structured.message = stderr_without_error_json(&stderr);
+            }
+            return Err(anyhow::Error::new(structured));
         }
         return Err(anyhow!("planabrain 오류: {}", stderr.trim()));
     }

@@ -48,6 +48,10 @@ import {
   runTodoUpdateCommand
 } from "./commands/todo.js";
 import { parseCli } from "./parse.js";
+import {
+  formatStructuredErrorLine,
+  toStructuredError,
+} from "../integrations/providerError.js";
 
 export async function main(argv: string[]): Promise<void> {
   const parsed = parseCli(argv);
@@ -135,5 +139,7 @@ try {
 } catch (err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
   process.stderr.write(`${message}\n`);
+  const structured = toStructuredError(err);
+  process.stderr.write(`${formatStructuredErrorLine(structured)}\n`);
   process.exitCode = 1;
 }

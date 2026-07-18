@@ -21,4 +21,6 @@ pub(crate) enum Command {
     Timer,
     #[command(description = "현재 그룹 ID 확인")]
     GroupInfo,
+    #[command(description = "USDT 후원 안내")]
+    Donation,
 }

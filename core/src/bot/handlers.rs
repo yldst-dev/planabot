@@ -1,11 +1,15 @@
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use chrono::{Datelike, FixedOffset, Timelike, Weekday};
 use log::{error, warn};
+use once_cell::sync::Lazy;
 use teloxide::prelude::*;
 use teloxide::types::FileId;
 use teloxide::types::{
-    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ParseMode, ReactionType,
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Message, ParseMode,
+    ReactionType,
 };
 use teloxide::utils::html;
 use tokio::fs;
@@ -29,6 +33,14 @@ use super::telegram::{SendOptions, send_reply_markdown_with_fallback, send_reply
 use super::{AppState, HandlerResult};
 
 const PLANABRAIN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(180);
+const ADMIN_NOTICE_MIN_INTERVAL: Duration = Duration::from_secs(600);
+
+static ADMIN_NOTICE_LAST_SENT: Lazy<Mutex<HashMap<planabrain::PlanabrainErrorKind, Instant>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+static DONATION_QR: &[u8] = include_bytes!("assets/donation_qr.png");
+
+const DONATION_CAPTION: &str = "선생님. 후원을 해 주시려는 것인가요.\n선생님의 따뜻한 마음에 감동했습니다.\n\n후원 방식은 USDT를 통해 하실 수 있습니다.\n아래에 주소를 보내드리겠습니다. 네트워크는 TRC20 이니, 헷갈리지 않게 주의해 주세요.\n(선생님의 소매를 잡고 살짝 미소지으며 고개를 끄덕입니다.)\n\n<code>TFZuvEU4UjYYmMZont2EwVtZ61weqEFHD9</code>";
 
 pub(crate) async fn handle_command<B>(
     bot: B,
@@ -294,6 +306,17 @@ where
             )
             .await?;
         }
+        Command::Donation => {
+            let photo = InputFile::memory(DONATION_QR).file_name("donation_qr.png");
+            let mut request = bot
+                .send_photo(msg.chat.id, photo)
+                .caption(DONATION_CAPTION)
+                .parse_mode(ParseMode::Html);
+            if let Some(thread_id) = msg.thread_id {
+                request = request.message_thread_id(thread_id);
+            }
+            request.await?;
+        }
     }
 
     Ok(())
@@ -480,17 +503,25 @@ where
                 .await;
         }
         Err(err) => {
-            error!("planabrain 응답 실패: {}", err);
+            let kind = err
+                .downcast_ref::<planabrain::PlanabrainError>()
+                .map(|structured| structured.kind);
+            match kind {
+                Some(kind) => error!("planabrain 응답 실패 (kind={:?}): {}", kind, err),
+                None => error!("planabrain 응답 실패: {}", err),
+            }
             let sent = deliver_planabrain_answer(
                 &bot,
                 &msg,
-                "오류.\n선생님.\n응답 생성에 실패했습니다.\n잠시 후 다시 시도해 주세요."
-                    .to_string(),
+                planabrain_error_user_message(kind).to_string(),
             )
             .await?;
             state
                 .record_planabrain_reply(&sent, &conversation_scope_id)
                 .await;
+            if let Some(kind) = kind {
+                maybe_notify_admin_service_error(&bot, &state, kind).await;
+            }
         }
     }
 
@@ -516,6 +547,77 @@ where
         },
     )
     .await
+}
+
+fn planabrain_error_user_message(kind: Option<planabrain::PlanabrainErrorKind>) -> &'static str {
+    use planabrain::PlanabrainErrorKind as K;
+    match kind {
+        Some(K::CreditExhausted) => {
+            "오류.\n선생님.\n현재 AI 서비스 이용량이 한도에 도달했습니다.\n관리자 확인이 필요하며, 잠시 후 재시도로는 해결되지 않습니다."
+        }
+        Some(K::AuthFailed) => {
+            "오류.\n선생님.\nAI 서비스 인증에 문제가 생겼습니다.\n관리자 확인이 필요합니다."
+        }
+        Some(K::RateLimited) => {
+            "혼잡.\n선생님.\n지금 요청이 몰려 처리량이 잠시 가득 찼습니다.\n조금 뒤에 다시 시도해 주세요."
+        }
+        Some(K::ProviderUnavailable) => {
+            "오류.\n선생님.\nAI 서비스가 일시적으로 불안정합니다.\n잠시 후 다시 시도해 주세요."
+        }
+        Some(K::NetworkTimeout) => {
+            "지연.\n선생님.\nAI 서비스 응답이 지연되고 있습니다.\n잠시 후 다시 시도해 주세요."
+        }
+        Some(K::InvalidRequest) => {
+            "오류.\n선생님.\n요청을 처리하지 못했습니다.\n표현을 바꿔 다시 시도해 주세요."
+        }
+        Some(K::EmptyOrFiltered) => {
+            "오류.\n선생님.\n답변을 생성하지 못했습니다.\n표현을 바꾸거나 잠시 후 다시 시도해 주세요."
+        }
+        Some(K::Unknown) | None => {
+            "오류.\n선생님.\n응답 생성에 실패했습니다.\n잠시 후 다시 시도해 주세요."
+        }
+    }
+}
+
+async fn maybe_notify_admin_service_error<B>(
+    bot: &B,
+    state: &AppState,
+    kind: planabrain::PlanabrainErrorKind,
+) where
+    B: Requester + ?Sized,
+    B::Err: std::error::Error + Send + Sync + 'static,
+{
+    use planabrain::PlanabrainErrorKind as K;
+    let label = match kind {
+        K::CreditExhausted => "이용 한도 도달",
+        K::AuthFailed => "인증 오류",
+        _ => return,
+    };
+    let Some(notice_chat_id) = state.notice_chat_id else {
+        return;
+    };
+    if !should_send_admin_notice(kind) {
+        return;
+    }
+    let text = format!("[알림] AI 서비스 오류: {label}. 관리자 확인이 필요합니다.");
+    if let Err(err) = bot.send_message(notice_chat_id, text).await {
+        warn!("관리자 알림 전송 실패: {}", err);
+    }
+}
+
+fn should_send_admin_notice(kind: planabrain::PlanabrainErrorKind) -> bool {
+    let mut guard = match ADMIN_NOTICE_LAST_SENT.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let now = Instant::now();
+    if let Some(last) = guard.get(&kind)
+        && now.duration_since(*last) < ADMIN_NOTICE_MIN_INTERVAL
+    {
+        return false;
+    }
+    guard.insert(kind, now);
+    true
 }
 
 async fn handle_schedule_command<B>(

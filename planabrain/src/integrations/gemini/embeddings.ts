@@ -3,6 +3,12 @@ import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import type { Settings } from "../../config/settings.js";
 import { createVertexExpressEmbeddingsClient } from "../google/vertexExpress.js";
 import { invokeOllamaApi } from "../ollama/api.js";
+import {
+  ProviderApiError,
+  classifyHttpStatus,
+  fetchWithTimeout,
+  isRetryable,
+} from "../providerError.js";
 
 export type EmbeddingsClient = {
   embedDocuments(texts: string[]): Promise<number[][]>;
@@ -59,7 +65,7 @@ async function requestOpenRouterEmbeddings(
   model: string,
   inputs: string[],
 ): Promise<number[][]> {
-  const response = await fetch(`${baseUrl}/embeddings`, {
+  const response = await fetchWithTimeout(`${baseUrl}/embeddings`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -79,12 +85,24 @@ async function requestOpenRouterEmbeddings(
   }
   if (!response.ok) {
     const record = asRecord(body);
-    const error = asRecord(record?.error);
-    const message =
-      (typeof error?.message === "string" && error.message) ||
-      (typeof body === "string" && body) ||
-      `status ${response.status}`;
-    throw new Error(`OpenRouter embeddings error (${response.status}): ${message}`);
+    const nestedError = asRecord(record?.error);
+    let providerText = "";
+    if (typeof nestedError?.message === "string" && nestedError.message.trim()) {
+      providerText = nestedError.message.trim();
+    } else if (typeof body === "string" && body.trim()) {
+      providerText = body.trim();
+    }
+    const kind = classifyHttpStatus(response.status, providerText);
+    throw new ProviderApiError({
+      kind,
+      provider: "OpenRouter",
+      status: response.status,
+      apiMessage: providerText,
+      retryable: isRetryable(kind),
+      message: `OpenRouter embeddings error (${response.status}): ${
+        providerText || `status ${response.status}`
+      }`,
+    });
   }
 
   const record = asRecord(body);
