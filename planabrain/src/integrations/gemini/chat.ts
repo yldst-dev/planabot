@@ -7,6 +7,7 @@ import { createGoogleSearchTool } from "../googleSearch/retrievalTool.js";
 import { invokeVertexExpressChat } from "../google/vertexExpress.js";
 import { invokeOllamaApi } from "../ollama/api.js";
 import { fetchWebPage } from "../webFetch.js";
+import { WebToolPolicy } from "../webToolPolicy.js";
 import {
   ProviderApiError,
   classifyHttpStatus,
@@ -94,6 +95,7 @@ export async function invokeChat(params: {
   settings: Settings;
   messages: ChatMessage[];
   enableSearchTool?: boolean;
+  webFetchUrlSource?: string;
 }): Promise<string> {
   const output = await invokeChatWithContinuation(params);
   return sanitizeAssistantOutput(output);
@@ -103,6 +105,7 @@ async function invokeChatWithContinuation(params: {
   settings: Settings;
   messages: ChatMessage[];
   enableSearchTool?: boolean;
+  webFetchUrlSource?: string;
 }): Promise<string> {
   let workingMessages = [...params.messages];
   let combined = "";
@@ -113,6 +116,7 @@ async function invokeChatWithContinuation(params: {
       settings: params.settings,
       messages: workingMessages,
       enableSearchTool: params.enableSearchTool,
+      webFetchUrlSource: params.webFetchUrlSource,
     });
     combined = combined
       ? mergeContinuationContent(combined, result.content)
@@ -144,6 +148,7 @@ async function invokeChatOnce(params: {
   settings: Settings;
   messages: ChatMessage[];
   enableSearchTool?: boolean;
+  webFetchUrlSource?: string;
 }): Promise<ChatInvocationResult> {
   const hasImages = params.messages.some((message) => (message.images?.length ?? 0) > 0);
   if (params.settings.aiProvider === "google") {
@@ -159,13 +164,23 @@ async function invokeChatOnce(params: {
     return invokeOpenRouterChat(params.settings, params.messages, params.enableSearchTool);
   }
   if (params.settings.aiProvider === "cerebras") {
-    return invokeCerebrasChat(params.settings, params.messages, params.enableSearchTool);
+    return invokeCerebrasChat(
+      params.settings,
+      params.messages,
+      params.enableSearchTool,
+      params.webFetchUrlSource,
+    );
   }
   if (params.settings.aiProvider === "geminimock" && hasImages) {
     throw new Error("이미지 입력은 현재 openrouter 또는 ollama provider에서만 지원합니다.");
   }
   if (params.settings.aiProvider === "ollama") {
-    return invokeOllamaChat(params.settings, params.messages, params.enableSearchTool);
+    return invokeOllamaChat(
+      params.settings,
+      params.messages,
+      params.enableSearchTool,
+      params.webFetchUrlSource,
+    );
   }
   return invokeGeminiMockChat(params.settings, params.messages);
 }
@@ -302,6 +317,7 @@ async function invokeCerebrasChat(
   settings: Settings,
   messages: ChatMessage[],
   enableSearchTool: boolean | undefined,
+  webFetchUrlSource: string | undefined,
 ): Promise<ChatInvocationResult> {
   if (!settings.cerebrasApiKey) {
     throw new Error(
@@ -332,6 +348,7 @@ async function invokeCerebrasChat(
       content: message.content,
     }),
   );
+  const webToolPolicy = new WebToolPolicy(webFetchUrlSource ?? "");
 
   for (let iteration = 0; iteration < maxIterations; iteration += 1) {
     const payload: Record<string, unknown> = {
@@ -368,7 +385,11 @@ async function invokeCerebrasChat(
 
     workingMessages.push(choice.message);
     for (const toolCall of toolCalls) {
-      const result = await executeOllamaToolCall(settings, toolCall);
+      const result = await executeOllamaToolCall(
+        settings,
+        toolCall,
+        webToolPolicy,
+      );
       workingMessages.push({
         role: "tool",
         tool_call_id: toolCall.id,
@@ -404,6 +425,7 @@ async function invokeOllamaChat(
   settings: Settings,
   messages: ChatMessage[],
   enableSearchTool: boolean | undefined,
+  webFetchUrlSource: string | undefined,
 ): Promise<ChatInvocationResult> {
   const normalizedMessages = messages.map((message) => toOllamaMessage(message));
   const webSearchAvailable = Boolean(enableSearchTool && settings.ollamaWebSearchEnabled);
@@ -413,6 +435,7 @@ async function invokeOllamaChat(
   const tools = buildWebTools(webSearchAvailable, webFetchAvailable);
   const maxIterations = Math.max(1, settings.ollamaToolMaxIterations);
   let workingMessages = normalizedMessages;
+  const webToolPolicy = new WebToolPolicy(webFetchUrlSource ?? "");
 
   for (let iteration = 0; iteration < maxIterations; iteration += 1) {
     const payload: Record<string, unknown> = {
@@ -464,7 +487,11 @@ async function invokeOllamaChat(
 
     workingMessages = [...workingMessages, message];
     for (const toolCall of toolCalls) {
-      const result = await executeOllamaToolCall(settings, toolCall);
+      const result = await executeOllamaToolCall(
+        settings,
+        toolCall,
+        webToolPolicy,
+      );
       workingMessages.push({
         role: "tool",
         name: toolCall.name,
@@ -771,7 +798,11 @@ function buildWebTools(
 async function executeOllamaToolCall(
   settings: Settings,
   toolCall: OllamaToolCall,
+  policy: WebToolPolicy,
 ): Promise<unknown> {
+  if (!policy.tryStartToolCall()) {
+    return { error: "웹 도구 호출 한도를 초과했습니다." };
+  }
   if (toolCall.name === "web_search") {
     if (settings.ollamaApiKeys.length === 0) {
       throw new Error("OLLAMA_API_KEY or OLLAMA_API_KEYS is required for Ollama web search");
@@ -782,7 +813,7 @@ async function executeOllamaToolCall(
       settings.ollamaWebSearchMaxResults,
       requestedMaxResults ?? settings.ollamaWebSearchMaxResults,
     );
-    return invokeOllamaApi({
+    const result = await invokeOllamaApi({
       providerName: "Ollama Web Search",
       host: settings.ollamaSearchHost,
       apiKeys: settings.ollamaApiKeys,
@@ -792,8 +823,13 @@ async function executeOllamaToolCall(
         max_results: maxResults,
       },
     });
+    policy.addSearchResult(result);
+    return result;
   }
   const url = readRequiredString(toolCall.arguments.url, "web_fetch.url");
+  if (!policy.allowsFetch(url)) {
+    return { error: "현재 요청이나 검색 결과에 없는 URL은 가져올 수 없습니다." };
+  }
   try {
     return await fetchWebPage(settings, url);
   } catch {

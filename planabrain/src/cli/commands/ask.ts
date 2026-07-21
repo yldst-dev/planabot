@@ -21,8 +21,15 @@ export async function runAskCommand(args: string[], settings: Settings): Promise
   }
 
   const userId = process.env.PLANABRAIN_USER_ID ?? "cli";
+  const linkSourceText = process.env.PLANABRAIN_CURRENT_TURN_TEXT?.trim() || question;
   const images = await resolveImagesFromEnv();
-  const answer = await answerWithWebSearch({ question, settings, userId, images });
+  const answer = await answerWithWebSearch({
+    question,
+    settings,
+    userId,
+    images,
+    linkSourceText,
+  });
   process.stdout.write(`${answer}\n`);
 }
 

@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  decodeWebBody,
   extractReadableContent,
   extractUrls,
   isBlockedAddress,
   parseWebFetchUrl,
 } from "./webFetch.js";
+import { WebToolPolicy } from "./webToolPolicy.js";
 
 test("extractUrls removes punctuation, duplicates URLs, and limits results", () => {
   const text = [
@@ -21,6 +23,21 @@ test("extractUrls removes punctuation, duplicates URLs, and limits results", () 
     "https://example.com/a",
     "https://example.com/b",
     "https://example.com/c",
+  ]);
+});
+
+test("extractUrls preserves balanced URL parentheses and skips invalid candidates", () => {
+  const text = [
+    "(https://en.wikipedia.org/wiki/Function_(mathematics))",
+    "http://[2606:4700:4700::1111]",
+    "https://[",
+    "https://example.com/ok`",
+  ].join(" ");
+
+  assert.deepEqual(extractUrls(text), [
+    "https://en.wikipedia.org/wiki/Function_(mathematics)",
+    "http://[2606:4700:4700::1111]/",
+    "https://example.com/ok",
   ]);
 });
 
@@ -62,6 +79,10 @@ test("isBlockedAddress rejects private and reserved ranges", () => {
     "fc00::1",
     "fe80::1",
     "2001:db8::1",
+    "::7f00:1",
+    "64:ff9b::7f00:1",
+    "2001::7f00:1",
+    "2002:7f00:1::",
   ];
 
   for (const address of blocked) {
@@ -107,4 +128,53 @@ test("extractReadableContent normalizes JSON and plain text", () => {
 
   const text = extractReadableContent("첫 줄\r\n\r\n  둘째   줄  ", "text/plain");
   assert.equal(text.content, "첫 줄\n둘째 줄");
+});
+
+test("decodeWebBody detects legacy Korean charset from HTML metadata", () => {
+  const prefix = Buffer.from('<meta charset="euc-kr"><body>', "ascii");
+  const korean = Buffer.from([0xc7, 0xd1, 0xb1, 0xdb]);
+  const body = Buffer.concat([prefix, korean]);
+
+  assert.match(decodeWebBody(body, "text/html", "text/html"), /한글/);
+});
+
+test(
+  "extractReadableContent handles one megabyte of unclosed hidden tags in linear time",
+  { timeout: 1000 },
+  () => {
+    const html = `<body><p>정상 본문</p>${"<script>".repeat(125000)}`;
+    const result = extractReadableContent(html, "text/html");
+
+    assert.equal(result.content, "정상 본문");
+  },
+);
+
+test("extractReadableContent preserves article header text", () => {
+  const html = `<body><article><header><h1>기사 제목</h1><p>기사 요약</p></header><p>${"본문 ".repeat(60)}</p></article></body>`;
+  const result = extractReadableContent(html, "text/html");
+
+  assert.match(result.content, /기사 제목/);
+  assert.match(result.content, /기사 요약/);
+});
+
+test("WebToolPolicy only allows current-turn and search-result URLs", () => {
+  const policy = new WebToolPolicy("확인 https://allowed.example/document");
+
+  assert.equal(policy.allowsFetch("https://allowed.example/document"), true);
+  assert.equal(policy.allowsFetch("https://blocked.example/secret"), false);
+  policy.addSearchResult({
+    results: [{ url: "https://search.example/result" }],
+  });
+  assert.equal(policy.allowsFetch("https://search.example/result"), true);
+  assert.equal(policy.allowsFetch("http://127.0.0.1/"), false);
+  assert.equal(policy.allowedUrlCount, 2);
+});
+
+test("WebToolPolicy enforces a hard tool-call limit", () => {
+  const policy = new WebToolPolicy("");
+
+  for (let index = 0; index < 8; index += 1) {
+    assert.equal(policy.tryStartToolCall(), true);
+  }
+  assert.equal(policy.tryStartToolCall(), false);
 });

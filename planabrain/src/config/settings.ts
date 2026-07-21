@@ -63,6 +63,7 @@ export type Settings = {
   webFetchTimeoutMs: number;
   webFetchMaxBytes: number;
   webFetchMaxChars: number;
+  webFetchMaxTotalChars: number;
   chatModel: string;
   chatMaxOutputTokens?: number;
   deliveryMaxOutputTokens?: number;
@@ -218,6 +219,12 @@ export function loadSettings(): Settings {
     500,
     50000,
   );
+  const webFetchMaxTotalChars = parseBoundedPositiveIntEnv(
+    "PLANABRAIN_WEB_FETCH_MAX_TOTAL_CHARS",
+    18000,
+    500,
+    100000,
+  );
 
   return {
     aiProvider,
@@ -261,6 +268,7 @@ export function loadSettings(): Settings {
     webFetchTimeoutMs,
     webFetchMaxBytes,
     webFetchMaxChars,
+    webFetchMaxTotalChars,
     chatModel:
       (aiProvider === "openrouter"
         ? process.env.PLANABRAIN_OPENROUTER_MODEL

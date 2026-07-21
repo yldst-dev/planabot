@@ -462,6 +462,19 @@ where
     };
     let now = kst_now().await;
     let question = format_question_with_metadata(&question, now, &msg);
+    let Some(_planabrain_permit) = state.try_acquire_planabrain_permit() else {
+        let sent = deliver_planabrain_answer(
+            &bot,
+            &msg,
+            "대기 불가.\n선생님.\n현재 요청이 가득 찼습니다.\n잠시 후 다시 시도해 주세요."
+                .to_string(),
+        )
+        .await?;
+        state
+            .record_planabrain_reply(&sent, &conversation_scope_id)
+            .await;
+        return Ok(());
+    };
     let ask_fut = planabrain::run_planabrain_ask(
         &question,
         &user_id,

@@ -6,6 +6,7 @@ use anyhow::{Context, Result, anyhow};
 use log::warn;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
+use tokio::process::Command as TokioCommand;
 use tokio::task;
 
 #[derive(Debug, Deserialize)]
@@ -143,20 +144,60 @@ pub(crate) async fn run_planabrain_ask(
     let question = question.to_string();
     let user_id = user_id.to_string();
     let conversation_scope_id = conversation_scope_id.map(|value| value.to_string());
-    let image_input = image_input.clone();
-
-    let handle = task::spawn_blocking(move || {
-        run_planabrain_ask_blocking(
-            &question,
-            &user_id,
+    let mut prepared = task::spawn_blocking(move || {
+        prepare_planabrain_ask(
+            question,
+            user_id,
             chat_id,
-            conversation_scope_id.as_deref(),
+            conversation_scope_id,
             image_input,
         )
-    });
-    handle
-        .await
-        .context("planabrain 실행 작업이 중단되었습니다")?
+    })
+    .await
+    .context("planabrain 준비 작업이 중단되었습니다")??;
+    let command = prepared
+        .command
+        .take()
+        .context("planabrain 실행 명령이 없습니다")?;
+    let mut command = TokioCommand::from(command);
+    command.kill_on_drop(true);
+    let output = command.output().await.context("planabrain 실행 실패")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if let Some(mut structured) = parse_planabrain_error(&stderr) {
+            if structured.message.trim().is_empty() {
+                structured.message = stderr_without_error_json(&stderr);
+            }
+            return Err(anyhow::Error::new(structured));
+        }
+        return Err(anyhow!("planabrain 오류: {}", stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if prepared.local_memory_ready {
+        let root = prepared.root.clone();
+        let answer = stdout.trim().to_string();
+        let user_id = prepared.user_id.clone();
+        let chat_scope = prepared.chat_scope.clone();
+        let conversation_scope_id = prepared.conversation_scope_id.clone();
+        let memory_save_result = task::spawn_blocking(move || {
+            remember_planabrain_memory_answer(
+                &root,
+                &answer,
+                &user_id,
+                &chat_scope,
+                conversation_scope_id.as_deref(),
+            )
+        })
+        .await;
+        match memory_save_result {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => warn!("로컬 장기 메모리 응답 저장 실패: {}", err),
+            Err(err) => warn!("로컬 장기 메모리 저장 작업 중단: {}", err),
+        }
+    }
+    Ok(stdout)
 }
 
 pub(crate) async fn reset_user_memory(user_id: &str) -> Result<bool> {
@@ -389,26 +430,48 @@ static ALLOWED_USER_IDS: Lazy<HashSet<i64>> = Lazy::new(|| {
         .collect()
 });
 
-fn run_planabrain_ask_blocking(
-    question: &str,
-    user_id: &str,
+struct PreparedPlanabrainAsk {
+    root: PathBuf,
+    command: Option<ProcessCommand>,
+    question_file: Option<PathBuf>,
+    image_file: Option<PathBuf>,
+    local_memory_ready: bool,
+    user_id: String,
+    chat_scope: String,
+    conversation_scope_id: Option<String>,
+}
+
+impl Drop for PreparedPlanabrainAsk {
+    fn drop(&mut self) {
+        if let Some(path) = self.question_file.as_ref() {
+            let _ = std::fs::remove_file(path);
+        }
+        if let Some(path) = self.image_file.as_ref() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn prepare_planabrain_ask(
+    question: String,
+    user_id: String,
     chat_id: i64,
-    conversation_scope_id: Option<&str>,
+    conversation_scope_id: Option<String>,
     image_input: Option<ImageInput>,
-) -> Result<String> {
+) -> Result<PreparedPlanabrainAsk> {
     const MAX_CLI_QUESTION_CHARS: usize = 2000;
     let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
     let chat_scope = format!("chat_{chat_id}");
 
-    let mut final_question = question.to_string();
+    let mut final_question = question.clone();
     let mut local_memory_ready = false;
     if is_local_memory_enabled() {
         match prepare_question_with_planabrain_memory(
             &root,
-            question,
-            user_id,
+            &question,
+            &user_id,
             &chat_scope,
-            conversation_scope_id,
+            conversation_scope_id.as_deref(),
         ) {
             Ok(Some(prepared)) => {
                 final_question = prepared;
@@ -428,9 +491,10 @@ fn run_planabrain_ask_blocking(
     let dotenv_path = repo_root.join(".env");
 
     let mut question_file = None;
-    let command = command
+    command
         .current_dir(&root)
-        .env("PLANABRAIN_USER_ID", user_id);
+        .env("PLANABRAIN_USER_ID", &user_id)
+        .env("PLANABRAIN_CURRENT_TURN_TEXT", &question);
     if let Some(image_input) = image_input.as_ref() {
         let image_path = if image_input.path.is_absolute() {
             image_input.path.clone()
@@ -464,57 +528,16 @@ fn run_planabrain_ask_blocking(
         command.arg("ask").arg(&final_question);
     }
 
-    let output = match command.output() {
-        Ok(output) => output,
-        Err(err) => {
-            if let Some(path) = question_file.as_ref() {
-                let _ = std::fs::remove_file(path);
-            }
-            if let Some(image_input) = image_input.as_ref() {
-                let _ = std::fs::remove_file(&image_input.path);
-            }
-            return Err(err).context("planabrain 실행 실패");
-        }
-    };
-
-    if let Some(image_input) = image_input.as_ref() {
-        let _ = std::fs::remove_file(&image_input.path);
-    }
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if let Some(path) = question_file.as_ref() {
-            let _ = std::fs::remove_file(path);
-        }
-        if let Some(mut structured) = parse_planabrain_error(&stderr) {
-            if structured.message.trim().is_empty() {
-                structured.message = stderr_without_error_json(&stderr);
-            }
-            return Err(anyhow::Error::new(structured));
-        }
-        return Err(anyhow!("planabrain 오류: {}", stderr.trim()));
-    }
-
-    if let Some(path) = question_file.as_ref() {
-        let _ = std::fs::remove_file(path);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let memory_save_result = if local_memory_ready {
-        remember_planabrain_memory_answer(
-            &root,
-            stdout.trim(),
-            user_id,
-            &chat_scope,
-            conversation_scope_id,
-        )
-    } else {
-        Ok(())
-    };
-    if let Err(err) = memory_save_result {
-        warn!("로컬 장기 메모리 응답 저장 실패: {}", err);
-    }
-    Ok(stdout)
+    Ok(PreparedPlanabrainAsk {
+        root,
+        command: Some(command),
+        question_file,
+        image_file: image_input.map(|input| input.path),
+        local_memory_ready,
+        user_id,
+        chat_scope,
+        conversation_scope_id,
+    })
 }
 
 fn build_planabrain_command(root: &Path) -> Result<ProcessCommand> {

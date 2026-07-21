@@ -7,6 +7,7 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 use teloxide::types::{ChatId, ChatKind, Message, MessageId, PublicChatKind, UserId};
 use tokio::fs;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::hitomi::GalleryClient;
 use crate::schedule::ScheduleStore;
@@ -87,6 +88,7 @@ pub struct AppState {
     group_registry: Arc<RwLock<HashSet<ChatId>>>,
     group_registry_path: PathBuf,
     image_rate_limiter: Arc<Mutex<ImageRateLimiter>>,
+    planabrain_semaphore: Arc<Semaphore>,
     pub(crate) schedule_store: ScheduleStore,
 }
 
@@ -122,6 +124,7 @@ impl AppState {
             group_registry: Arc::new(RwLock::new(group_registry)),
             group_registry_path,
             image_rate_limiter: Arc::new(Mutex::new(image_rate_limiter)),
+            planabrain_semaphore: Arc::new(Semaphore::new(4)),
             schedule_store,
         }
     }
@@ -245,6 +248,10 @@ impl AppState {
             Err(poisoned) => poisoned.into_inner(),
         };
         limiter.allow(user_id)
+    }
+
+    pub(crate) fn try_acquire_planabrain_permit(&self) -> Option<OwnedSemaphorePermit> {
+        self.planabrain_semaphore.clone().try_acquire_owned().ok()
     }
 }
 
