@@ -6,6 +6,7 @@ import { sanitizeAssistantOutput } from "../../chat/sanitizeOutput.js";
 import { createGoogleSearchTool } from "../googleSearch/retrievalTool.js";
 import { invokeVertexExpressChat } from "../google/vertexExpress.js";
 import { invokeOllamaApi } from "../ollama/api.js";
+import { fetchWebPage } from "../webFetch.js";
 import {
   ProviderApiError,
   classifyHttpStatus,
@@ -96,39 +97,6 @@ export async function invokeChat(params: {
 }): Promise<string> {
   const output = await invokeChatWithContinuation(params);
   return sanitizeAssistantOutput(output);
-}
-
-const URL_FETCH_MAX_CHARS = 2000;
-
-export function extractUrls(text: string): string[] {
-  const matches = text.match(/https?:\/\/[^\s<>()]+/gi) ?? [];
-  const cleaned = matches.map((url) => url.replace(/[.,;:!?)\]}'"]+$/, ""));
-  return Array.from(new Set(cleaned)).slice(0, 3);
-}
-
-export function canFetchUrls(settings: Settings): boolean {
-  return Boolean(settings.ollamaSearchHost) && settings.ollamaApiKeys.length > 0;
-}
-
-export async function fetchUrlContent(
-  settings: Settings,
-  url: string,
-): Promise<string> {
-  const raw = await invokeOllamaApi({
-    providerName: "Ollama Web Fetch",
-    host: settings.ollamaSearchHost,
-    apiKeys: settings.ollamaApiKeys,
-    path: "/api/web_fetch",
-    payload: { url },
-  });
-  const record = asRecord(raw);
-  const title = typeof record?.title === "string" ? record.title.trim() : "";
-  const content =
-    typeof record?.content === "string" ? record.content.trim() : "";
-  const text = [title, content].filter((part) => part.length > 0).join("\n");
-  return text.length > URL_FETCH_MAX_CHARS
-    ? `${text.slice(0, URL_FETCH_MAX_CHARS)}...(생략)`
-    : text;
 }
 
 async function invokeChatWithContinuation(params: {
@@ -346,15 +314,14 @@ async function invokeCerebrasChat(
     );
   }
 
-  const searchEnabled = Boolean(
+  const webSearchAvailable = Boolean(
     enableSearchTool &&
       settings.cerebrasWebSearchEnabled &&
       settings.ollamaApiKeys.length > 0,
   );
-  const tools = searchEnabled
-    ? buildOllamaSearchTools(settings.ollamaWebFetchEnabled)
-    : undefined;
-  const maxIterations = searchEnabled
+  const webFetchAvailable = Boolean(enableSearchTool && settings.webFetchEnabled);
+  const tools = buildWebTools(webSearchAvailable, webFetchAvailable);
+  const maxIterations = tools
     ? Math.max(1, settings.ollamaToolMaxIterations)
     : 1;
   const url = `${settings.cerebrasBaseUrl}/chat/completions`;
@@ -439,8 +406,11 @@ async function invokeOllamaChat(
   enableSearchTool: boolean | undefined,
 ): Promise<ChatInvocationResult> {
   const normalizedMessages = messages.map((message) => toOllamaMessage(message));
-  const searchEnabled = Boolean(enableSearchTool && settings.ollamaWebSearchEnabled);
-  const tools = searchEnabled ? buildOllamaSearchTools(settings.ollamaWebFetchEnabled) : undefined;
+  const webSearchAvailable = Boolean(enableSearchTool && settings.ollamaWebSearchEnabled);
+  const webFetchAvailable = Boolean(
+    enableSearchTool && settings.ollamaWebFetchEnabled && settings.webFetchEnabled,
+  );
+  const tools = buildWebTools(webSearchAvailable, webFetchAvailable);
   const maxIterations = Math.max(1, settings.ollamaToolMaxIterations);
   let workingMessages = normalizedMessages;
 
@@ -748,9 +718,13 @@ function normalizeOllamaRole(role: ChatMessage["role"]): "system" | "user" | "as
   return role;
 }
 
-function buildOllamaSearchTools(enableWebFetch: boolean): Array<Record<string, unknown>> {
-  const tools: Array<Record<string, unknown>> = [
-    {
+function buildWebTools(
+  enableWebSearch: boolean,
+  enableWebFetch: boolean,
+): Array<Record<string, unknown>> | undefined {
+  const tools: Array<Record<string, unknown>> = [];
+  if (enableWebSearch) {
+    tools.push({
       type: "function",
       function: {
         name: "web_search",
@@ -770,8 +744,8 @@ function buildOllamaSearchTools(enableWebFetch: boolean): Array<Record<string, u
           required: ["query"],
         },
       },
-    },
-  ];
+    });
+  }
   if (enableWebFetch) {
     tools.push({
       type: "function",
@@ -791,17 +765,17 @@ function buildOllamaSearchTools(enableWebFetch: boolean): Array<Record<string, u
       },
     });
   }
-  return tools;
+  return tools.length > 0 ? tools : undefined;
 }
 
 async function executeOllamaToolCall(
   settings: Settings,
   toolCall: OllamaToolCall,
 ): Promise<unknown> {
-  if (settings.ollamaApiKeys.length === 0) {
-    throw new Error("OLLAMA_API_KEY or OLLAMA_API_KEYS is required for Ollama web tools");
-  }
   if (toolCall.name === "web_search") {
+    if (settings.ollamaApiKeys.length === 0) {
+      throw new Error("OLLAMA_API_KEY or OLLAMA_API_KEYS is required for Ollama web search");
+    }
     const query = readRequiredString(toolCall.arguments.query, "web_search.query");
     const requestedMaxResults = readOptionalPositiveInt(toolCall.arguments.max_results);
     const maxResults = Math.min(
@@ -820,13 +794,11 @@ async function executeOllamaToolCall(
     });
   }
   const url = readRequiredString(toolCall.arguments.url, "web_fetch.url");
-  return invokeOllamaApi({
-    providerName: "Ollama Web Fetch",
-    host: settings.ollamaSearchHost,
-    apiKeys: settings.ollamaApiKeys,
-    path: "/api/web_fetch",
-    payload: { url },
-  });
+  try {
+    return await fetchWebPage(settings, url);
+  } catch {
+    return { error: "웹페이지를 안전하게 가져오지 못했습니다." };
+  }
 }
 
 function extractOllamaMessage(payload: unknown): Record<string, unknown> {

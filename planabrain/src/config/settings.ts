@@ -59,6 +59,10 @@ export type Settings = {
   ollamaWebFetchEnabled: boolean;
   ollamaWebSearchMaxResults: number;
   ollamaToolMaxIterations: number;
+  webFetchEnabled: boolean;
+  webFetchTimeoutMs: number;
+  webFetchMaxBytes: number;
+  webFetchMaxChars: number;
   chatModel: string;
   chatMaxOutputTokens?: number;
   deliveryMaxOutputTokens?: number;
@@ -192,6 +196,28 @@ export function loadSettings(): Settings {
     "PLANABRAIN_OLLAMA_TOOL_MAX_ITERATIONS",
     4,
   );
+  const webFetchEnabled = parseBooleanEnv(
+    "PLANABRAIN_WEB_FETCH_ENABLED",
+    true,
+  );
+  const webFetchTimeoutMs = parseBoundedPositiveIntEnv(
+    "PLANABRAIN_WEB_FETCH_TIMEOUT_MS",
+    10000,
+    1000,
+    30000,
+  );
+  const webFetchMaxBytes = parseBoundedPositiveIntEnv(
+    "PLANABRAIN_WEB_FETCH_MAX_BYTES",
+    1000000,
+    1024,
+    5000000,
+  );
+  const webFetchMaxChars = parseBoundedPositiveIntEnv(
+    "PLANABRAIN_WEB_FETCH_MAX_CHARS",
+    12000,
+    500,
+    50000,
+  );
 
   return {
     aiProvider,
@@ -231,6 +257,10 @@ export function loadSettings(): Settings {
     ollamaWebFetchEnabled,
     ollamaWebSearchMaxResults,
     ollamaToolMaxIterations,
+    webFetchEnabled,
+    webFetchTimeoutMs,
+    webFetchMaxBytes,
+    webFetchMaxChars,
     chatModel:
       (aiProvider === "openrouter"
         ? process.env.PLANABRAIN_OPENROUTER_MODEL
@@ -582,6 +612,19 @@ function parseRequiredPositiveIntEnv(
   const value = Number.parseInt(trimmed, 10);
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(`${key} must be a positive integer`);
+  }
+  return value;
+}
+
+function parseBoundedPositiveIntEnv(
+  key: string,
+  defaultValue: number,
+  minValue: number,
+  maxValue: number,
+): number {
+  const value = parseRequiredPositiveIntEnv(key, defaultValue);
+  if (value < minValue || value > maxValue) {
+    throw new Error(`${key} must be between ${minValue} and ${maxValue}`);
   }
   return value;
 }

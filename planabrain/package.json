@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx src/cli/index.ts",
     "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test src/integrations/webFetch.test.ts",
     "start": "node dist/cli/index.js",
     "health": "node dist/health/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"

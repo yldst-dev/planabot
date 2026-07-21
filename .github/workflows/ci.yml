@@ -11,7 +11,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # 변경 감지
   changes:
     name: Detect Changes
     runs-on: ubuntu-latest
@@ -36,7 +35,6 @@ jobs:
               - 'docker-compose*.yml'
               - '.github/workflows/ci.yml'
 
-  # Rust 테스트 (core 변경 시만)
   test-rust:
     name: Test Rust
     runs-on: ubuntu-latest
@@ -58,7 +56,6 @@ jobs:
       - name: Run tests
         run: cargo test
 
-  # TypeScript 테스트 (planabrain 변경 시만)
   test-planabrain:
     name: Test Planabrain
     runs-on: ubuntu-latest
@@ -77,11 +74,13 @@ jobs:
       - name: TypeScript typecheck
         run: npm run typecheck
         working-directory: planabrain
+      - name: Run tests
+        run: npm test
+        working-directory: planabrain
       - name: Build
         run: npm run build
         working-directory: planabrain
 
-  # GitHub Release 생성 (태그 푸시 시만)
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest

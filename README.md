@@ -17,6 +17,7 @@
 - 그룹 채팅 답장 체인 기준 맥락 유지
 - 이미지 입력 분석
 - 웹 검색 기반 최신 정보 응답
+- 메시지에 포함된 웹 링크의 안전한 본문 직접 수집
 - 장기 메모리와 그룹 공용 메모리
 - 응답 잘림 감지 후 자동 이어쓰기
 - OpenRouter, Vertex Express, Ollama Cloud 등 다중 provider 지원
@@ -114,6 +115,8 @@ npm run dev
 - 그룹에서는 프라나 응답에 달린 답장을 같은 대화 체인으로 이어받습니다.
 - 이미지가 있으면 planabrain 쪽에서 직접 멀티모달 입력으로 처리합니다.
 - 최신 정보가 필요하면 provider별 웹 검색 경로를 사용합니다.
+- 질문에 웹 링크가 포함되면 planabrain이 공개 HTTP/HTTPS 페이지의 본문을 직접 추출해 참고합니다.
+- 내부 네트워크 주소, 비표준 포트, 과도한 응답, 바이너리 콘텐츠와 위험한 리디렉션은 차단합니다.
 - 응답이 길이 제한으로 끊기면 자동으로 이어서 받아 한 번 더 합칩니다.
 - 최종 텔레그램 전송 전에는 1024토큰 기준으로 한 번 더 정리해 문장 중간 출처 삽입과 과도한 장문 응답을 줄입니다.
 - 내부 메타 문장이나 reasoning 누출은 후처리에서 제거합니다.
@@ -164,6 +167,10 @@ npm run dev
 - `PLANABRAIN_DELIVERY_REWRITE_ENABLED`
 - `PLANABRAIN_CHAT_THINKING_MODE`
 - `PLANABRAIN_EMBEDDING_MODEL`
+- `PLANABRAIN_WEB_FETCH_ENABLED`
+- `PLANABRAIN_WEB_FETCH_TIMEOUT_MS`
+- `PLANABRAIN_WEB_FETCH_MAX_BYTES`
+- `PLANABRAIN_WEB_FETCH_MAX_CHARS`
 - `PLANABRAIN_ALLOWED_CHAT_IDS`
 - `PLANABRAIN_ALLOWED_USER_IDS`
 
