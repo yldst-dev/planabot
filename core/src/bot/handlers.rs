@@ -519,8 +519,8 @@ where
             state
                 .record_planabrain_reply(&sent, &conversation_scope_id)
                 .await;
-            if !memory_turn_text.is_empty()
-                && let Err(err) = planabrain::remember_planabrain_exchange(
+            if !memory_turn_text.is_empty() {
+                if let Err(err) = planabrain::remember_planabrain_exchange(
                     &memory_turn_text,
                     &answer,
                     &user_id,
@@ -528,8 +528,9 @@ where
                     Some(&conversation_scope_id),
                 )
                 .await
-            {
-                warn!("로컬 장기 메모리 교환 저장 실패: {}", err);
+                {
+                    warn!("로컬 장기 메모리 교환 저장 실패: {}", err);
+                }
             }
         }
         Err(err) => {
