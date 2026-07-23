@@ -342,12 +342,14 @@ where
     let Some(text) = extract_message_text(&msg) else {
         return Ok(());
     };
+    let current_turn_text = text.trim().to_string();
 
     let question = match planabrain::extract_plana_question(&text) {
         Some(q) => q,
         None if state.is_reply_to_planabrain(&msg) => text.trim().to_string(),
         None => return Ok(()),
     };
+    let memory_turn_text = question.trim().to_string();
 
     let is_anonymous_admin = msg
         .sender_chat
@@ -477,6 +479,8 @@ where
     };
     let ask_fut = planabrain::run_planabrain_ask(
         &question,
+        &current_turn_text,
+        &memory_turn_text,
         &user_id,
         msg.chat.id.0,
         Some(&conversation_scope_id),
@@ -509,11 +513,24 @@ where
 
     match answer {
         Ok(answer) => {
-            let reply = planabrain::truncate_message(answer.trim(), 4000);
+            let answer = answer.trim().to_string();
+            let reply = planabrain::truncate_message(&answer, 4000);
             let sent = deliver_planabrain_answer(&bot, &msg, reply).await?;
             state
                 .record_planabrain_reply(&sent, &conversation_scope_id)
                 .await;
+            if !memory_turn_text.is_empty()
+                && let Err(err) = planabrain::remember_planabrain_exchange(
+                    &memory_turn_text,
+                    &answer,
+                    &user_id,
+                    msg.chat.id.0,
+                    Some(&conversation_scope_id),
+                )
+                .await
+            {
+                warn!("로컬 장기 메모리 교환 저장 실패: {}", err);
+            }
         }
         Err(err) => {
             let kind = err

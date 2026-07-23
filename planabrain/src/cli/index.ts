@@ -30,6 +30,7 @@ import { runIngestCommand } from "./commands/ingest.js";
 import {
   runMemoryAssistantCommand,
   runMemoryDeleteFactCommand,
+  runMemoryExchangeCommand,
   runMemoryListFactsCommand,
   runMemoryMigrateJsonCommand,
   runMemoryPrepareCommand,
@@ -66,6 +67,10 @@ export async function main(argv: string[]): Promise<void> {
   }
   if (parsed.command === "memory-assistant") {
     await runMemoryAssistantCommand(parsed.args);
+    return;
+  }
+  if (parsed.command === "memory-exchange") {
+    await runMemoryExchangeCommand(parsed.args);
     return;
   }
   if (parsed.command === "memory-reset-user") {

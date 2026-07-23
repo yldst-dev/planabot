@@ -130,6 +130,12 @@ export interface RememberAssistantInput extends ScopeParams {
   at?: number;
 }
 
+export interface RememberExchangeInput extends ScopeParams {
+  userText: string;
+  assistantText: string;
+  at?: number;
+}
+
 export interface RankedItem {
   id: string;
   text: string;

@@ -23,6 +23,7 @@ import type {
   MemoryStore,
   PreparePromptInput,
   RememberAssistantInput,
+  RememberExchangeInput,
   RetrieveContextInput,
   ScopeDescriptor,
   ScopeParams,
@@ -94,6 +95,13 @@ interface PreparePromptResult {
   groupStored: boolean;
 }
 
+interface RememberExchangeResult {
+  scopeId: string;
+  addedTurns: Turn[];
+  groupStored: boolean;
+  counts: IngestTurnResult["counts"];
+}
+
 interface BudgetSplit {
   userBudget: number;
   conversationBudget: number;
@@ -141,31 +149,6 @@ export class LocalMemoryEngine {
       ? this.conversationScope(params.chatId, params.conversationId)
       : null;
     const groupScope = this.groupScope(params.chatId);
-
-    await this.ingestTurnInScope(userScope, "user", params.userText, params.at, params.userId);
-    if (conversationScope) {
-      await this.ingestTurnInScope(
-        conversationScope,
-        "user",
-        params.userText,
-        params.at,
-        params.userId
-      );
-    }
-    let groupStored = false;
-    if (
-      this.config.groupMemoryEnabled &&
-      shouldStoreInGroupMemory(params.userText, "user")
-    ) {
-      await this.ingestTurnInScope(
-        groupScope,
-        "user",
-        params.userText,
-        params.at,
-        params.userId
-      );
-      groupStored = true;
-    }
 
     const totalBudget = Math.max(120, params.tokenBudget ?? this.config.defaultTokenBudget);
     const split = resolveBudgetSplit(
@@ -227,6 +210,63 @@ export class LocalMemoryEngine {
       memoryContext: merged.contextText,
       memoryTokenEstimate: merged.estimatedTokens,
       sections: merged.sections,
+      groupStored: false
+    };
+  }
+
+  async rememberExchange(params: RememberExchangeInput): Promise<RememberExchangeResult> {
+    const userText = String(params.userText ?? "").trim();
+    const assistantText = String(params.assistantText ?? "").trim();
+    if (!userText || !assistantText) {
+      throw new Error("사용자 질문과 assistant 응답이 모두 필요합니다.");
+    }
+
+    const at = params.at ?? Date.now();
+    const assistantMemoryText = sanitizeAssistantMemoryText(userText, assistantText);
+    const userScope = this.userScope(params.userId, params.chatId);
+    const userResult = await this.storeExchangeInScope({
+      scope: userScope,
+      userText,
+      assistantText: assistantMemoryText,
+      at,
+      ownerUserId: params.userId,
+      includeWorking: false,
+      includeUserFacts: true,
+      includeGroupEpisodes: false
+    });
+
+    if (params.conversationId) {
+      await this.storeExchangeInScope({
+        scope: this.conversationScope(params.chatId, params.conversationId),
+        userText,
+        assistantText: assistantMemoryText,
+        at,
+        ownerUserId: params.userId,
+        includeWorking: true,
+        includeUserFacts: false,
+        includeGroupEpisodes: false
+      });
+    }
+
+    const groupStored =
+      this.config.groupMemoryEnabled &&
+      (shouldStoreInGroupMemory(userText, "user") ||
+        shouldStoreInGroupMemory(assistantMemoryText, "assistant"));
+    if (groupStored) {
+      await this.storeExchangeInScope({
+        scope: this.groupScope(params.chatId),
+        userText,
+        assistantText: assistantMemoryText,
+        at,
+        ownerUserId: params.userId,
+        includeWorking: false,
+        includeUserFacts: false,
+        includeGroupEpisodes: true
+      });
+    }
+
+    return {
+      ...userResult,
       groupStored
     };
   }
@@ -460,6 +500,59 @@ export class LocalMemoryEngine {
     };
   }
 
+  private async storeExchangeInScope(params: {
+    scope: ScopeDescriptor;
+    userText: string;
+    assistantText: string;
+    at: number;
+    ownerUserId: string;
+    includeWorking: boolean;
+    includeUserFacts: boolean;
+    includeGroupEpisodes: boolean;
+  }): Promise<RememberExchangeResult> {
+    const state = await this.loadState(params.scope);
+    const userTurn = buildTurn("user", params.userText, params.at, params.ownerUserId);
+    const assistantTurn = buildTurn("assistant", params.assistantText, params.at + 1, undefined);
+
+    if (params.includeWorking) {
+      state.working.turns.push(userTurn, assistantTurn);
+      state.working.turns = state.working.turns.slice(-this.config.maxWorkingTurns);
+      this.upsertEpisode(params.scope, state, userTurn);
+      this.upsertEpisode(params.scope, state, assistantTurn);
+      await this.compactConversationState(state, assistantTurn);
+    } else {
+      state.working.turns = [];
+    }
+
+    if (params.includeUserFacts) {
+      await this.upsertFacts(params.scope, state, userTurn);
+    }
+
+    if (params.includeGroupEpisodes) {
+      if (shouldStoreInGroupMemory(params.userText, "user")) {
+        this.upsertEpisode(params.scope, state, userTurn, true, true);
+      }
+      if (shouldStoreInGroupMemory(params.assistantText, "assistant")) {
+        this.upsertEpisode(params.scope, state, assistantTurn, false, true);
+      }
+    }
+
+    this.applyForgetting(params.scope, state);
+    await this.saveState(params.scope, state);
+
+    return {
+      scopeId: params.scope.scopeId,
+      addedTurns: [userTurn, assistantTurn],
+      groupStored: params.includeGroupEpisodes,
+      counts: {
+        working: state.working.turns.length,
+        episodic: state.episodic.items.length,
+        semantic: state.semantic.facts.length,
+        summary: state.summary.items.length
+      }
+    };
+  }
+
   private async retrieveContextForScope(
     scope: ScopeDescriptor,
     query: string,
@@ -472,7 +565,7 @@ export class LocalMemoryEngine {
       semanticFacts: selectVisibleSemanticFacts(scope, state.semantic.facts),
       episodicItems: state.episodic.items,
       summaryItems: state.summary.items,
-      workingTurns: state.working.turns
+      workingTurns: scope.scopeKind === "conversation" ? state.working.turns : []
     });
   }
 
@@ -541,11 +634,17 @@ export class LocalMemoryEngine {
       .slice(0, 120);
   }
 
-  private upsertEpisode(scope: ScopeDescriptor, state: MemoryState, turn: Turn): void {
-    if (scope.scopeKind === "group" && turn.role === "user") {
+  private upsertEpisode(
+    scope: ScopeDescriptor,
+    state: MemoryState,
+    turn: Turn,
+    allowGroupUser = false,
+    force = false
+  ): void {
+    if (scope.scopeKind === "group" && turn.role === "user" && !allowGroupUser) {
       return;
     }
-    if (!shouldCreateEpisode(turn.text, turn.salience)) {
+    if (!force && !shouldCreateEpisode(turn.text, turn.salience)) {
       return;
     }
 
@@ -773,6 +872,40 @@ export class LocalMemoryEngine {
 function normalizeRole(raw: MemoryRole | "ai"): MemoryRole {
   const role = String(raw ?? "user").toLowerCase();
   return role === "assistant" || role === "ai" ? "assistant" : "user";
+}
+
+function buildTurn(
+  role: MemoryRole,
+  rawText: string,
+  at: number,
+  ownerUserId: string | undefined
+): Turn {
+  const text = String(rawText ?? "").trim();
+  return {
+    id: `turn_${at}_${randomUUID().slice(0, 8)}`,
+    role,
+    text,
+    at,
+    tokens: estimateTokens(text),
+    salience: scoreSalience(text),
+    ownerUserId: role === "user" ? safeId(String(ownerUserId ?? "").trim()) : undefined
+  };
+}
+
+function sanitizeAssistantMemoryText(userText: string, assistantText: string): string {
+  if (
+    /(날씨|기온|강수|습도|미세먼지|대기질|환율|시세|주가|코인|암호화폐|금리|뉴스|속보|물가|가격|재고|운행|항공편|교통|경기\s*(?:결과|일정)|스코어|순위|통계|선거\s*결과)/u.test(
+      userText
+    )
+  ) {
+    return "시의성 정보 확인 응답 완료.";
+  }
+  const sanitized = assistantText
+    .split(/\r?\n/u)
+    .filter((line) => !line.trimStart().startsWith("출처:"))
+    .join("\n")
+    .trim();
+  return sanitized || "응답 완료.";
 }
 
 function formatTurnSpeaker(turn: Turn): string {

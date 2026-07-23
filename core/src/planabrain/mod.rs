@@ -132,6 +132,8 @@ pub(crate) fn extract_plana_question(text: &str) -> Option<String> {
 
 pub(crate) async fn run_planabrain_ask(
     question: &str,
+    current_turn_text: &str,
+    memory_query_text: &str,
     user_id: &str,
     chat_id: i64,
     conversation_scope_id: Option<&str>,
@@ -142,11 +144,15 @@ pub(crate) async fn run_planabrain_ask(
     }
 
     let question = question.to_string();
+    let current_turn_text = current_turn_text.to_string();
+    let memory_query_text = memory_query_text.to_string();
     let user_id = user_id.to_string();
     let conversation_scope_id = conversation_scope_id.map(|value| value.to_string());
     let mut prepared = task::spawn_blocking(move || {
         prepare_planabrain_ask(
             question,
+            current_turn_text,
+            memory_query_text,
             user_id,
             chat_id,
             conversation_scope_id,
@@ -174,30 +180,38 @@ pub(crate) async fn run_planabrain_ask(
         return Err(anyhow!("planabrain 오류: {}", stderr.trim()));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    if prepared.local_memory_ready {
-        let root = prepared.root.clone();
-        let answer = stdout.trim().to_string();
-        let user_id = prepared.user_id.clone();
-        let chat_scope = prepared.chat_scope.clone();
-        let conversation_scope_id = prepared.conversation_scope_id.clone();
-        let memory_save_result = task::spawn_blocking(move || {
-            remember_planabrain_memory_answer(
-                &root,
-                &answer,
-                &user_id,
-                &chat_scope,
-                conversation_scope_id.as_deref(),
-            )
-        })
-        .await;
-        match memory_save_result {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => warn!("로컬 장기 메모리 응답 저장 실패: {}", err),
-            Err(err) => warn!("로컬 장기 메모리 저장 작업 중단: {}", err),
-        }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+pub(crate) async fn remember_planabrain_exchange(
+    current_turn_text: &str,
+    answer: &str,
+    user_id: &str,
+    chat_id: i64,
+    conversation_scope_id: Option<&str>,
+) -> Result<()> {
+    if !is_local_memory_enabled() {
+        return Ok(());
     }
-    Ok(stdout)
+
+    let current_turn_text = current_turn_text.to_string();
+    let answer = answer.to_string();
+    let user_id = user_id.to_string();
+    let chat_scope = format!("chat_{chat_id}");
+    let conversation_scope_id = conversation_scope_id.map(|value| value.to_string());
+    task::spawn_blocking(move || {
+        let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
+        run_planabrain_memory_exchange(
+            &root,
+            &current_turn_text,
+            &answer,
+            &user_id,
+            &chat_scope,
+            conversation_scope_id.as_deref(),
+        )
+    })
+    .await
+    .context("로컬 장기 메모리 교환 저장 작업이 중단되었습니다")?
 }
 
 pub(crate) async fn reset_user_memory(user_id: &str) -> Result<bool> {
@@ -310,14 +324,23 @@ pub(crate) fn truncate_message(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_string();
     }
-
-    let mut out = String::new();
-    for (idx, ch) in text.chars().enumerate() {
-        if idx >= limit {
-            break;
-        }
-        out.push(ch);
+    if limit == 0 {
+        return String::new();
     }
+
+    if let Some(source_start) = source_suffix_start(text) {
+        let source = text[source_start..].trim();
+        let separator = "…\n\n";
+        let source_len = source.chars().count();
+        let separator_len = separator.chars().count();
+        if source_len + separator_len < limit {
+            let body_limit = limit - source_len - separator_len;
+            let body = take_chars(text[..source_start].trim_end(), body_limit);
+            return format!("{body}{separator}{source}");
+        }
+    }
+
+    let mut out = take_chars(text, limit.saturating_sub(1));
     out.push('…');
     out
 }
@@ -431,14 +454,9 @@ static ALLOWED_USER_IDS: Lazy<HashSet<i64>> = Lazy::new(|| {
 });
 
 struct PreparedPlanabrainAsk {
-    root: PathBuf,
     command: Option<ProcessCommand>,
     question_file: Option<PathBuf>,
     image_file: Option<PathBuf>,
-    local_memory_ready: bool,
-    user_id: String,
-    chat_scope: String,
-    conversation_scope_id: Option<String>,
 }
 
 impl Drop for PreparedPlanabrainAsk {
@@ -454,6 +472,8 @@ impl Drop for PreparedPlanabrainAsk {
 
 fn prepare_planabrain_ask(
     question: String,
+    current_turn_text: String,
+    memory_query_text: String,
     user_id: String,
     chat_id: i64,
     conversation_scope_id: Option<String>,
@@ -463,23 +483,21 @@ fn prepare_planabrain_ask(
     let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
     let chat_scope = format!("chat_{chat_id}");
 
-    let mut final_question = question.clone();
-    let mut local_memory_ready = false;
-    if is_local_memory_enabled() {
+    let final_question = question;
+    let local_memory_enabled = is_local_memory_enabled();
+    let mut memory_context = None;
+    if local_memory_enabled {
         match prepare_question_with_planabrain_memory(
             &root,
-            &question,
+            &memory_query_text,
             &user_id,
             &chat_scope,
             conversation_scope_id.as_deref(),
         ) {
-            Ok(Some(prepared)) => {
-                final_question = prepared;
-                local_memory_ready = true;
+            Ok(Some(context)) => {
+                memory_context = Some(context);
             }
-            Ok(None) => {
-                local_memory_ready = true;
-            }
+            Ok(None) => {}
             Err(err) => {
                 warn!("로컬 장기 메모리 준비 실패: {}", err);
             }
@@ -494,7 +512,11 @@ fn prepare_planabrain_ask(
     command
         .current_dir(&root)
         .env("PLANABRAIN_USER_ID", &user_id)
-        .env("PLANABRAIN_CURRENT_TURN_TEXT", &question);
+        .env("PLANABRAIN_CURRENT_TURN_TEXT", &current_turn_text)
+        .env_remove("PLANABRAIN_MEMORY_CONTEXT");
+    if let Some(memory_context) = memory_context.as_deref() {
+        command.env("PLANABRAIN_MEMORY_CONTEXT", memory_context);
+    }
     if let Some(image_input) = image_input.as_ref() {
         let image_path = if image_input.path.is_absolute() {
             image_input.path.clone()
@@ -507,7 +529,7 @@ fn prepare_planabrain_ask(
             .env("PLANABRAIN_IMAGE_FILE", image_path)
             .env("PLANABRAIN_IMAGE_MIME_TYPE", &image_input.mime_type);
     }
-    if local_memory_ready {
+    if local_memory_enabled {
         command.env("PLANABRAIN_MEMORY_ENABLED", "0");
     }
     if dotenv_path.exists() {
@@ -529,14 +551,9 @@ fn prepare_planabrain_ask(
     }
 
     Ok(PreparedPlanabrainAsk {
-        root,
         command: Some(command),
         question_file,
         image_file: image_input.map(|input| input.path),
-        local_memory_ready,
-        user_id,
-        chat_scope,
-        conversation_scope_id,
     })
 }
 
@@ -718,14 +735,12 @@ fn prepare_question_with_planabrain_memory(
         return Ok(None);
     }
 
-    Ok(Some(format!(
-        "메모리 컨텍스트:\n{}\n\n{}",
-        context, question
-    )))
+    Ok(Some(context.to_string()))
 }
 
-fn remember_planabrain_memory_answer(
+fn run_planabrain_memory_exchange(
     planabrain_root: &Path,
+    current_turn_text: &str,
     answer: &str,
     user_id: &str,
     chat_scope: &str,
@@ -733,46 +748,80 @@ fn remember_planabrain_memory_answer(
 ) -> Result<()> {
     const MAX_LOCAL_MEMORY_TEXT_CHARS: usize = 2000;
     let mut command = build_planabrain_command(planabrain_root)?;
-    let mut text_file = None;
+    let mut user_text_file = None;
+    let mut assistant_text_file = None;
     let command = command
         .current_dir(planabrain_root)
-        .arg("memory-assistant")
+        .arg("memory-exchange")
         .arg(user_id)
         .arg(chat_scope);
     if let Some(conversation_scope_id) = conversation_scope_id {
         command.env("PLANABRAIN_CONVERSATION_ID", conversation_scope_id);
     }
 
-    if answer.chars().count() > MAX_LOCAL_MEMORY_TEXT_CHARS {
+    if current_turn_text.chars().count() > MAX_LOCAL_MEMORY_TEXT_CHARS
+        || answer.chars().count() > MAX_LOCAL_MEMORY_TEXT_CHARS
+    {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
+            .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!("local_memory_answer_{timestamp}.txt"));
-        std::fs::write(&path, answer).context("로컬 장기 메모리 응답 파일 저장 실패")?;
-        command.env("PLANABRAIN_LOCAL_MEMORY_TEXT_FILE", &path);
-        text_file = Some(path);
+        let process_id = std::process::id();
+        let user_path =
+            std::env::temp_dir().join(format!("local_memory_user_{process_id}_{timestamp}.txt"));
+        let assistant_path = std::env::temp_dir().join(format!(
+            "local_memory_assistant_{process_id}_{timestamp}.txt"
+        ));
+        std::fs::write(&user_path, current_turn_text)
+            .context("로컬 장기 메모리 사용자 질문 파일 저장 실패")?;
+        if let Err(err) = std::fs::write(&assistant_path, answer) {
+            let _ = std::fs::remove_file(&user_path);
+            return Err(err).context("로컬 장기 메모리 응답 파일 저장 실패");
+        }
+        command
+            .env("PLANABRAIN_LOCAL_MEMORY_USER_TEXT_FILE", &user_path)
+            .env(
+                "PLANABRAIN_LOCAL_MEMORY_ASSISTANT_TEXT_FILE",
+                &assistant_path,
+            );
+        user_text_file = Some(user_path);
+        assistant_text_file = Some(assistant_path);
     } else {
-        command.arg(answer);
+        command.arg(current_turn_text).arg(answer);
     }
 
     let output = command
         .output()
-        .context("planabrain memory-assistant 실행 실패")?;
+        .context("planabrain memory-exchange 실행 실패");
 
-    if let Some(path) = text_file.as_ref() {
+    if let Some(path) = user_text_file.as_ref() {
         let _ = std::fs::remove_file(path);
     }
+    if let Some(path) = assistant_text_file.as_ref() {
+        let _ = std::fs::remove_file(path);
+    }
+    let output = output?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow!(
-            "planabrain memory-assistant 오류: {}",
+            "planabrain memory-exchange 오류: {}",
             stderr.trim()
         ));
     }
 
     Ok(())
+}
+
+fn source_suffix_start(text: &str) -> Option<usize> {
+    text.match_indices("출처:")
+        .filter(|(index, _)| *index == 0 || text[..*index].ends_with('\n'))
+        .map(|(index, _)| index)
+        .last()
+}
+
+fn take_chars(text: &str, limit: usize) -> String {
+    text.chars().take(limit).collect()
 }
 
 fn run_planabrain_memory_reset_user(
@@ -815,4 +864,32 @@ fn resolve_local_memory_token_budget() -> Option<u32> {
         .ok()
         .and_then(|raw| raw.trim().parse::<u32>().ok())
         .filter(|value| *value > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_message;
+
+    #[test]
+    fn truncate_message_keeps_text_within_limit() {
+        let truncated = truncate_message("가나다라마바사", 5);
+
+        assert_eq!(truncated, "가나다라…");
+        assert_eq!(truncated.chars().count(), 5);
+    }
+
+    #[test]
+    fn truncate_message_preserves_source_suffix() {
+        let text = format!("{}\n\n출처: https://example.com", "본문".repeat(30));
+        let truncated = truncate_message(&text, 35);
+
+        assert!(truncated.ends_with("출처: https://example.com"));
+        assert!(truncated.contains('…'));
+        assert!(truncated.chars().count() <= 35);
+    }
+
+    #[test]
+    fn truncate_message_handles_zero_limit() {
+        assert_eq!(truncate_message("본문", 0), "");
+    }
 }

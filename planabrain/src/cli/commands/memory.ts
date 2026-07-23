@@ -53,6 +53,37 @@ export async function runMemoryAssistantCommand(args: string[]): Promise<void> {
   }
 }
 
+export async function runMemoryExchangeCommand(args: string[]): Promise<void> {
+  const [userId, chatId, userTextArg, assistantTextArg, ...rest] = args;
+  ensure(Boolean(userId && chatId), "Usage: planabrain memory-exchange <userId> <chatId> <userText> <assistantText>");
+  ensure(rest.length === 0, "Usage: planabrain memory-exchange <userId> <chatId> <userText> <assistantText>");
+  const conversationId = readConversationId();
+  const userText = await resolveExchangeText(
+    userTextArg,
+    "PLANABRAIN_LOCAL_MEMORY_USER_TEXT_FILE",
+    "Usage: planabrain memory-exchange <userId> <chatId> <userText> <assistantText>"
+  );
+  const assistantText = await resolveExchangeText(
+    assistantTextArg,
+    "PLANABRAIN_LOCAL_MEMORY_ASSISTANT_TEXT_FILE",
+    "Usage: planabrain memory-exchange <userId> <chatId> <userText> <assistantText>"
+  );
+
+  const engine = new LocalMemoryEngine();
+  try {
+    const result = await engine.rememberExchange({
+      userId: String(userId),
+      chatId: String(chatId),
+      conversationId,
+      userText,
+      assistantText
+    });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  } finally {
+    engine.close();
+  }
+}
+
 export async function runMemoryResetUserCommand(args: string[]): Promise<void> {
   const [userId] = args;
   ensure(Boolean(userId), "Usage: planabrain memory-reset-user <userId>");
@@ -160,6 +191,28 @@ async function resolveTextFromArgs(parts: string[], usage: string): Promise<stri
     }
   }
 
+  ensure(Boolean(text), usage);
+  return text;
+}
+
+async function resolveExchangeText(
+  arg: string | undefined,
+  fileEnv: string,
+  usage: string
+): Promise<string> {
+  let text = String(arg ?? "").trim();
+  if (text) {
+    return text;
+  }
+  const textFile = process.env[fileEnv];
+  if (textFile) {
+    try {
+      text = (await readFile(textFile, "utf8")).trim();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`메모리 교환 텍스트 파일 읽기 실패: ${message}`);
+    }
+  }
   ensure(Boolean(text), usage);
   return text;
 }

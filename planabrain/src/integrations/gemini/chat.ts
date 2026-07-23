@@ -86,29 +86,44 @@ type OllamaToolCall = {
   arguments: Record<string, unknown>;
 };
 
+export type WebCitation = {
+  url: string;
+  title?: string;
+  evidence?: string;
+};
+
+export type ChatInvocationMetadata = {
+  content: string;
+  citations: WebCitation[];
+  searchUsed: boolean;
+};
+
 type ChatInvocationResult = {
   content: string;
   finishReason?: string;
+  citations?: WebCitation[];
+  searchUsed?: boolean;
 };
 
-export async function invokeChat(params: {
+export type ChatInvocationParams = {
   settings: Settings;
   messages: ChatMessage[];
   enableSearchTool?: boolean;
   webFetchUrlSource?: string;
-}): Promise<string> {
-  const output = await invokeChatWithContinuation(params);
-  return sanitizeAssistantOutput(output);
+};
+
+export async function invokeChat(params: ChatInvocationParams): Promise<string> {
+  const output = await invokeChatWithMetadata(params);
+  return output.content;
 }
 
-async function invokeChatWithContinuation(params: {
-  settings: Settings;
-  messages: ChatMessage[];
-  enableSearchTool?: boolean;
-  webFetchUrlSource?: string;
-}): Promise<string> {
+export async function invokeChatWithMetadata(
+  params: ChatInvocationParams,
+): Promise<ChatInvocationMetadata> {
   let workingMessages = [...params.messages];
   let combined = "";
+  let citations: WebCitation[] = [];
+  let searchUsed = false;
   const maxContinuations = 2;
 
   for (let attempt = 0; attempt <= maxContinuations; attempt += 1) {
@@ -121,11 +136,21 @@ async function invokeChatWithContinuation(params: {
     combined = combined
       ? mergeContinuationContent(combined, result.content)
       : result.content.trim();
+    citations = mergeWebCitations(citations, result.citations ?? []);
+    searchUsed = searchUsed || result.searchUsed === true;
     if (!shouldContinueChat(result.finishReason, combined)) {
-      return normalizeContinuationArtifacts(combined);
+      return {
+        content: sanitizeAssistantOutput(normalizeContinuationArtifacts(combined)),
+        citations,
+        searchUsed,
+      };
     }
     if (attempt === maxContinuations) {
-      return normalizeContinuationArtifacts(combined);
+      return {
+        content: sanitizeAssistantOutput(normalizeContinuationArtifacts(combined)),
+        citations,
+        searchUsed,
+      };
     }
     workingMessages = [
       ...params.messages,
@@ -136,12 +161,16 @@ async function invokeChatWithContinuation(params: {
       {
         role: "user",
         content:
-          "방금 답변한 마지막 문장 다음부터만 이어서 남은 정보와 출처를 적어 주십시오. 이미 쓴 서두는 반복하지 말고, 메타 설명이나 내부 판단은 쓰지 마십시오.",
+          "방금 답변한 마지막 문장 다음부터만 이어서 남은 정보를 적어 주십시오. 이미 쓴 서두는 반복하지 말고, 출처 줄, 메타 설명, 내부 판단은 쓰지 마십시오.",
       },
     ];
   }
 
-  return normalizeContinuationArtifacts(combined);
+  return {
+    content: sanitizeAssistantOutput(normalizeContinuationArtifacts(combined)),
+    citations,
+    searchUsed,
+  };
 }
 
 async function invokeChatOnce(params: {
@@ -1091,11 +1120,17 @@ function extractOpenAIResult(body: unknown): ChatInvocationResult {
   const record = asRecord(body);
   const choices = record?.choices;
   if (!Array.isArray(choices) || choices.length === 0) {
-    return { content: "" };
+    return {
+      content: "",
+      citations: [],
+      searchUsed: hasOpenRouterSearchUsage(record),
+    };
   }
   const firstChoice = asRecord(choices[0]);
   const message = asRecord(firstChoice?.message);
   const content = message?.content;
+  const citations = parseOpenRouterCitations(message?.annotations);
+  const searchUsed = citations.length > 0 || hasOpenRouterSearchUsage(record);
   const finishReason =
     typeof firstChoice?.finish_reason === "string"
       ? firstChoice.finish_reason
@@ -1103,7 +1138,12 @@ function extractOpenAIResult(body: unknown): ChatInvocationResult {
         ? firstChoice.finishReason
         : undefined;
   if (typeof content === "string") {
-    return { content, finishReason };
+    return {
+      content,
+      finishReason,
+      citations,
+      searchUsed,
+    };
   }
   if (Array.isArray(content)) {
     const parts = content
@@ -1119,12 +1159,115 @@ function extractOpenAIResult(body: unknown): ChatInvocationResult {
     return {
       content: parts.join("\n"),
       finishReason,
+      citations,
+      searchUsed,
     };
   }
   return {
     content: "",
     finishReason,
+    citations,
+    searchUsed,
   };
+}
+
+export function parseOpenRouterCitations(value: unknown): WebCitation[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const citations: WebCitation[] = [];
+  for (const item of value) {
+    const annotation = asRecord(item);
+    if (annotation?.type !== "url_citation") {
+      continue;
+    }
+    const nested = asRecord(annotation.url_citation) ?? annotation;
+    const url = normalizeCitationUrl(nested.url);
+    if (!url) {
+      continue;
+    }
+    const title = normalizeCitationText(nested.title, 300);
+    const evidence = normalizeCitationText(
+      nested.content ?? nested.text ?? nested.quote,
+      4000,
+    );
+    citations.push({
+      url,
+      ...(title ? { title } : {}),
+      ...(evidence ? { evidence } : {}),
+    });
+  }
+  return mergeWebCitations(citations);
+}
+
+export function mergeWebCitations(
+  ...groups: ReadonlyArray<ReadonlyArray<WebCitation>>
+): WebCitation[] {
+  const merged = new Map<string, WebCitation>();
+  for (const group of groups) {
+    for (const citation of group) {
+      const url = normalizeCitationUrl(citation.url);
+      if (!url) {
+        continue;
+      }
+      const current = merged.get(url);
+      const title = normalizeCitationText(citation.title, 300);
+      const evidence = normalizeCitationText(citation.evidence, 4000);
+      merged.set(url, {
+        url,
+        ...((title ?? current?.title) ? { title: title ?? current?.title } : {}),
+        ...((evidence ?? current?.evidence)
+          ? { evidence: evidence ?? current?.evidence }
+          : {}),
+      });
+    }
+  }
+  return Array.from(merged.values());
+}
+
+function hasOpenRouterSearchUsage(record: Record<string, unknown> | null): boolean {
+  const usage = asRecord(record?.usage);
+  const serverToolUse = asRecord(usage?.server_tool_use ?? usage?.serverToolUse);
+  const count =
+    typeof serverToolUse?.web_search_requests === "number"
+      ? serverToolUse.web_search_requests
+      : typeof serverToolUse?.webSearchRequests === "number"
+        ? serverToolUse.webSearchRequests
+        : 0;
+  return Number.isFinite(count) && count > 0;
+}
+
+function normalizeCitationUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 4096) {
+    return null;
+  }
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== "https:" || url.username || url.password) {
+      return null;
+    }
+    url.hash = "";
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (
+        /(auth|code|credential|jwt|key|password|secret|session|sig|token)/i.test(
+          key,
+        )
+      ) {
+        url.searchParams.delete(key);
+      }
+    }
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function normalizeCitationText(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized ? normalized.slice(0, maxLength) : undefined;
 }
 
 function extractLangChainFinishReason(result: unknown): string | undefined {

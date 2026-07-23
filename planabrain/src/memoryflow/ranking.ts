@@ -32,10 +32,12 @@ interface BuildContextBundleInput {
 interface RankLayerInput {
   layer: MemoryLayer;
   items: RankableItem[];
+  queryText: string;
   queryEmbedding: number[];
   now: number;
   halfLifeMs: number;
   limit: number;
+  minimumSimilarity?: number;
 }
 
 interface SectionDraft {
@@ -56,6 +58,7 @@ export function buildContextBundle(params: BuildContextBundleInput): ContextBund
   const semantic = rankLayer({
     layer: "semantic",
     items: params.semanticFacts,
+    queryText: params.query,
     queryEmbedding,
     now,
     halfLifeMs: 1000 * 60 * 60 * 24 * 45,
@@ -65,19 +68,23 @@ export function buildContextBundle(params: BuildContextBundleInput): ContextBund
   const episodic = rankLayer({
     layer: "episodic",
     items: params.episodicItems,
+    queryText: params.query,
     queryEmbedding,
     now,
     halfLifeMs: 1000 * 60 * 60 * 24 * 14,
-    limit: 8
+    limit: 8,
+    minimumSimilarity: 0.12
   });
 
   const summary = rankLayer({
     layer: "summary",
     items: params.summaryItems,
+    queryText: params.query,
     queryEmbedding,
     now,
     halfLifeMs: 1000 * 60 * 60 * 24 * 30,
-    limit: 6
+    limit: 6,
+    minimumSimilarity: 0.12
   });
 
   const workingRecent: RankedItem[] = params.workingTurns.slice(-8).map((turn) => ({
@@ -126,6 +133,12 @@ function rankLayer(params: RankLayerInput): RankedItem[] {
       }
       const embedding = Array.isArray(item.embedding) ? item.embedding : embedText(text);
       const sim = cosineSimilarity(params.queryEmbedding, embedding);
+      if (
+        sim < (params.minimumSimilarity ?? 0) ||
+        (params.minimumSimilarity != null && !hasMeaningfulTermOverlap(text, params.queryText))
+      ) {
+        return null;
+      }
       const recency = recencyScore(item.at ?? Date.now(), params.now, params.halfLifeMs);
       const salience = clamp01(item.salience ?? 0.4);
       const layerWeight = weightByLayer[params.layer] ?? 1;
@@ -215,6 +228,26 @@ function normalizeDedupKey(text: string): string {
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function hasMeaningfulTermOverlap(left: string, right: string): boolean {
+  const leftTerms = extractTerms(left);
+  const rightTerms = extractTerms(right);
+  return leftTerms.some((leftTerm) =>
+    rightTerms.some(
+      (rightTerm) =>
+        leftTerm === rightTerm ||
+        (leftTerm.length >= 3 && rightTerm.includes(leftTerm)) ||
+        (rightTerm.length >= 3 && leftTerm.includes(rightTerm))
+    )
+  );
+}
+
+function extractTerms(text: string): string[] {
+  return String(text ?? "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .match(/[가-힣a-z0-9]{2,}/gu) ?? [];
 }
 
 function clamp01(value: number): number {

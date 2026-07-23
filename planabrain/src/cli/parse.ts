@@ -4,6 +4,7 @@ export type Command =
   | "tokens"
   | "memory-prepare"
   | "memory-assistant"
+  | "memory-exchange"
   | "memory-reset-user"
   | "memory-reset-all"
   | "memory-list-facts"
@@ -26,6 +27,7 @@ export function parseCli(argv: string[]): { command: Command; args: string[] } {
     command !== "tokens" &&
     command !== "memory-prepare" &&
     command !== "memory-assistant" &&
+    command !== "memory-exchange" &&
     command !== "memory-reset-user" &&
     command !== "memory-reset-all" &&
     command !== "memory-list-facts" &&
@@ -41,7 +43,7 @@ export function parseCli(argv: string[]): { command: Command; args: string[] } {
     command !== "schedule-interpret"
   ) {
     throw new Error(
-      "Usage: planabrain <ingest|ask|tokens|memory-prepare|memory-assistant|memory-reset-user|memory-reset-all|memory-list-facts|memory-delete-fact|memory-update-fact|memory-migrate-json|todo-list|todo-add|todo-complete|todo-update|todo-delete|todo-interpret|schedule-interpret> [...]"
+      "Usage: planabrain <ingest|ask|tokens|memory-prepare|memory-assistant|memory-exchange|memory-reset-user|memory-reset-all|memory-list-facts|memory-delete-fact|memory-update-fact|memory-migrate-json|todo-list|todo-add|todo-complete|todo-update|todo-delete|todo-interpret|schedule-interpret> [...]"
     );
   }
   return { command, args: rest };

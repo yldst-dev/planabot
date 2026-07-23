@@ -6,20 +6,21 @@ type Params = {
   question: string;
   answer: string;
   settings: Settings;
+  verifiedCitationUrls?: string[];
 };
 
 export const DEFAULT_DELIVERY_MAX_TOKENS = 1024;
+const MAX_VERIFIED_CITATIONS = 5;
+const MAX_VERIFIED_SOURCE_CHARS = 1500;
 
-// 생성/재작성 양쪽에서 공유하는 전송 포맷 규칙(문구 중복 방지)
 export function deliveryRuleLines(): string[] {
   return [
-    `사실관계, 날짜, 수치, 고유명사, 출처는 유지하십시오.`,
-    `문장 중간에 출처를 끼워 넣지 말고, 출처는 마지막에 한 번만 "출처:" 줄로 정리하십시오.`,
+    `사실관계, 날짜, 수치, 고유명사는 유지하십시오.`,
+    `출처는 애플리케이션이 추가하므로 출처 줄이나 URL을 작성하지 마십시오.`,
     `메타 설명, 내부 판단, 마크다운, 목록 기호는 금지합니다.`,
   ];
 }
 
-// 1패스 생성 시 시스템 프롬프트에 주입할 전송 규칙(길이 제약을 생성 단계에서 강제)
 export function buildDeliveryGenerationRules(
   deliveryMaxOutputTokens: number | undefined,
 ): string {
@@ -32,7 +33,13 @@ export function buildDeliveryGenerationRules(
 }
 
 export async function finalizeAnswerForDelivery(params: Params): Promise<string> {
-  const normalized = normalizeDeliveryText(params.answer);
+  const normalized = normalizeDeliveryText(removeModelSourceLines(params.answer));
+  const verifiedCitationUrls = normalizeVerifiedCitationUrls(
+    params.verifiedCitationUrls,
+  );
+  if (verifiedCitationUrls.length > 0) {
+    return appendVerifiedSources(normalized, verifiedCitationUrls);
+  }
   if (!params.settings.deliveryRewriteEnabled) {
     return normalized;
   }
@@ -74,7 +81,7 @@ export async function finalizeAnswerForDelivery(params: Params): Promise<string>
         },
       ],
     });
-    const finalText = normalizeDeliveryText(rewritten);
+    const finalText = normalizeDeliveryText(removeModelSourceLines(rewritten));
     if (!finalText) {
       return normalized;
     }
@@ -91,12 +98,6 @@ function shouldRewriteForDelivery(
   if (!answer.trim()) {
     return false;
   }
-  if (hasInlineSourceMarker(answer)) {
-    return true;
-  }
-  if (countSourceMarkers(answer) > 1) {
-    return true;
-  }
   if (looksAbruptlyTruncated(answer)) {
     return true;
   }
@@ -109,22 +110,8 @@ function normalizeDeliveryText(raw: string): string {
   if (!text) {
     return text;
   }
-  text = text.replace(/([^\n])[^\S\n]*출처:[^\S\n]*/g, "$1\n\n출처: ");
   text = text.replace(/\n{3,}/g, "\n\n").trim();
-  const sourceLines = text
-    .split("\n")
-    .map((line) => line.trimEnd());
-  const sourceIndexes = sourceLines
-    .map((line, index) => (line.trimStart().startsWith("출처:") ? index : -1))
-    .filter((index) => index >= 0);
-  let lines = sourceLines;
-  if (sourceIndexes.length > 1) {
-    const keepIndex = sourceIndexes[sourceIndexes.length - 1] ?? -1;
-    lines = sourceLines.filter(
-      (_, index) => !sourceIndexes.includes(index) || index === keepIndex,
-    );
-  }
-  return lines.map(breakIntoSentenceLines).join("\n").trim();
+  return text.split("\n").map(breakIntoSentenceLines).join("\n").trim();
 }
 
 function breakIntoSentenceLines(line: string): string {
@@ -135,15 +122,6 @@ function breakIntoSentenceLines(line: string): string {
   return line
     .replace(/([^\s.!?][.!?]+["'”’)\]]*)[ \t]+(?=\S)/g, "$1\n")
     .replace(/([。！？]+["'”’)\]）」』》]*)[ \t]*(?=\S)/g, "$1\n");
-}
-
-function hasInlineSourceMarker(answer: string): boolean {
-  // 같은 줄에 본문과 "출처:"가 섞인 경우만 인라인으로 본다(줄바꿈 분리는 정상).
-  return /[^\n][^\S\n]*출처:/.test(answer);
-}
-
-function countSourceMarkers(answer: string): number {
-  return answer.match(/출처:/g)?.length ?? 0;
 }
 
 function estimateTokenCount(answer: string): number {
@@ -186,4 +164,71 @@ function hasUnbalancedPairs(content: string): boolean {
   const openBrackets =
     (content.match(/\[/g)?.length ?? 0) - (content.match(/\]/g)?.length ?? 0);
   return openParens > 0 || openBrackets > 0;
+}
+
+export function removeModelSourceLines(input: string): string {
+  return input
+    .split(/\r?\n/u)
+    .map((line) => {
+      const source = line.match(/(?:출처|sources?):/iu);
+      if (source?.index !== undefined) {
+        const prefix = line.slice(0, source.index).trimEnd();
+        return /^[\s>*\-•]*$/u.test(prefix) ? "" : prefix;
+      }
+      const trimmed = line.trim();
+      if (
+        /^(?:https?:\/\/\S+)(?:\s*,\s*https?:\/\/\S+)*$/iu.test(trimmed) ||
+        /^(?:\[[^\]]+\]\(https?:\/\/[^)]+\))(?:\s*,\s*\[[^\]]+\]\(https?:\/\/[^)]+\))*$/iu.test(
+          trimmed,
+        )
+      ) {
+        return "";
+      }
+      return line;
+    })
+    .join("\n")
+    .trim();
+}
+
+function appendVerifiedSources(answer: string, urls: string[]): string {
+  const sourceLine = `출처: ${urls.join(", ")}`;
+  return answer ? `${answer}\n\n${sourceLine}` : sourceLine;
+}
+
+function normalizeVerifiedCitationUrls(urls: string[] | undefined): string[] {
+  const verified = new Set<string>();
+  let totalChars = 0;
+  for (const value of urls ?? []) {
+    if (verified.size >= MAX_VERIFIED_CITATIONS) {
+      break;
+    }
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:" || url.username || url.password) {
+        continue;
+      }
+      url.hash = "";
+      for (const key of Array.from(url.searchParams.keys())) {
+        if (
+          /(auth|code|credential|jwt|key|password|secret|session|sig|token)/i.test(
+            key,
+          )
+        ) {
+          url.searchParams.delete(key);
+        }
+      }
+      const normalized = url.toString();
+      if (verified.has(normalized)) {
+        continue;
+      }
+      if (totalChars + normalized.length > MAX_VERIFIED_SOURCE_CHARS) {
+        continue;
+      }
+      verified.add(normalized);
+      totalChars += normalized.length;
+    } catch {
+      continue;
+    }
+  }
+  return Array.from(verified);
 }
