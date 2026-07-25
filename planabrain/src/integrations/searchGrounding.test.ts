@@ -5,6 +5,7 @@ import { finalizeAnswerForDelivery } from "../chat/deliveryRewrite.js";
 import {
   answerWithWebSearch,
   isCurrentInformationRequest,
+  isExplicitSearchRequest,
 } from "../chat/webSearchAnswer.js";
 import type { Settings } from "../config/settings.js";
 import {
@@ -259,6 +260,42 @@ test("fails closed when a current-information request has no verified citation",
   }
 });
 
+test("explicit search request attaches the search tool and keeps the answer", async () => {
+  const requests: Array<{ input: string; init?: RequestInit }> = [];
+  const restore = installFetchQueue(
+    [
+      {
+        choices: [
+          {
+            finish_reason: "stop",
+            message: { content: "해당 회사를 확인했습니다." },
+          },
+        ],
+      },
+    ],
+    requests,
+  );
+
+  try {
+    const answer = await answerWithWebSearch({
+      question:
+        "메타정보:\n현재 시각: 2026-07-24 (금) 02:08:00 KST\n\n사용자 질문:\n이 회사에 대해 검색해줘",
+      currentTurnText: "이 회사에 대해 검색해줘",
+      settings: createSettings(),
+    });
+
+    assert.doesNotMatch(answer, /확인 불가/u);
+    assert.match(answer, /해당 회사를 확인했습니다/u);
+    const payload = JSON.parse(String(requests[0]?.init?.body)) as Record<
+      string,
+      unknown
+    >;
+    assert.equal(Array.isArray(payload.tools), true);
+  } finally {
+    restore();
+  }
+});
+
 test("replaces model-authored sources with verified HTTPS citation URLs", async () => {
   const restore = installFetchQueue([
     {
@@ -431,6 +468,24 @@ test("current-information classifier ignores casual conversation", () => {
   );
   assert.equal(isCurrentInformationRequest("오늘 원달러 환율 알려줘"), true);
   assert.equal(isCurrentInformationRequest("삿포로 날씨 알려줘"), true);
+});
+
+test("explicit search request classifier detects search directives", () => {
+  assert.equal(isExplicitSearchRequest("이 회사에 대해 검색해줘"), true);
+  assert.equal(isExplicitSearchRequest("검색 좀 해봐"), true);
+  assert.equal(isExplicitSearchRequest("웹에서 찾아봐"), true);
+  assert.equal(isExplicitSearchRequest("관련 자료 찾아줘"), true);
+  assert.equal(isExplicitSearchRequest("이거 알아봐 줘"), true);
+  assert.equal(isExplicitSearchRequest("조사해줘"), true);
+  assert.equal(isExplicitSearchRequest("구글링해줘"), true);
+  assert.equal(isExplicitSearchRequest("심심해"), false);
+  assert.equal(isExplicitSearchRequest("오늘 기분이 어때"), false);
+  assert.equal(
+    isExplicitSearchRequest(
+      "메타정보:\n현재 시각: 2026-07-24\n사용자 질문:\nTODO 컨텍스트:\n- 자료 검색하기\n\n심심해",
+    ),
+    false,
+  );
 });
 
 test("long-range weather policy returns before model invocation", async () => {

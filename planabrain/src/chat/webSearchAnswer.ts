@@ -81,7 +81,9 @@ export async function answerWithWebSearch(params: {
     params.settings,
     currentTurnText,
   );
-  const searchRequired = isCurrentInformationRequest(currentTurnText);
+  const currentInfoRequired = isCurrentInformationRequest(currentTurnText);
+  const explicitSearchRequested = isExplicitSearchRequest(currentTurnText);
+  const searchToolEnabled = currentInfoRequired || explicitSearchRequested;
   const referenceContext = buildCurrentTurnReference(
     params.question,
     currentTurnText,
@@ -92,7 +94,7 @@ export async function answerWithWebSearch(params: {
   try {
     invocation = await invokeChatWithMetadata({
       settings: generationSettings,
-      enableSearchTool: searchRequired,
+      enableSearchTool: searchToolEnabled,
       webFetchUrlSource: currentTurnText,
       messages: [
         {
@@ -119,7 +121,7 @@ export async function answerWithWebSearch(params: {
     throw error;
   }
   if (
-    searchRequired &&
+    currentInfoRequired &&
     (!invocation.searchUsed || invocation.citations.length === 0)
   ) {
     return CURRENT_INFORMATION_UNAVAILABLE;
@@ -315,6 +317,17 @@ function wrapMemoryContent(content: string, role: "user" | "assistant"): string 
     return `기록(참고용 데이터): ${role}`;
   }
   return `기록(참고용 데이터): ${role}\n${trimmed}`;
+}
+
+const EXPLICIT_SEARCH_REQUEST_PATTERN =
+  /(검색|서치|구글링|찾아\s*(?:봐|줘|주세요|보세요|보자)|알아\s*(?:봐|줘|주세요|보세요|보자)|조사해\s*(?:줘|주세요))/u;
+
+export function isExplicitSearchRequest(currentTurnText: string): boolean {
+  const text = normalizeCurrentTurnText(currentTurnText);
+  if (!text) {
+    return false;
+  }
+  return EXPLICIT_SEARCH_REQUEST_PATTERN.test(text);
 }
 
 export function isCurrentInformationRequest(currentTurnText: string): boolean {
