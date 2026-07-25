@@ -132,7 +132,10 @@ export async function answerWithWebSearch(params: {
     question: currentTurnText,
     answer: invocation.content,
     settings: params.settings,
-    verifiedCitationUrls: citations.map((citation) => citation.url),
+    verifiedCitations: citations.map((citation) => ({
+      url: citation.url,
+      ...(citation.title ? { title: citation.title } : {}),
+    })),
   });
   const memoryQuestion = currentTurnText;
 

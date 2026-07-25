@@ -294,7 +294,7 @@ test("replaces model-authored sources with verified HTTPS citation URLs", async 
     });
 
     assert.doesNotMatch(answer, /fake\.example/u);
-    assert.match(answer, /출처: https:\/\/verified\.example\/rates/u);
+    assert.match(answer, /출처: \[Verified\]\(https:\/\/verified\.example\/rates\)/u);
   } finally {
     restore();
   }
@@ -316,19 +316,103 @@ test("verified citations bypass delivery rewrite", async () => {
         deliveryRewriteEnabled: true,
         deliveryMaxOutputTokens: 1,
       }),
-      verifiedCitationUrls: [
-        "https://verified.example/rates",
-        "http://insecure.example/rates",
+      verifiedCitations: [
+        { url: "https://verified.example/rates", title: "검증된 환율" },
+        { url: "http://insecure.example/rates", title: "안전하지 않음" },
       ],
     });
 
     assert.equal(fetchCalls, 0);
     assert.doesNotMatch(answer, /모델이 쓴 출처/u);
-    assert.match(answer, /출처: https:\/\/verified\.example\/rates/u);
+    assert.match(
+      answer,
+      /출처: \[검증된 환율\]\(https:\/\/verified\.example\/rates\)/u,
+    );
     assert.doesNotMatch(answer, /insecure/u);
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test("source labels strip brackets, newlines and control characters", async () => {
+  const answer = await finalizeAnswerForDelivery({
+    question: "질문",
+    answer: "본문입니다.",
+    settings: createSettings({ deliveryRewriteEnabled: false }),
+    verifiedCitations: [
+      {
+        url: "https://a.example/one",
+        title: "제목 [대괄호] (괄호)\n둘째 줄\t탭",
+      },
+    ],
+  });
+
+  assert.equal(
+    answer,
+    "본문입니다.\n\n출처: [제목 대괄호 괄호 둘째 줄 탭](https://a.example/one)",
+  );
+});
+
+test("source labels fall back to hostname without www", async () => {
+  const answer = await finalizeAnswerForDelivery({
+    question: "질문",
+    answer: "본문입니다.",
+    settings: createSettings({ deliveryRewriteEnabled: false }),
+    verifiedCitations: [
+      { url: "https://www.example.com/path" },
+      { url: "https://b.example/two", title: "   " },
+      { url: "https://c.example/three", title: "()[]" },
+    ],
+  });
+
+  assert.match(answer, /\[example\.com\]\(https:\/\/www\.example\.com\/path\)/u);
+  assert.match(answer, /\[b\.example\]\(https:\/\/b\.example\/two\)/u);
+  assert.match(answer, /\[c\.example\]\(https:\/\/c\.example\/three\)/u);
+});
+
+test("source labels are truncated to 60 characters", async () => {
+  const longTitle = "가".repeat(120);
+  const answer = await finalizeAnswerForDelivery({
+    question: "질문",
+    answer: "본문입니다.",
+    settings: createSettings({ deliveryRewriteEnabled: false }),
+    verifiedCitations: [{ url: "https://long.example/a", title: longTitle }],
+  });
+
+  const label = answer.match(/\[([^\]]+)\]\(https:\/\/long\.example\/a\)/u)?.[1];
+  assert.equal(label, "가".repeat(60));
+});
+
+test("citation URLs containing a closing parenthesis are skipped", async () => {
+  const answer = await finalizeAnswerForDelivery({
+    question: "질문",
+    answer: "본문입니다.",
+    settings: createSettings({ deliveryRewriteEnabled: false }),
+    verifiedCitations: [
+      { url: "https://paren.example/a(b)c", title: "괄호 URL" },
+      { url: "https://ok.example/a", title: "정상" },
+    ],
+  });
+
+  assert.doesNotMatch(answer, /paren\.example/u);
+  assert.equal(answer, "본문입니다.\n\n출처: [정상](https://ok.example/a)");
+});
+
+test("sensitive query parameters are still stripped from labeled sources", async () => {
+  const answer = await finalizeAnswerForDelivery({
+    question: "질문",
+    answer: "본문입니다.",
+    settings: createSettings({ deliveryRewriteEnabled: false }),
+    verifiedCitations: [
+      {
+        url: "https://secret.example/a?token=abc&q=rate#frag",
+        title: "민감 파라미터",
+      },
+    ],
+  });
+
+  assert.doesNotMatch(answer, /token|abc|frag/u);
+  assert.match(answer, /q=rate/u);
 });
 
 test("current-information classifier ignores casual conversation", () => {

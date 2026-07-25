@@ -601,13 +601,40 @@ fn render_source_line_html(line: &str) -> Option<String> {
         return None;
     }
 
+    let links = render_labeled_sources(rest).or_else(|| render_bare_url_sources(rest))?;
+    Some(format!("출처: {}", links.join(", ")))
+}
+
+fn render_labeled_sources(rest: &str) -> Option<Vec<String>> {
+    let mut links = Vec::new();
+    let mut remainder = rest;
+    loop {
+        let after_open = remainder.trim_start().strip_prefix('[')?;
+        let (label, after_label) = after_open.split_once("](")?;
+        let (url, tail) = after_label.split_once(')')?;
+        let label = label.trim();
+        if label.is_empty() || !is_supported_source_url(url) {
+            return None;
+        }
+        links.push(html::link(url, label));
+
+        let tail = tail.trim_start();
+        if tail.is_empty() {
+            break;
+        }
+        remainder = tail.strip_prefix(',')?;
+    }
+    Some(links)
+}
+
+fn render_bare_url_sources(rest: &str) -> Option<Vec<String>> {
     let mut links = Vec::new();
     for candidate in rest.split(',') {
         let url = candidate.trim();
         if url.is_empty() {
             continue;
         }
-        if !(url.starts_with("https://") || url.starts_with("http://")) {
+        if !is_supported_source_url(url) {
             return None;
         }
         links.push(html::link(url, &format!("링크{}", links.len() + 1)));
@@ -616,7 +643,11 @@ fn render_source_line_html(line: &str) -> Option<String> {
     if links.is_empty() {
         return None;
     }
-    Some(format!("출처: {}", links.join(", ")))
+    Some(links)
+}
+
+fn is_supported_source_url(url: &str) -> bool {
+    (url.starts_with("https://") || url.starts_with("http://")) && !url.contains(char::is_whitespace)
 }
 
 fn planabrain_error_user_message(kind: Option<planabrain::PlanabrainErrorKind>) -> &'static str {
@@ -1488,7 +1519,32 @@ mod tests {
     use super::render_answer_html;
 
     #[test]
-    fn renders_sources_as_numbered_links() {
+    fn renders_labeled_sources_as_title_links() {
+        let text = "확인했습니다.\n\n출처: [조선일보](https://a.example/x), [연합뉴스](https://b.example/y)";
+        let rendered = render_answer_html(text);
+        assert!(rendered.contains("<a href=\"https://a.example/x\">조선일보</a>"));
+        assert!(rendered.contains("<a href=\"https://b.example/y\">연합뉴스</a>"));
+        assert!(!rendered.contains("[조선일보]"));
+    }
+
+    #[test]
+    fn renders_label_containing_comma() {
+        let text = "확인.\n\n출처: [삼성, 그리고 SK](https://a.example/x), [B](https://b.example/y)";
+        let rendered = render_answer_html(text);
+        assert!(rendered.contains("<a href=\"https://a.example/x\">삼성, 그리고 SK</a>"));
+        assert!(rendered.contains("<a href=\"https://b.example/y\">B</a>"));
+    }
+
+    #[test]
+    fn escapes_untrusted_label() {
+        let text = "확인.\n\n출처: [<b>x</b> & y](https://a.example/x)";
+        let rendered = render_answer_html(text);
+        assert!(rendered.contains("&lt;b&gt;x&lt;/b&gt; &amp; y</a>"));
+        assert!(!rendered.contains("<b>x</b>"));
+    }
+
+    #[test]
+    fn renders_bare_urls_as_numbered_links() {
         let text = "확인했습니다.\n\n출처: https://a.example/x, https://b.example/y";
         let rendered = render_answer_html(text);
         assert!(rendered.contains("<a href=\"https://a.example/x\">링크1</a>"));

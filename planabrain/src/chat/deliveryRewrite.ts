@@ -2,16 +2,22 @@ import { buildSystemPrompt } from "../config/systemPrompt.js";
 import type { Settings } from "../config/settings.js";
 import { invokeChat } from "../integrations/gemini/chat.js";
 
+export type VerifiedCitation = {
+  url: string;
+  title?: string;
+};
+
 type Params = {
   question: string;
   answer: string;
   settings: Settings;
-  verifiedCitationUrls?: string[];
+  verifiedCitations?: VerifiedCitation[];
 };
 
 export const DEFAULT_DELIVERY_MAX_TOKENS = 1024;
 const MAX_VERIFIED_CITATIONS = 5;
 const MAX_VERIFIED_SOURCE_CHARS = 1500;
+const MAX_VERIFIED_LABEL_CHARS = 60;
 
 export function deliveryRuleLines(): string[] {
   return [
@@ -34,11 +40,9 @@ export function buildDeliveryGenerationRules(
 
 export async function finalizeAnswerForDelivery(params: Params): Promise<string> {
   const normalized = normalizeDeliveryText(removeModelSourceLines(params.answer));
-  const verifiedCitationUrls = normalizeVerifiedCitationUrls(
-    params.verifiedCitationUrls,
-  );
-  if (verifiedCitationUrls.length > 0) {
-    return appendVerifiedSources(normalized, verifiedCitationUrls);
+  const verifiedCitations = normalizeVerifiedCitations(params.verifiedCitations);
+  if (verifiedCitations.length > 0) {
+    return appendVerifiedSources(normalized, verifiedCitations);
   }
   if (!params.settings.deliveryRewriteEnabled) {
     return normalized;
@@ -190,20 +194,56 @@ export function removeModelSourceLines(input: string): string {
     .trim();
 }
 
-function appendVerifiedSources(answer: string, urls: string[]): string {
-  const sourceLine = `출처: ${urls.join(", ")}`;
+function appendVerifiedSources(answer: string, entries: string[]): string {
+  const sourceLine = `출처: ${entries.join(", ")}`;
   return answer ? `${answer}\n\n${sourceLine}` : sourceLine;
 }
 
-function normalizeVerifiedCitationUrls(urls: string[] | undefined): string[] {
-  const verified = new Set<string>();
+export function sanitizeCitationLabel(raw: string | undefined): string {
+  const cleaned = String(raw ?? "")
+    .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+    .replace(/[[\]()]/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (cleaned.length <= MAX_VERIFIED_LABEL_CHARS) {
+    return cleaned;
+  }
+  let end = MAX_VERIFIED_LABEL_CHARS;
+  const code = cleaned.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) {
+    end -= 1;
+  }
+  return cleaned.slice(0, end).trim();
+}
+
+function buildCitationLabel(
+  title: string | undefined,
+  url: URL,
+  position: number,
+): string {
+  const fromTitle = sanitizeCitationLabel(title);
+  if (fromTitle) {
+    return fromTitle;
+  }
+  const fromHost = sanitizeCitationLabel(url.hostname.replace(/^www\./iu, ""));
+  if (fromHost) {
+    return fromHost;
+  }
+  return `링크${position}`;
+}
+
+function normalizeVerifiedCitations(
+  citations: VerifiedCitation[] | undefined,
+): string[] {
+  const seen = new Set<string>();
+  const entries: string[] = [];
   let totalChars = 0;
-  for (const value of urls ?? []) {
-    if (verified.size >= MAX_VERIFIED_CITATIONS) {
+  for (const citation of citations ?? []) {
+    if (entries.length >= MAX_VERIFIED_CITATIONS) {
       break;
     }
     try {
-      const url = new URL(value);
+      const url = new URL(citation.url);
       if (url.protocol !== "https:" || url.username || url.password) {
         continue;
       }
@@ -218,17 +258,20 @@ function normalizeVerifiedCitationUrls(urls: string[] | undefined): string[] {
         }
       }
       const normalized = url.toString();
-      if (verified.has(normalized)) {
+      if (normalized.includes(")") || seen.has(normalized)) {
         continue;
       }
-      if (totalChars + normalized.length > MAX_VERIFIED_SOURCE_CHARS) {
+      const label = buildCitationLabel(citation.title, url, entries.length + 1);
+      const entry = `[${label}](${normalized})`;
+      if (totalChars + entry.length > MAX_VERIFIED_SOURCE_CHARS) {
         continue;
       }
-      verified.add(normalized);
-      totalChars += normalized.length;
+      seen.add(normalized);
+      entries.push(entry);
+      totalChars += entry.length;
     } catch {
       continue;
     }
   }
-  return Array.from(verified);
+  return entries;
 }
