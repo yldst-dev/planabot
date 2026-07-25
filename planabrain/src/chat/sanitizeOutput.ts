@@ -2,7 +2,7 @@ const GENERIC_FAILURE_REPLY =
   "오류.\n선생님.\n응답 생성에 실패했습니다.\n잠시 후 다시 시도해 주세요.";
 
 const SELF_NAME_PATTERN =
-  /(저는|저도|제가|저를|제\s*이름은|내\s*이름은|나는|내가|본인은)(\s*)(아로나|A\.?\s*R\.?\s*O\.?\s*N\.?\s*A)/gi;
+  /(저는|저도|제가|저를|제\s*이름은|내\s*이름은|나는|내가|본인은)(\s*)(아로나|A\.?\s*R\.?\s*O\.?\s*N\.?\s*A)(?=\s*(?:입니다|입니다만|이에요|예요|에요|이야|야|였|이었|라고|라는))/gi;
 
 export function correctSelfName(text: string): string {
   return text.replace(

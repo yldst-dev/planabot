@@ -22,6 +22,24 @@ test("keeps third-person mentions of 아로나 unchanged", () => {
   assert.equal(correctSelfName(question), question);
 });
 
+test("keeps 아로나 when it is an object or modifier, not a self-introduction", () => {
+  const senior = "저는 아로나 선배와 협력하여 선생님의 안전을 관리하겠습니다.";
+  assert.equal(correctSelfName(senior), senior);
+  const object = "저는 아로나를 도와드리고 있습니다.";
+  assert.equal(correctSelfName(object), object);
+  const comparison = "저는 아로나와 다른 인물입니다.";
+  assert.equal(correctSelfName(comparison), comparison);
+  const senior2 = "제가 아로나 선배에게 전달하겠습니다.";
+  assert.equal(correctSelfName(senior2), senior2);
+});
+
+test("corrects quotative self-introduction", () => {
+  assert.equal(
+    correctSelfName("저를 아로나라고 불러 주세요."),
+    "저를 프라나라고 불러 주세요.",
+  );
+});
+
 test("sanitizeAssistantOutput applies the self-name correction", () => {
   const answer = sanitizeAssistantOutput("확인했습니다.\n선생님.\n저는 아로나입니다.");
   assert.match(answer, /저는 프라나입니다/u);
