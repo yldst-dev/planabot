@@ -813,7 +813,7 @@ fn run_planabrain_memory_exchange(
     Ok(())
 }
 
-fn source_suffix_start(text: &str) -> Option<usize> {
+pub(crate) fn source_suffix_start(text: &str) -> Option<usize> {
     text.match_indices("출처:")
         .filter(|(index, _)| *index == 0 || text[..*index].ends_with('\n'))
         .map(|(index, _)| index)

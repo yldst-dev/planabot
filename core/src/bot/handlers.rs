@@ -29,7 +29,10 @@ use super::gallery::{
     GalleryIdSource, build_gallery_keyboard, extract_gallery_id, is_private_chat,
     render_gallery_message, render_gallery_message_for_user,
 };
-use super::telegram::{SendOptions, send_reply_markdown_with_fallback, send_reply_with_fallback};
+use super::telegram::{
+    SendOptions, send_reply_html_with_fallback, send_reply_markdown_with_fallback,
+    send_reply_with_fallback,
+};
 use super::{AppState, HandlerResult};
 
 const PLANABRAIN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(180);
@@ -568,9 +571,11 @@ where
     B: Requester + ?Sized,
     B::Err: std::error::Error + Send + Sync + 'static,
 {
-    send_reply_markdown_with_fallback(
+    let html_text = render_answer_html(&text);
+    send_reply_html_with_fallback(
         bot,
         msg,
+        html_text,
         text,
         SendOptions {
             disable_preview: Some(true),
@@ -578,6 +583,40 @@ where
         },
     )
     .await
+}
+
+fn render_answer_html(text: &str) -> String {
+    let Some(source_start) = planabrain::source_suffix_start(text) else {
+        return html::escape(text);
+    };
+    let Some(source_html) = render_source_line_html(text[source_start..].trim_end()) else {
+        return html::escape(text);
+    };
+    format!("{}{}", html::escape(&text[..source_start]), source_html)
+}
+
+fn render_source_line_html(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("출처:")?.trim();
+    if rest.is_empty() || rest.contains('\n') {
+        return None;
+    }
+
+    let mut links = Vec::new();
+    for candidate in rest.split(',') {
+        let url = candidate.trim();
+        if url.is_empty() {
+            continue;
+        }
+        if !(url.starts_with("https://") || url.starts_with("http://")) {
+            return None;
+        }
+        links.push(html::link(url, &format!("링크{}", links.len() + 1)));
+    }
+
+    if links.is_empty() {
+        return None;
+    }
+    Some(format!("출처: {}", links.join(", ")))
 }
 
 fn planabrain_error_user_message(kind: Option<planabrain::PlanabrainErrorKind>) -> &'static str {
@@ -1442,4 +1481,38 @@ where
         return None;
     }
     Some(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_answer_html;
+
+    #[test]
+    fn renders_sources_as_numbered_links() {
+        let text = "확인했습니다.\n\n출처: https://a.example/x, https://b.example/y";
+        let rendered = render_answer_html(text);
+        assert!(rendered.contains("<a href=\"https://a.example/x\">링크1</a>"));
+        assert!(rendered.contains("<a href=\"https://b.example/y\">링크2</a>"));
+        assert!(!rendered.contains("출처: https://"));
+    }
+
+    #[test]
+    fn escapes_body_without_sources() {
+        let rendered = render_answer_html("5 < 7 이며 a & b 입니다.");
+        assert_eq!(rendered, "5 &lt; 7 이며 a &amp; b 입니다.");
+    }
+
+    #[test]
+    fn keeps_plain_text_when_source_line_has_no_url() {
+        let text = "확인했습니다.\n\n출처: 사내 자료";
+        assert_eq!(render_answer_html(text), text);
+    }
+
+    #[test]
+    fn escapes_body_before_source_line() {
+        let text = "a & b 입니다.\n\n출처: https://a.example/x";
+        let rendered = render_answer_html(text);
+        assert!(rendered.starts_with("a &amp; b 입니다."));
+        assert!(rendered.ends_with("<a href=\"https://a.example/x\">링크1</a>"));
+    }
 }

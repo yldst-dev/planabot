@@ -114,9 +114,33 @@ where
     match send_reply_with_fallback(bot, msg, text.clone(), opts.clone()).await {
         Ok(message) => Ok(message),
         Err(err) => {
-            if is_markdown_error(&err) {
+            if is_parse_entities_error(&err) {
                 let escaped = markdown::escape(&text);
                 return send_reply_with_fallback(bot, msg, escaped, opts).await;
+            }
+            Err(err)
+        }
+    }
+}
+
+pub(crate) async fn send_reply_html_with_fallback<B>(
+    bot: &B,
+    msg: &Message,
+    html_text: String,
+    plain_text: String,
+    mut opts: SendOptions,
+) -> Result<Message>
+where
+    B: Requester + ?Sized,
+    B::Err: std::error::Error + Send + Sync + 'static,
+{
+    opts.parse_mode = Some(ParseMode::Html);
+    match send_reply_with_fallback(bot, msg, html_text, opts.clone()).await {
+        Ok(message) => Ok(message),
+        Err(err) => {
+            if is_parse_entities_error(&err) {
+                opts.parse_mode = None;
+                return send_reply_with_fallback(bot, msg, plain_text, opts).await;
             }
             Err(err)
         }
@@ -142,7 +166,7 @@ where
     req
 }
 
-fn is_markdown_error(err: &anyhow::Error) -> bool {
+fn is_parse_entities_error(err: &anyhow::Error) -> bool {
     let text = err.to_string().to_lowercase();
     text.contains("can't parse entities") || text.contains("cannot parse entities")
 }
