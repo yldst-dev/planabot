@@ -647,7 +647,8 @@ fn render_bare_url_sources(rest: &str) -> Option<Vec<String>> {
 }
 
 fn is_supported_source_url(url: &str) -> bool {
-    (url.starts_with("https://") || url.starts_with("http://")) && !url.contains(char::is_whitespace)
+    (url.starts_with("https://") || url.starts_with("http://"))
+        && !url.contains(char::is_whitespace)
 }
 
 fn planabrain_error_user_message(kind: Option<planabrain::PlanabrainErrorKind>) -> &'static str {
@@ -1529,7 +1530,8 @@ mod tests {
 
     #[test]
     fn renders_label_containing_comma() {
-        let text = "확인.\n\n출처: [삼성, 그리고 SK](https://a.example/x), [B](https://b.example/y)";
+        let text =
+            "확인.\n\n출처: [삼성, 그리고 SK](https://a.example/x), [B](https://b.example/y)";
         let rendered = render_answer_html(text);
         assert!(rendered.contains("<a href=\"https://a.example/x\">삼성, 그리고 SK</a>"));
         assert!(rendered.contains("<a href=\"https://b.example/y\">B</a>"));
