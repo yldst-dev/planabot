@@ -11,12 +11,51 @@ export function correctSelfName(text: string): string {
   );
 }
 
+const TOOL_CALL_ECHO_START =
+  /^\s*(?:```[a-z_]*\s*)?(?:print\s*\(\s*)?(?:default_api\.|functions\.|tool_code[\s:]*)?(?:web_search|web_fetch|google_search)\s*\(/i;
+
+export function stripToolCallEcho(text: string): string {
+  const lines = text.split("\n");
+  const kept: string[] = [];
+  let depth = 0;
+  let skipping = false;
+  for (const line of lines) {
+    if (!skipping && TOOL_CALL_ECHO_START.test(line)) {
+      skipping = true;
+      depth = 0;
+    }
+    if (!skipping) {
+      kept.push(line);
+      continue;
+    }
+    depth += countChar(line, "(") - countChar(line, ")");
+    if (depth <= 0) {
+      skipping = false;
+    }
+  }
+  return kept.join("\n").trim();
+}
+
+function countChar(text: string, target: string): number {
+  let count = 0;
+  for (const char of text) {
+    if (char === target) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 export function sanitizeAssistantOutput(raw: string): string {
   const normalized = raw.replace(/\r\n/g, "\n").trim();
   if (!normalized) {
     return normalized;
   }
-  return correctSelfName(resolveAssistantOutput(normalized));
+  const withoutToolEcho = stripToolCallEcho(normalized);
+  if (!withoutToolEcho) {
+    return GENERIC_FAILURE_REPLY;
+  }
+  return correctSelfName(resolveAssistantOutput(withoutToolEcho));
 }
 
 function resolveAssistantOutput(normalized: string): string {
