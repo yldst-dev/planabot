@@ -4,6 +4,7 @@ import { buildSystemPrompt } from "../config/systemPrompt.js";
 import {
   ProviderRateLimitError,
   invokeChatWithMetadata,
+  isSearchToolAvailable,
   mergeWebCitations,
   type ChatInvocationMetadata,
   type WebCitation,
@@ -60,8 +61,7 @@ export async function answerWithWebSearch(params: {
       : [];
 
   const currentInfoRequired = isCurrentInformationRequest(currentTurnText);
-  const explicitSearchRequested = isExplicitSearchRequest(currentTurnText);
-  const searchToolEnabled = currentInfoRequired || explicitSearchRequested;
+  const searchToolEnabled = isSearchToolAvailable(params.settings);
   const deliveryEnabled = params.settings.deliveryRewriteEnabled;
   const deliveryLimit =
     params.settings.deliveryMaxOutputTokens ?? DEFAULT_DELIVERY_MAX_TOKENS;

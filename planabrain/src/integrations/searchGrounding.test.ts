@@ -178,7 +178,7 @@ test("merges citations and search usage across continuations", async () => {
   }
 });
 
-test("uses only currentTurnText to decide whether search is enabled", async () => {
+test("uses only currentTurnText for the current-information gate", async () => {
   const requests: Array<{ input: string; init?: RequestInit }> = [];
   const restore = installFetchQueue(
     [
@@ -208,7 +208,7 @@ test("uses only currentTurnText to decide whether search is enabled", async () =
       string,
       unknown
     >;
-    assert.equal("tools" in payload, false);
+    assert.equal(Array.isArray(payload.tools), true);
     const messages = payload.messages as Array<Record<string, unknown>>;
     assert.equal(messages.at(-1)?.content, "심심해");
     assert.equal(

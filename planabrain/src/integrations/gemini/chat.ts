@@ -430,6 +430,22 @@ async function invokeCerebrasChat(
   throw new Error("Cerebras tool-calling exceeded iteration limit");
 }
 
+export function isSearchToolAvailable(settings: Settings): boolean {
+  if (settings.aiProvider === "openrouter") {
+    return settings.openRouterWebSearchEnabled;
+  }
+  if (settings.aiProvider === "cerebras") {
+    return settings.cerebrasWebSearchEnabled && settings.ollamaApiKeys.length > 0;
+  }
+  if (settings.aiProvider === "ollama") {
+    return settings.ollamaWebSearchEnabled;
+  }
+  if (settings.aiProvider === "google" || settings.aiProvider === "vertexexpress") {
+    return true;
+  }
+  return false;
+}
+
 function buildOpenRouterWebSearchTool(
   settings: Settings,
   enableSearchTool: boolean | undefined,
