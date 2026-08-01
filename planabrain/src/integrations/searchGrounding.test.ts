@@ -6,6 +6,7 @@ import {
   answerWithWebSearch,
   isCurrentInformationRequest,
   isExplicitSearchRequest,
+  isInformationRequestForm,
 } from "../chat/webSearchAnswer.js";
 import type { Settings } from "../config/settings.js";
 import {
@@ -468,6 +469,32 @@ test("current-information classifier ignores casual conversation", () => {
   );
   assert.equal(isCurrentInformationRequest("오늘 원달러 환율 알려줘"), true);
   assert.equal(isCurrentInformationRequest("삿포로 날씨 알려줘"), true);
+});
+
+test("current-information classifier ignores keywords in casual statements", () => {
+  const praise =
+    "개수만큼 가격차이 나는거라 뭐라고 하진 않아. 그냥 결정장애를 너가 해결해준거야. 잘했어. (쓰담쓰담)";
+  assert.equal(isCurrentInformationRequest(praise), false);
+  assert.equal(isCurrentInformationRequest("오늘 날씨 좋아서 기분이 좋네"), false);
+  assert.equal(isCurrentInformationRequest("요즘 물가 장난 아니야 힘들다"), false);
+  assert.equal(isCurrentInformationRequest("교통 지옥이었어 늦어서 미안"), false);
+  assert.equal(isCurrentInformationRequest("뉴스 보다가 잠들었어"), false);
+  assert.equal(isCurrentInformationRequest("날씨 좋다"), false);
+});
+
+test("current-information classifier still catches real questions", () => {
+  assert.equal(isCurrentInformationRequest("오늘 환율 얼마야?"), true);
+  assert.equal(isCurrentInformationRequest("지금 비트코인 시세 어때?"), true);
+  assert.equal(isCurrentInformationRequest("최신 뉴스 뭐 있어?"), true);
+  assert.equal(isCurrentInformationRequest("오늘 미세먼지 어떤가요"), true);
+  assert.equal(isCurrentInformationRequest("환율 알려주세요"), true);
+});
+
+test("request-form detection separates questions from statements", () => {
+  assert.equal(isInformationRequestForm("환율 얼마야?"), true);
+  assert.equal(isInformationRequestForm("알려줘"), true);
+  assert.equal(isInformationRequestForm("뭐라고 하진 않아"), false);
+  assert.equal(isInformationRequestForm("잘했어"), false);
 });
 
 test("explicit search request classifier detects search directives", () => {

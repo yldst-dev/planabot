@@ -333,9 +333,23 @@ export function isExplicitSearchRequest(currentTurnText: string): boolean {
   return EXPLICIT_SEARCH_REQUEST_PATTERN.test(text);
 }
 
+const INFORMATION_REQUEST_FORM_PATTERN =
+  /[?？]|알려\s*(?:줘|주세요|다오)|말해\s*(?:줘|주세요)|가르쳐\s*(?:줘|주세요)|찾아\s*(?:줘|봐|주세요)|검색|알아\s*(?:봐|줘)|확인해\s*(?:줘|주세요)|보여\s*(?:줘|주세요)|궁금|얼마(?:야|인가|나|지|였)|어때|어떤가|어떻게\s*(?:돼|되|될|하)|무엇|뭐야|뭔데|뭐\s*있|어디(?:야|에|서|인)|언제(?:야|인|쯤)|누구(?:야|인)|몇\s*(?:시|개|명|퍼|프로|년|월|일)|(?:나요|까요|습니까|ㅂ니까|인가요)/u;
+
+export function isInformationRequestForm(currentTurnText: string): boolean {
+  const text = normalizeCurrentTurnText(currentTurnText);
+  if (!text) {
+    return false;
+  }
+  return INFORMATION_REQUEST_FORM_PATTERN.test(text);
+}
+
 export function isCurrentInformationRequest(currentTurnText: string): boolean {
   const text = normalizeCurrentTurnText(currentTurnText);
   if (!text) {
+    return false;
+  }
+  if (!INFORMATION_REQUEST_FORM_PATTERN.test(text)) {
     return false;
   }
   if (
