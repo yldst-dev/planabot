@@ -1,4 +1,9 @@
-import { GoogleGenAI } from "@google/genai";
+import {
+  GoogleGenAI,
+  HarmBlockThreshold,
+  HarmCategory,
+  type SafetySetting,
+} from "@google/genai";
 
 import type { Settings } from "../../config/settings.js";
 import { createGoogleSearchTool } from "../googleSearch/retrievalTool.js";
@@ -77,6 +82,7 @@ async function invokeVertexExpressChatWithOptions(params: {
   const config: Record<string, unknown> = {
     temperature: DEFAULT_CHAT_TEMPERATURE,
     topP: DEFAULT_CHAT_TOP_P,
+    safetySettings: buildVertexSafetySettingsOff(),
   };
   if (params.settings.chatMaxOutputTokens) {
     config.maxOutputTokens = params.settings.chatMaxOutputTokens;
@@ -169,6 +175,31 @@ function normalizeVertexEmbeddings(
     );
   }
   return vectors;
+}
+
+function buildVertexSafetySettingsOff(): SafetySetting[] {
+  return [
+    {
+      category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+  ];
 }
 
 function buildSystemInstruction(messages: VertexChatMessage[]): string {

@@ -1,5 +1,10 @@
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
+import {
+  HarmBlockThreshold,
+  HarmCategory,
+  type SafetySetting,
+} from "@google/generative-ai";
 
 import type { Settings } from "../../config/settings.js";
 import { sanitizeAssistantOutput } from "../../chat/sanitizeOutput.js";
@@ -226,6 +231,7 @@ function createChatModel(settings: Settings): ChatGoogleGenerativeAI {
     temperature: DEFAULT_CHAT_TEMPERATURE,
     maxOutputTokens: settings.chatMaxOutputTokens,
     topP: DEFAULT_CHAT_TOP_P,
+    safetySettings: buildLangChainSafetySettingsOff(),
   };
   const thinkingConfig = buildGoogleThinkingConfig(settings.chatThinkingMode);
   if (thinkingConfig) {
@@ -1324,6 +1330,31 @@ function normalizeOpenAIRole(role: ChatMessage["role"]): "system" | "user" | "as
     return "tool";
   }
   return role;
+}
+
+function buildLangChainSafetySettingsOff(): SafetySetting[] {
+  return [
+    {
+      category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+  ];
 }
 
 function buildSafetySettingsOff(): GeminiSafetySetting[] {
