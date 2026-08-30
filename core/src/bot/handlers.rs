@@ -48,6 +48,7 @@ static DONATION_QR: &[u8] = include_bytes!("assets/donation_qr.png");
 
 const DONATION_CAPTION: &str = "선생님. 후원을 해 주시려는 것인가요.\n선생님의 따뜻한 마음에 감동했습니다.\n\n후원 방식은 USDT를 통해 하실 수 있습니다.\n아래에 주소를 보내드리겠습니다. 네트워크는 TRC20 이니, 헷갈리지 않게 주의해 주세요.\n(선생님의 소매를 잡고 살짝 미소지으며 고개를 끄덕입니다.)\n\n<code>TFZuvEU4UjYYmMZont2EwVtZ61weqEFHD9</code>";
 
+#[allow(clippy::collapsible_if)]
 pub(crate) async fn handle_command<B>(
     bot: B,
     msg: Message,
@@ -67,11 +68,11 @@ where
 
     match cmd {
         Command::Start => {
-            if let Some(text) = msg.text()
-                && let Some(token) = crate::hiromi_share::start_share_token(text)
-            {
-                deliver_share_claim(&bot, &state, msg.chat.id, token, true).await?;
-                return Ok(());
+            if let Some(text) = msg.text() {
+                if let Some(token) = crate::hiromi_share::start_share_token(text) {
+                    deliver_share_claim(&bot, &state, msg.chat.id, token, true).await?;
+                    return Ok(());
+                }
             }
 
             let mut text = String::from(
@@ -336,6 +337,7 @@ where
     Ok(())
 }
 
+#[allow(clippy::collapsible_if)]
 pub(crate) async fn handle_plana_message<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
 where
     B: Requester + teloxide::net::Download + Send + Sync + 'static,
@@ -533,8 +535,8 @@ where
             state
                 .record_planabrain_reply(&sent, &conversation_scope_id)
                 .await;
-            if !memory_turn_text.is_empty()
-                && let Err(err) = planabrain::remember_planabrain_exchange(
+            if !memory_turn_text.is_empty() {
+                if let Err(err) = planabrain::remember_planabrain_exchange(
                     &memory_turn_text,
                     &answer,
                     &user_id,
@@ -542,8 +544,9 @@ where
                     Some(&conversation_scope_id),
                 )
                 .await
-            {
-                warn!("로컬 장기 메모리 교환 저장 실패: {}", err);
+                {
+                    warn!("로컬 장기 메모리 교환 저장 실패: {}", err);
+                }
             }
         }
         Err(err) => {
@@ -1339,6 +1342,7 @@ where
     Ok(())
 }
 
+#[allow(clippy::collapsible_if)]
 async fn handle_download_callback<B>(
     bot: &B,
     query: &CallbackQuery,
@@ -1371,23 +1375,23 @@ where
                 .text("불가.\n선생님.\n개인 대화를 먼저 시작해 주세요.\n차단 해제가 필요합니다.")
                 .show_alert(true)
                 .await;
-            if !state.bot_username.is_empty()
-                && let Some(msg) = query.regular_message()
-            {
-                let url = format!("https://t.me/{}?start=dl_{}", state.bot_username, token);
-                if let Ok(parsed) = Url::parse(&url) {
-                    let keyboard =
-                        InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::url(
-                            "봇 열기",
-                            parsed,
-                        )]]);
-                    let _ = bot
-                        .send_message(
-                            msg.chat.id,
-                            "불가.\n선생님.\n개인 대화를 먼저 시작해 주세요.",
-                        )
-                        .reply_markup(keyboard)
-                        .await;
+            if !state.bot_username.is_empty() {
+                if let Some(msg) = query.regular_message() {
+                    let url = format!("https://t.me/{}?start=dl_{}", state.bot_username, token);
+                    if let Ok(parsed) = Url::parse(&url) {
+                        let keyboard =
+                            InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::url(
+                                "봇 열기",
+                                parsed,
+                            )]]);
+                        let _ = bot
+                            .send_message(
+                                msg.chat.id,
+                                "불가.\n선생님.\n개인 대화를 먼저 시작해 주세요.",
+                            )
+                            .reply_markup(keyboard)
+                            .await;
+                    }
                 }
             }
         }

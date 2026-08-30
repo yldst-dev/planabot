@@ -17,6 +17,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       planabrain: ${{ steps.filter.outputs.planabrain }}
+      hiromi: ${{ steps.filter.outputs.hiromi }}
       docker: ${{ steps.filter.outputs.docker }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
