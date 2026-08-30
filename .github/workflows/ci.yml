@@ -97,7 +97,7 @@ jobs:
       (needs.changes.outputs.hiromi == 'true' || startsWith(github.ref, 'refs/tags/'))
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82acd5c6d150c31f53d
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
         with:
           go-version: '1.24'
       - name: Test
