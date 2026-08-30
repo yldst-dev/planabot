@@ -23,6 +23,12 @@ coverage/
 # planabot data
 /.planabot
 
+# hiromi local artifacts
+/hiromi/downloads
+/hiromi/bin
+/hiromi/hiromi
+/hiromi/bot
+
 # local agent/tooling
 /.codex/skills
 /.sisyphus

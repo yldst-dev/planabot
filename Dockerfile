@@ -3,6 +3,7 @@
 ARG RUST_IMAGE=rust:1.86-slim-bookworm
 ARG RUNTIME_IMAGE=debian:bookworm-slim
 ARG NODE_IMAGE=node:22-bookworm-slim
+ARG GO_IMAGE=golang:1.24-bookworm
 
 FROM ${RUST_IMAGE} AS builder
 
@@ -12,6 +13,15 @@ COPY Cargo.toml Cargo.lock ./
 COPY core/src ./core/src
 
 RUN cargo build --release
+
+FROM ${GO_IMAGE} AS hiromi-builder
+
+WORKDIR /src
+COPY send-vis-ee-api ./send-vis-ee-api
+COPY hiromi ./hiromi
+WORKDIR /src/hiromi
+ENV CGO_ENABLED=0
+RUN go build -o /hiromi ./cmd/hiromi
 
 FROM ${NODE_IMAGE} AS planabrain-builder
 
@@ -29,7 +39,9 @@ FROM ${RUNTIME_IMAGE}
 ENV RUST_LOG=info \
     RUST_BACKTRACE=1 \
     GEMINI_CLI_API_HOST=host.docker.internal \
-    GEMINI_CLI_API_PORT=43173
+    GEMINI_CLI_API_PORT=43173 \
+    HIROMI_BIN=/usr/local/bin/hiromi \
+    HIROMI_DOWNLOAD_DIR=/tmp/hiromi-downloads
 
 RUN if grep -q "VERSION_CODENAME=buster" /etc/os-release; then \
         sed -i 's|deb.debian.org/debian|archive.debian.org/debian|g' /etc/apt/sources.list && \
@@ -45,6 +57,7 @@ RUN if grep -q "VERSION_CODENAME=buster" /etc/os-release; then \
 WORKDIR /app
 
 COPY --from=builder /app/target/release/planabot /usr/local/bin/planabot
+COPY --from=hiromi-builder /hiromi /usr/local/bin/hiromi
 COPY --from=planabrain-builder /usr/local/ /usr/local/
 COPY --from=planabrain-builder /app/planabrain/package.json /app/planabrain/package.json
 COPY --from=planabrain-builder /app/planabrain/node_modules /app/planabrain/node_modules

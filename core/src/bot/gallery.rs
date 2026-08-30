@@ -2,7 +2,8 @@ use log::warn;
 use once_cell::sync::Lazy;
 use reqwest::Url;
 use teloxide::types::{
-    ChatKind, InlineKeyboardButton, InlineKeyboardMarkup, Message, PublicChatKind,
+    ChatKind, InlineKeyboardButton, InlineKeyboardButtonKind, InlineKeyboardMarkup, Message,
+    PublicChatKind,
 };
 use teloxide::utils::html;
 
@@ -171,10 +172,7 @@ fn mask_display_name(name: &str) -> String {
     }
 }
 
-pub(crate) fn build_gallery_keyboard(
-    info: &GalleryInfo,
-    include_save: bool,
-) -> InlineKeyboardMarkup {
+fn gallery_link_rows(info: &GalleryInfo) -> Vec<Vec<InlineKeyboardButton>> {
     let mut rows = Vec::new();
 
     match Url::parse(&info.hitomi_url()) {
@@ -187,14 +185,103 @@ pub(crate) fn build_gallery_keyboard(
         Err(err) => warn!("k-hentai URL 파싱 실패 (id {}): {}", info.id, err),
     }
 
+    rows
+}
+
+fn with_save_row(
+    mut rows: Vec<Vec<InlineKeyboardButton>>,
+    info: &GalleryInfo,
+    include_save: bool,
+) -> InlineKeyboardMarkup {
     if include_save {
         rows.push(vec![InlineKeyboardButton::callback(
             "개인 메시지로 저장",
             format!("save_{}", info.id),
         )]);
     }
-
     InlineKeyboardMarkup::new(rows)
+}
+
+pub(crate) fn fetch_action_button(gallery_id: &str) -> InlineKeyboardButton {
+    InlineKeyboardButton::callback("받기", format!("fetch_{gallery_id}"))
+}
+
+pub(crate) fn preparing_action_button(gallery_id: &str) -> InlineKeyboardButton {
+    InlineKeyboardButton::callback("준비 중", format!("prep_{gallery_id}"))
+}
+
+pub(crate) fn download_action_button(token: &str) -> InlineKeyboardButton {
+    InlineKeyboardButton::callback("다운로드", format!("dl_{token}"))
+}
+
+fn is_gallery_action_callback(data: &str) -> bool {
+    data.starts_with("fetch_") || data.starts_with("prep_") || data.starts_with("dl_")
+}
+
+pub(crate) fn replace_gallery_action_button(
+    markup: &InlineKeyboardMarkup,
+    button: InlineKeyboardButton,
+) -> InlineKeyboardMarkup {
+    let mut replaced = false;
+    let mut rows = Vec::new();
+    for row in &markup.inline_keyboard {
+        let mut next_row = Vec::new();
+        for btn in row {
+            match &btn.kind {
+                InlineKeyboardButtonKind::CallbackData(data)
+                    if is_gallery_action_callback(data) =>
+                {
+                    next_row.push(button.clone());
+                    replaced = true;
+                }
+                _ => next_row.push(btn.clone()),
+            }
+        }
+        rows.push(next_row);
+    }
+    if !replaced {
+        let save_idx = rows.iter().position(|row| {
+            row.iter().any(|btn| {
+                matches!(
+                    &btn.kind,
+                    InlineKeyboardButtonKind::CallbackData(data) if data.starts_with("save_")
+                )
+            })
+        });
+        match save_idx {
+            Some(idx) => rows.insert(idx, vec![button]),
+            None => rows.push(vec![button]),
+        }
+    }
+    InlineKeyboardMarkup::new(rows)
+}
+
+pub(crate) fn build_gallery_keyboard(
+    info: &GalleryInfo,
+    include_save: bool,
+) -> InlineKeyboardMarkup {
+    let mut rows = gallery_link_rows(info);
+    rows.push(vec![fetch_action_button(&info.id)]);
+    with_save_row(rows, info, include_save)
+}
+
+pub(crate) fn build_gallery_preparing_keyboard(
+    info: &GalleryInfo,
+    include_save: bool,
+) -> InlineKeyboardMarkup {
+    let mut rows = gallery_link_rows(info);
+    rows.push(vec![preparing_action_button(&info.id)]);
+    with_save_row(rows, info, include_save)
+}
+
+pub(crate) fn build_share_ready_keyboard(
+    info: &GalleryInfo,
+    token: &str,
+    include_save: bool,
+) -> InlineKeyboardMarkup {
+    let mut rows = gallery_link_rows(info);
+    rows.push(vec![download_action_button(token)]);
+    with_save_row(rows, info, include_save)
 }
 
 pub(crate) fn is_private_chat(msg: &Message) -> bool {
@@ -204,6 +291,118 @@ pub(crate) fn is_private_chat(msg: &Message) -> bool {
 #[cfg(test)]
 mod tests {
     use super::extract_gallery_id_from_url;
+
+    #[test]
+    fn ready_keyboard_uses_download_callback() {
+        let info = crate::hitomi::GalleryInfo {
+            id: "123".to_string(),
+            title: "t".to_string(),
+            artists: "a".to_string(),
+            language: "korean".to_string(),
+            tags: vec![],
+        };
+        let markup = super::build_share_ready_keyboard(&info, "tok", true);
+        let data = callback_data(&markup);
+        assert!(data.iter().any(|d| d == "dl_tok"));
+        assert!(data.iter().any(|d| d == "save_123"));
+        assert!(!data.iter().any(|d| d.starts_with("fetch_")));
+        assert_eq!(
+            url_labels(&markup),
+            vec!["Hitomi.la 열기".to_string(), "K-Hentai 열기".to_string()]
+        );
+    }
+
+    #[test]
+    fn gallery_keyboard_includes_fetch() {
+        let info = crate::hitomi::GalleryInfo {
+            id: "123".to_string(),
+            title: "t".to_string(),
+            artists: "a".to_string(),
+            language: "korean".to_string(),
+            tags: vec![],
+        };
+        let markup = super::build_gallery_keyboard(&info, false);
+        let data = callback_data(&markup);
+        assert_eq!(data, vec!["fetch_123".to_string()]);
+        assert_eq!(
+            url_labels(&markup),
+            vec!["Hitomi.la 열기".to_string(), "K-Hentai 열기".to_string()]
+        );
+    }
+
+    #[test]
+    fn preparing_keyboard_keeps_link_buttons() {
+        let info = crate::hitomi::GalleryInfo {
+            id: "123".to_string(),
+            title: "t".to_string(),
+            artists: "a".to_string(),
+            language: "korean".to_string(),
+            tags: vec![],
+        };
+        let markup = super::build_gallery_preparing_keyboard(&info, true);
+        let data = callback_data(&markup);
+        assert_eq!(data, vec!["prep_123".to_string(), "save_123".to_string()]);
+        assert_eq!(
+            url_labels(&markup),
+            vec!["Hitomi.la 열기".to_string(), "K-Hentai 열기".to_string()]
+        );
+    }
+
+    #[test]
+    fn replace_action_keeps_url_and_save_buttons() {
+        let info = crate::hitomi::GalleryInfo {
+            id: "123".to_string(),
+            title: "t".to_string(),
+            artists: "a".to_string(),
+            language: "korean".to_string(),
+            tags: vec![],
+        };
+        let original = super::build_gallery_keyboard(&info, true);
+        let preparing =
+            super::replace_gallery_action_button(&original, super::preparing_action_button("123"));
+        assert_eq!(
+            callback_data(&preparing),
+            vec!["prep_123".to_string(), "save_123".to_string()]
+        );
+        assert_eq!(
+            url_labels(&preparing),
+            vec!["Hitomi.la 열기".to_string(), "K-Hentai 열기".to_string()]
+        );
+        let ready =
+            super::replace_gallery_action_button(&preparing, super::download_action_button("tok"));
+        assert_eq!(
+            callback_data(&ready),
+            vec!["dl_tok".to_string(), "save_123".to_string()]
+        );
+        assert_eq!(
+            url_labels(&ready),
+            vec!["Hitomi.la 열기".to_string(), "K-Hentai 열기".to_string()]
+        );
+    }
+
+    fn callback_data(markup: &teloxide::types::InlineKeyboardMarkup) -> Vec<String> {
+        markup
+            .inline_keyboard
+            .iter()
+            .flatten()
+            .filter_map(|btn| match &btn.kind {
+                teloxide::types::InlineKeyboardButtonKind::CallbackData(data) => Some(data.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn url_labels(markup: &teloxide::types::InlineKeyboardMarkup) -> Vec<String> {
+        markup
+            .inline_keyboard
+            .iter()
+            .flatten()
+            .filter_map(|btn| match &btn.kind {
+                teloxide::types::InlineKeyboardButtonKind::Url(_) => Some(btn.text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
 
     #[test]
     fn extracts_hitomi_gallery_id_from_url() {

@@ -9,6 +9,7 @@
 ## 주요 기능
 
 - Hitomi 갤러리 조회
+- 갤러리 뷰어 HTML을 40MB 이하면 개인 채팅 파일로, 그보다 크면 send.vis.ee 링크로 전달
 - YouTube, Spotify, Apple Music 추적 파라미터 정리
 - X/Twitter → `fxtwitter`, Instagram → `vxinstagram` 변환
 - Threads 포스트 링크 추적 파라미터 정리
@@ -26,6 +27,8 @@
 
 ```text
 core/                       Rust 텔레그램 봇
+hiromi/                     갤러리 다운로드와 뷰어 HTML 공유 CLI
+send-vis-ee-api/            send.vis.ee 업로드 라이브러리
 planabrain/                 TypeScript CLI, 메모리, 검색, provider 연동
 scripts/                    로컬 빌드 보조 스크립트
 docker-compose.yml          로컬 개발용 compose
@@ -90,6 +93,8 @@ npm run dev
   - 전체 채팅: `!<ID>`
   - 개인 채팅: `<ID>`
   - 그룹: `@봇계정 <ID>`
+  - `받기`로 단일 뷰어 HTML을 준비한 뒤, `다운로드`는 개인 채팅으로 보냅니다.
+  - 뷰어가 40MB 이하면 HTML 파일을, 그보다 크면 send.vis.ee 링크를 보냅니다.
 - 명령어
   - `/start`
   - `/ping`

@@ -1,6 +1,7 @@
 mod bot;
 mod config;
 mod health;
+mod hiromi_share;
 mod hitomi;
 mod planabrain;
 mod reboot;

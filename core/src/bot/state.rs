@@ -9,6 +9,7 @@ use teloxide::types::{ChatId, ChatKind, Message, MessageId, PublicChatKind, User
 use tokio::fs;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use crate::hiromi_share::ShareClaim;
 use crate::hitomi::GalleryClient;
 use crate::schedule::ScheduleStore;
 
@@ -90,6 +91,8 @@ pub struct AppState {
     image_rate_limiter: Arc<Mutex<ImageRateLimiter>>,
     planabrain_semaphore: Arc<Semaphore>,
     pub(crate) schedule_store: ScheduleStore,
+    share_claims: Arc<RwLock<HashMap<String, ShareClaim>>>,
+    pub hiromi_bin: PathBuf,
 }
 
 impl AppState {
@@ -111,6 +114,7 @@ impl AppState {
         let planabrain_replies = load_planabrain_replies(&planabrain_replies_path);
         let image_rate_limiter = ImageRateLimiter::new(2, Duration::from_secs(60));
         let schedule_store = ScheduleStore::new();
+        let hiromi_bin = crate::hiromi_share::hiromi_bin();
 
         Self {
             bot_username,
@@ -126,7 +130,22 @@ impl AppState {
             image_rate_limiter: Arc::new(Mutex::new(image_rate_limiter)),
             planabrain_semaphore: Arc::new(Semaphore::new(4)),
             schedule_store,
+            share_claims: Arc::new(RwLock::new(HashMap::new())),
+            hiromi_bin,
         }
+    }
+
+    pub(crate) fn put_share_claim(&self, claim: ShareClaim) {
+        if let Ok(mut claims) = self.share_claims.write() {
+            claims.insert(claim.token.clone(), claim);
+        }
+    }
+
+    pub(crate) fn get_share_claim(&self, token: &str) -> Option<ShareClaim> {
+        self.share_claims
+            .read()
+            .ok()
+            .and_then(|claims| claims.get(token).cloned())
     }
 
     pub(crate) fn is_after_boot(&self, msg: &Message) -> bool {
