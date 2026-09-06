@@ -5,7 +5,9 @@ const MAX_ALLOWED_WEB_FETCH_URLS = 32;
 
 export class WebToolPolicy {
   private readonly allowedFetchUrls = new Set<string>();
+  private readonly collectedSearchResults: unknown[] = [];
   private executedToolCalls = 0;
+  private webSearchExecuted = false;
 
   constructor(currentUserContent: string) {
     this.addAllowedUrls(currentUserContent);
@@ -20,7 +22,17 @@ export class WebToolPolicy {
   }
 
   addSearchResult(value: unknown): void {
+    this.webSearchExecuted = true;
+    this.collectedSearchResults.push(value);
     this.addAllowedUrls(value);
+  }
+
+  get searchExecuted(): boolean {
+    return this.webSearchExecuted;
+  }
+
+  get searchResults(): readonly unknown[] {
+    return this.collectedSearchResults;
   }
 
   allowsFetch(rawUrl: string): boolean {

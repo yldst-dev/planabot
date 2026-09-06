@@ -22,6 +22,7 @@ function createSettings(
     openRouterApiKey: "test-key",
     openRouterBaseUrl: "https://openrouter.example/api/v1",
     cerebrasWebSearchEnabled: false,
+    modelStudioWebSearchEnabled: false,
     openRouterWebSearchEnabled: true,
     openRouterWebSearchMaxResults: 5,
     openRouterWebSearchMaxTotalResults: 15,
@@ -43,6 +44,8 @@ function createSettings(
     embeddingModel: "gemini-embedding-001",
     indexPath: ".planabrain/index.json",
     systemPrompt: "테스트 시스템",
+    personaProfile: "live",
+    intimacyEnabled: true,
     memoryEnabled: false,
     memoryMaxMessages: 0,
     memoryDir: ".planabrain/memory",
@@ -174,6 +177,218 @@ test("merges citations and search usage across continuations", async () => {
       ],
     );
     assert.equal(result.citations[0]?.evidence, "first evidence");
+  } finally {
+    restore();
+  }
+});
+
+function createToolLoopSettings(overrides: Partial<Settings> = {}): Settings {
+  return createSettings({
+    aiProvider: "modelstudio",
+    modelStudioApiKey: "test-key",
+    modelStudioBaseUrl: "https://modelstudio.example/compatible-mode/v1",
+    modelStudioWebSearchEnabled: true,
+    openRouterWebSearchEnabled: false,
+    ollamaApiKeys: ["ollama-key"],
+    ollamaSearchHost: "https://ollama.example",
+    chatModel: "qwen-plus",
+    ...overrides,
+  });
+}
+
+function searchToolCallResponse(query: string): unknown {
+  return {
+    choices: [
+      {
+        finish_reason: "tool_calls",
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: {
+                name: "web_search",
+                arguments: JSON.stringify({ query }),
+              },
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
+
+function finalAnswerResponse(content: string): unknown {
+  return {
+    choices: [{ finish_reason: "stop", message: { content } }],
+  };
+}
+
+test("modelstudio promotes tool search results to citations", async () => {
+  const requests: Array<{ input: string; init?: RequestInit }> = [];
+  const restore = installFetchQueue(
+    [
+      searchToolCallResponse("오늘 아침 IT 뉴스"),
+      {
+        results: [
+          {
+            title: "  IT 뉴스   헤드라인 ",
+            url: "https://news.example/it",
+            content: "  오늘 아침   발표된 소식 ",
+          },
+          { url: "https://news.example/it#dup" },
+          { title: "안전하지 않음", url: "http://insecure.example/it" },
+          { title: "두 번째", url: "https://news.example/two" },
+        ],
+      },
+      finalAnswerResponse("선생님.\n오늘 아침 IT 뉴스입니다."),
+    ],
+    requests,
+  );
+
+  try {
+    const result = await invokeChatWithMetadata({
+      settings: createToolLoopSettings(),
+      enableSearchTool: true,
+      messages: [{ role: "user", content: "오늘 아침 IT뉴스 찾아봐줘" }],
+    });
+
+    assert.equal(result.searchUsed, true);
+    assert.deepEqual(result.citations, [
+      {
+        url: "https://news.example/it",
+        title: "IT 뉴스 헤드라인",
+        evidence: "오늘 아침 발표된 소식",
+      },
+      {
+        url: "https://news.example/two",
+        title: "두 번째",
+      },
+    ]);
+    assert.match(result.content, /오늘 아침 IT 뉴스입니다/u);
+    assert.equal(
+      requests[1]?.input,
+      "https://ollama.example/api/web_search",
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("modelstudio reports searchUsed with no citations when the search is empty", async () => {
+  const restore = installFetchQueue([
+    searchToolCallResponse("오늘 아침 IT 뉴스"),
+    { results: [] },
+    finalAnswerResponse("선생님.\n찾지 못했습니다."),
+  ]);
+
+  try {
+    const result = await invokeChatWithMetadata({
+      settings: createToolLoopSettings(),
+      enableSearchTool: true,
+      messages: [{ role: "user", content: "오늘 아침 IT뉴스 찾아봐줘" }],
+    });
+
+    assert.equal(result.searchUsed, true);
+    assert.deepEqual(result.citations, []);
+  } finally {
+    restore();
+  }
+});
+
+test("modelstudio leaves searchUsed false when no tool runs", async () => {
+  const restore = installFetchQueue([
+    finalAnswerResponse("선생님.\n같이 이야기하겠습니다."),
+  ]);
+
+  try {
+    const result = await invokeChatWithMetadata({
+      settings: createToolLoopSettings(),
+      enableSearchTool: true,
+      messages: [{ role: "user", content: "심심해" }],
+    });
+
+    assert.equal(result.searchUsed, false);
+    assert.deepEqual(result.citations, []);
+  } finally {
+    restore();
+  }
+});
+
+test("cerebras promotes tool search results to citations", async () => {
+  const restore = installFetchQueue([
+    searchToolCallResponse("오늘 아침 IT 뉴스"),
+    { results: [{ title: "헤드라인", url: "https://news.example/it" }] },
+    finalAnswerResponse("선생님.\n오늘 아침 IT 뉴스입니다."),
+  ]);
+
+  try {
+    const result = await invokeChatWithMetadata({
+      settings: createToolLoopSettings({
+        aiProvider: "cerebras",
+        cerebrasApiKey: "test-key",
+        cerebrasBaseUrl: "https://cerebras.example/v1",
+        cerebrasWebSearchEnabled: true,
+      }),
+      enableSearchTool: true,
+      messages: [{ role: "user", content: "오늘 아침 IT뉴스 찾아봐줘" }],
+    });
+
+    assert.equal(result.searchUsed, true);
+    assert.deepEqual(
+      result.citations.map((citation) => citation.url),
+      ["https://news.example/it"],
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("modelstudio answers a current-information request with verified sources", async () => {
+  const restore = installFetchQueue([
+    searchToolCallResponse("오늘 아침 IT 뉴스"),
+    {
+      results: [
+        { title: "IT 뉴스", url: "https://news.example/it", content: "소식" },
+      ],
+    },
+    finalAnswerResponse("선생님.\n오늘 아침 IT 뉴스입니다."),
+  ]);
+
+  try {
+    const answer = await answerWithWebSearch({
+      question:
+        "메타정보:\n현재 시각: 2026-07-24 (금) 02:08:00 KST\n\n사용자 질문:\n오늘 아침 IT뉴스 찾아봐줘",
+      currentTurnText: "오늘 아침 IT뉴스 찾아봐줘",
+      settings: createToolLoopSettings(),
+    });
+
+    assert.doesNotMatch(answer, /확인 불가/u);
+    assert.match(answer, /오늘 아침 IT 뉴스입니다/u);
+    assert.match(answer, /출처: \[IT 뉴스\]\(https:\/\/news\.example\/it\)/u);
+  } finally {
+    restore();
+  }
+});
+
+test("modelstudio still fails closed when the search returns nothing", async () => {
+  const restore = installFetchQueue([
+    searchToolCallResponse("오늘 아침 IT 뉴스"),
+    { results: [] },
+    finalAnswerResponse("선생님.\n오늘 아침 IT 뉴스입니다."),
+  ]);
+
+  try {
+    const answer = await answerWithWebSearch({
+      question:
+        "메타정보:\n현재 시각: 2026-07-24 (금) 02:08:00 KST\n\n사용자 질문:\n오늘 아침 IT뉴스 찾아봐줘",
+      currentTurnText: "오늘 아침 IT뉴스 찾아봐줘",
+      settings: createToolLoopSettings(),
+    });
+
+    assert.match(answer, /확인 불가/u);
   } finally {
     restore();
   }

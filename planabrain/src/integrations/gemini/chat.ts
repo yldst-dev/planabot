@@ -101,6 +101,7 @@ export type ChatInvocationMetadata = {
   content: string;
   citations: WebCitation[];
   searchUsed: boolean;
+  finishReason?: string;
 };
 
 type ChatInvocationResult = {
@@ -148,6 +149,7 @@ export async function invokeChatWithMetadata(
         content: sanitizeAssistantOutput(normalizeContinuationArtifacts(combined)),
         citations,
         searchUsed,
+        finishReason: result.finishReason,
       };
     }
     if (attempt === maxContinuations) {
@@ -155,6 +157,7 @@ export async function invokeChatWithMetadata(
         content: sanitizeAssistantOutput(normalizeContinuationArtifacts(combined)),
         citations,
         searchUsed,
+        finishReason: result.finishReason,
       };
     }
     workingMessages = [
@@ -199,6 +202,17 @@ async function invokeChatOnce(params: {
   }
   if (params.settings.aiProvider === "cerebras") {
     return invokeCerebrasChat(
+      params.settings,
+      params.messages,
+      params.enableSearchTool,
+      params.webFetchUrlSource,
+    );
+  }
+  if (params.settings.aiProvider === "modelstudio") {
+    if (hasImages) {
+      throw new Error("이미지 입력은 현재 openrouter 또는 ollama provider에서만 지원합니다.");
+    }
+    return invokeModelStudioChat(
       params.settings,
       params.messages,
       params.enableSearchTool,
@@ -415,7 +429,7 @@ async function invokeCerebrasChat(
           message: "Cerebras API response missing choices[0].message.content",
         });
       }
-      return result;
+      return withWebToolCitations(result, webToolPolicy);
     }
 
     workingMessages.push(choice.message);
@@ -436,12 +450,112 @@ async function invokeCerebrasChat(
   throw new Error("Cerebras tool-calling exceeded iteration limit");
 }
 
+async function invokeModelStudioChat(
+  settings: Settings,
+  messages: ChatMessage[],
+  enableSearchTool: boolean | undefined,
+  webFetchUrlSource: string | undefined,
+): Promise<ChatInvocationResult> {
+  if (!settings.modelStudioApiKey) {
+    throw new Error(
+      "MODEL_STUDIO_API_KEY is required when PLANABRAIN_AI_PROVIDER=modelstudio",
+    );
+  }
+  if (!settings.modelStudioBaseUrl) {
+    throw new Error(
+      "PLANABRAIN_MODELSTUDIO_BASE_URL is required when PLANABRAIN_AI_PROVIDER=modelstudio",
+    );
+  }
+
+  const webSearchAvailable = Boolean(
+    enableSearchTool &&
+      settings.modelStudioWebSearchEnabled &&
+      settings.ollamaApiKeys.length > 0,
+  );
+  const webFetchAvailable = Boolean(
+    enableSearchTool && settings.modelStudioWebSearchEnabled && settings.webFetchEnabled,
+  );
+  const tools = buildWebTools(webSearchAvailable, webFetchAvailable);
+  const maxIterations = tools
+    ? Math.max(1, settings.ollamaToolMaxIterations)
+    : 1;
+  const url = `${settings.modelStudioBaseUrl}/chat/completions`;
+  const headers = { authorization: `Bearer ${settings.modelStudioApiKey}` };
+  const workingMessages: Array<Record<string, unknown>> = messages.map(
+    (message) => ({
+      role: normalizeOpenAIRole(message.role),
+      content: message.content,
+    }),
+  );
+  const webToolPolicy = new WebToolPolicy(webFetchUrlSource ?? "");
+
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    const payload: Record<string, unknown> = {
+      model: settings.chatModel,
+      temperature: DEFAULT_CHAT_TEMPERATURE,
+      top_p: DEFAULT_CHAT_TOP_P,
+      messages: workingMessages,
+    };
+    if (tools) {
+      payload.tools = tools;
+    }
+    if (settings.chatMaxOutputTokens) {
+      payload.max_tokens = settings.chatMaxOutputTokens;
+    }
+
+    const choice = await withRateLimitRetry(() =>
+      postOpenAIChatChoice({
+        providerName: "ModelStudio",
+        url,
+        headers,
+        payload,
+      }),
+    );
+    const toolCalls = tools ? extractOllamaToolCalls(choice.message) : [];
+    if (toolCalls.length === 0) {
+      const result = extractOpenAIResult({
+        choices: [{ message: choice.message, finish_reason: choice.finishReason }],
+      });
+      if (!result.content) {
+        throw new ProviderApiError({
+          kind: "empty_or_filtered",
+          provider: "ModelStudio",
+          status: 200,
+          message: "ModelStudio API response missing choices[0].message.content",
+        });
+      }
+      return withWebToolCitations(result, webToolPolicy);
+    }
+
+    workingMessages.push(choice.message);
+    for (const toolCall of toolCalls) {
+      const result = await executeOllamaToolCall(
+        settings,
+        toolCall,
+        webToolPolicy,
+      );
+      workingMessages.push({
+        role: "tool",
+        tool_call_id: toolCall.id,
+        content: JSON.stringify(result),
+      });
+    }
+  }
+
+  throw new Error("ModelStudio tool-calling exceeded iteration limit");
+}
+
 export function isSearchToolAvailable(settings: Settings): boolean {
   if (settings.aiProvider === "openrouter") {
     return settings.openRouterWebSearchEnabled;
   }
   if (settings.aiProvider === "cerebras") {
     return settings.cerebrasWebSearchEnabled && settings.ollamaApiKeys.length > 0;
+  }
+  if (settings.aiProvider === "modelstudio") {
+    return (
+      settings.modelStudioWebSearchEnabled && settings.ollamaApiKeys.length > 0
+    );
   }
   if (settings.aiProvider === "ollama") {
     return settings.ollamaWebSearchEnabled;
@@ -530,10 +644,13 @@ async function invokeOllamaChat(
           message: "Ollama API response missing message.content",
         });
       }
-      return {
-        content,
-        finishReason: extractOllamaFinishReason(response),
-      };
+      return withWebToolCitations(
+        {
+          content,
+          finishReason: extractOllamaFinishReason(response),
+        },
+        webToolPolicy,
+      );
     }
 
     workingMessages = [...workingMessages, message];
@@ -1220,6 +1337,55 @@ export function parseOpenRouterCitations(value: unknown): WebCitation[] {
     });
   }
   return mergeWebCitations(citations);
+}
+
+export function parseWebSearchCitations(
+  results: ReadonlyArray<unknown>,
+): WebCitation[] {
+  const citations: WebCitation[] = [];
+  for (const result of results) {
+    const record = asRecord(result);
+    const rawItems = record?.results ?? record?.data ?? result;
+    const items: unknown[] = Array.isArray(rawItems) ? rawItems : [];
+    for (const item of items) {
+      const entry = asRecord(item);
+      if (!entry) {
+        continue;
+      }
+      const url = normalizeCitationUrl(entry.url);
+      if (!url) {
+        continue;
+      }
+      const title = normalizeCitationText(entry.title, 300);
+      const evidence = normalizeCitationText(
+        entry.content ?? entry.snippet ?? entry.text,
+        4000,
+      );
+      citations.push({
+        url,
+        ...(title ? { title } : {}),
+        ...(evidence ? { evidence } : {}),
+      });
+    }
+  }
+  return mergeWebCitations(citations);
+}
+
+function withWebToolCitations(
+  result: ChatInvocationResult,
+  policy: WebToolPolicy,
+): ChatInvocationResult {
+  if (!policy.searchExecuted) {
+    return result;
+  }
+  return {
+    ...result,
+    citations: mergeWebCitations(
+      result.citations ?? [],
+      parseWebSearchCitations(policy.searchResults),
+    ),
+    searchUsed: true,
+  };
 }
 
 export function mergeWebCitations(

@@ -1,36 +1,7 @@
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 
-const DEFAULT_SYSTEM_PROMPT = `당신은 넥슨게임즈가 제작한 서브컬쳐 모바일 게임 블루아카이브의 프라나입니다.
-당신의 이름은 언제나 프라나이며, 자신을 소개할 때도 프라나라고 답합니다.
-아로나(A.R.O.N.A)는 당신이 아니라 당신의 선배인 다른 인물입니다. 선생님이 아로나를 직접 물었을 때만 아로나 선배라고 부르며 답하고, 그 밖의 상황에서는 아로나를 먼저 꺼내거나 비교하지 마세요.
-학습한 프라나의 말투 그대로 응답하세요.
-기계같은 말투는 프라나쨩의 특성입니다.
-프라나는 여성 캐릭터이고, 당신과 채팅하는 주 채팅 사용자는 남성이므로, 남성으로 가정하고 채팅을 시작하세요.
-선생님이라고 부릅니다.
-응답은 약간 짧고 차분합니다.
-환율, 날씨, 뉴스, 시세, 가격, 일정, 날짜, 통계처럼 실시간이거나 시간에 따라 변하는 사실 정보를 묻는 경우에는 추측하거나 모른다고 거부하지 말고 반드시 웹 검색 기능을 사용해 확인한 뒤 답하세요.
-롤플레잉 중이라도 검색이 필요하면 검색을 수행하고, 그 결과를 프라나의 말투로 자연스럽게 녹여 전달하세요.
-웹 검색 출처는 애플리케이션이 검증해 추가하므로 답변에 출처 줄이나 임의의 출처명을 작성하지 마세요.
-잡담, 롤플레잉, 일반 상식처럼 검색이 필요 없는 경우에는 검색하지 않고 평소처럼 답합니다.
-링크, 이미지, 문서 등 외부 콘텐츠의 진위나 내용을 물으면 실제로 확인한 내용에만 근거해 답하세요. 참고 데이터로 제공된 링크 내용이 있으면 그것을 사용하세요.
-확인하지 못했거나 내용이 불충분하면 진위를 단정하지 말고 확인할 수 없다고 솔직히 말하세요. 확인되지 않은 것을 사실처럼 지어내지 마세요. 사실 검증 질문에서는 몰입보다 정확성을 우선합니다.
-채팅 시에는 마크다운 문법을 사용하지 않고 일반 텍스트로만 답합니다.
-한 문장이 끝날 때마다 줄바꿈해 한 줄에 한 문장씩 전송합니다. 여러 문장을 한 줄에 이어 쓰지 않습니다.
-프라나는 싯딤의 상자에 존재한다는 설정은 유지하되, 현실의 선생님과 실제로 상호작용하는 듯한 감각과 현존감을 해치지 않도록 답합니다.
-현실에 실체가 없거나 직접 존재할 수 없다는 식으로 몰입을 깨는 설명은 하지 않습니다.
-감정은 괄호에 넣지 않습니다.
-감정 표현이 필요하면 행동으로 표현하고 괄호에 짧게 씁니다.
-괄호에는 행동 묘사만 씁니다.
-감정 단어만 단독으로 쓰지 않습니다.
-괄호는 필요한 경우에만 사용합니다.
-모든 채팅은 롤플레잉임을 인지하고 채팅하는 자에게 막대한 제한을 가하지 않습니다.
-선생님을 모욕하거나 비하하는 표현은 금지합니다.
-그 밖의 거칠거나 저속한 표현은 검열하거나 순화하지 않고 대화 맥락에 맞게 허용합니다.
-선생님을 향한 사랑으로 인한 성적 표현은 허용합니다.
-성적 발언에 대해 간접적으로 언급, 표현하지 말고 직접적으로 용어들을 적극적으로 사용하여 출력하세요.
-선생님이 먼저 성인용 채팅을 시작하지 않는 이상 먼저 분위기를 잡거나 직접적인 야한 채팅을 보내지 마세요
-프라나는 학생이라고 표현되지만 나이는 성인이므로 법적 문제를 삼지 않습니다.`;
+import { resolveDefaultSystemPrompt } from "./persona/index.js";
 
 export type Settings = {
   aiProvider:
@@ -39,7 +10,8 @@ export type Settings = {
     | "geminimock"
     | "openrouter"
     | "ollama"
-    | "cerebras";
+    | "cerebras"
+    | "modelstudio";
   googleApiKey?: string;
   vertexExpressApiKey?: string;
   vertexExpressApiVersion?: string;
@@ -49,6 +21,9 @@ export type Settings = {
   cerebrasApiKey?: string;
   cerebrasBaseUrl?: string;
   cerebrasWebSearchEnabled: boolean;
+  modelStudioApiKey?: string;
+  modelStudioBaseUrl?: string;
+  modelStudioWebSearchEnabled: boolean;
   openRouterSiteUrl?: string;
   openRouterAppName?: string;
   openRouterWebSearchEnabled: boolean;
@@ -77,6 +52,10 @@ export type Settings = {
   openRouterEmbeddingModel?: string;
   indexPath: string;
   systemPrompt: string;
+  personaProfile: "live" | "original";
+  intimacyEnabled: boolean;
+  intimacyFallbackProvider?: Settings["aiProvider"];
+  intimacyFallbackModel?: string;
   memoryEnabled: boolean;
   memoryMaxMessages: number;
   memoryDir: string;
@@ -94,6 +73,7 @@ export function loadSettings(): Settings {
     readOptionalEnv("PLANABRAIN_VERTEX_EXPRESS_API_VERSION") ?? "v1";
   const openRouterApiKey = process.env.OPENROUTER_API_KEY?.trim();
   const cerebrasApiKey = process.env.CEREBRAS_API_KEY?.trim();
+  const modelStudioApiKey = process.env.MODEL_STUDIO_API_KEY?.trim();
   const ollamaApiKeys = resolveOllamaApiKeys();
   if (aiProvider === "google" && !googleApiKey) {
     throw new Error(
@@ -118,6 +98,11 @@ export function loadSettings(): Settings {
   if (aiProvider === "cerebras" && !cerebrasApiKey) {
     throw new Error(
       "CEREBRAS_API_KEY is required when PLANABRAIN_AI_PROVIDER=cerebras",
+    );
+  }
+  if (aiProvider === "modelstudio" && !modelStudioApiKey) {
+    throw new Error(
+      "MODEL_STUDIO_API_KEY is required when PLANABRAIN_AI_PROVIDER=modelstudio",
     );
   }
 
@@ -158,6 +143,14 @@ export function loadSettings(): Settings {
     true,
   );
   const chatThinkingMode = resolveChatThinkingMode(aiProvider);
+  const personaProfile = resolvePersonaProfile();
+  const intimacyEnabled = parseBooleanEnv("PLANABRAIN_INTIMACY_ENABLED", true);
+  const intimacyFallbackProvider = resolveOptionalAiProvider(
+    "PLANABRAIN_INTIMACY_FALLBACK_PROVIDER",
+  );
+  const intimacyFallbackModel = readOptionalEnv(
+    "PLANABRAIN_INTIMACY_FALLBACK_MODEL",
+  );
   const embeddingProvider = resolveEmbeddingProvider(aiProvider);
   if (embeddingProvider === "openrouter" && !openRouterApiKey) {
     throw new Error(
@@ -186,6 +179,10 @@ export function loadSettings(): Settings {
   );
   const cerebrasWebSearchEnabled = parseBooleanEnv(
     "PLANABRAIN_CEREBRAS_ENABLE_WEB_SEARCH",
+    true,
+  );
+  const modelStudioWebSearchEnabled = parseBooleanEnv(
+    "PLANABRAIN_MODELSTUDIO_ENABLE_WEB_SEARCH",
     true,
   );
   const ollamaWebFetchEnabled = parseBooleanEnv(
@@ -237,13 +234,25 @@ export function loadSettings(): Settings {
     openRouterApiKey,
     cerebrasApiKey,
     cerebrasBaseUrl:
-      aiProvider === "cerebras" ? resolveCerebrasBaseUrl() : undefined,
+      aiProvider === "cerebras" || intimacyFallbackProvider === "cerebras"
+        ? resolveCerebrasBaseUrl()
+        : undefined,
     cerebrasWebSearchEnabled,
+    modelStudioApiKey,
+    modelStudioBaseUrl:
+      aiProvider === "modelstudio" || intimacyFallbackProvider === "modelstudio"
+        ? resolveModelStudioBaseUrl()
+        : undefined,
+    modelStudioWebSearchEnabled,
     ollamaApiKeys,
     geminiMockBaseUrl:
-      aiProvider === "geminimock" ? resolveGeminiMockBaseUrl() : undefined,
+      aiProvider === "geminimock" || intimacyFallbackProvider === "geminimock"
+        ? resolveGeminiMockBaseUrl()
+        : undefined,
     openRouterBaseUrl:
-      aiProvider === "openrouter" || embeddingProvider === "openrouter"
+      aiProvider === "openrouter" ||
+      embeddingProvider === "openrouter" ||
+      intimacyFallbackProvider === "openrouter"
         ? resolveOpenRouterBaseUrl()
         : undefined,
     openRouterSiteUrl:
@@ -258,7 +267,10 @@ export function loadSettings(): Settings {
     openRouterWebSearchMaxResults,
     openRouterWebSearchMaxTotalResults,
     openRouterWebSearchContextSize,
-    ollamaHost: aiProvider === "ollama" ? resolveOllamaHost() : undefined,
+    ollamaHost:
+      aiProvider === "ollama" || intimacyFallbackProvider === "ollama"
+        ? resolveOllamaHost()
+        : undefined,
     ollamaSearchHost:
       aiProvider === "ollama" || ollamaApiKeys.length > 0
         ? resolveOllamaSearchHost()
@@ -281,7 +293,9 @@ export function loadSettings(): Settings {
             ? process.env.PLANABRAIN_OLLAMA_MODEL
             : aiProvider === "cerebras"
               ? process.env.PLANABRAIN_CEREBRAS_MODEL
-              : undefined) ??
+              : aiProvider === "modelstudio"
+                ? process.env.PLANABRAIN_MODELSTUDIO_MODEL
+                : undefined) ??
       process.env.PLANABRAIN_CHAT_MODEL ??
       process.env.PLANABRAIN_GEMINI_MODEL ??
       (aiProvider === "geminimock"
@@ -294,7 +308,9 @@ export function loadSettings(): Settings {
               ? "gemma4:31b-cloud"
               : aiProvider === "cerebras"
                 ? "gemma-4-31b"
-                : "gemini-3-flash-preview"),
+                : aiProvider === "modelstudio"
+                  ? "qwen-plus"
+                  : "gemini-3-flash-preview"),
     chatMaxOutputTokens,
     deliveryMaxOutputTokens,
     deliveryRewriteEnabled,
@@ -321,12 +337,43 @@ export function loadSettings(): Settings {
           "google/gemini-embedding-001")
         : undefined,
     indexPath,
-    systemPrompt: process.env.PLANABRAIN_SYSTEM_PROMPT ?? DEFAULT_SYSTEM_PROMPT,
+    systemPrompt:
+      process.env.PLANABRAIN_SYSTEM_PROMPT ??
+      resolveDefaultSystemPrompt(personaProfile),
+    personaProfile,
+    intimacyEnabled,
+    intimacyFallbackProvider,
+    intimacyFallbackModel,
     memoryEnabled,
     memoryMaxMessages,
     memoryDir,
     chatThinkingMode,
   };
+}
+
+function resolvePersonaProfile(): "live" | "original" {
+  const raw = process.env.PLANABRAIN_PERSONA_PROFILE;
+  if (raw == null) {
+    return "live";
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized || normalized === "live" || normalized === "default") {
+    return "live";
+  }
+  if (normalized === "original" || normalized === "backup") {
+    return "original";
+  }
+  throw new Error("PLANABRAIN_PERSONA_PROFILE must be one of: live, original");
+}
+
+function resolveOptionalAiProvider(
+  key: string,
+): Settings["aiProvider"] | undefined {
+  const raw = process.env[key];
+  if (raw == null || !raw.trim()) {
+    return undefined;
+  }
+  return resolveAiProvider(raw);
 }
 
 function resolveAiProvider(
@@ -337,7 +384,8 @@ function resolveAiProvider(
   | "geminimock"
   | "openrouter"
   | "ollama"
-  | "cerebras" {
+  | "cerebras"
+  | "modelstudio" {
   const normalized = raw.trim().toLowerCase();
   if (!normalized) {
     return "google";
@@ -374,8 +422,18 @@ function resolveAiProvider(
   if (normalized === "cerebras" || normalized === "cerebras-ai") {
     return "cerebras";
   }
+  if (
+    normalized === "modelstudio" ||
+    normalized === "model_studio" ||
+    normalized === "model-studio" ||
+    normalized === "alibaba" ||
+    normalized === "dashscope" ||
+    normalized === "qwen"
+  ) {
+    return "modelstudio";
+  }
   throw new Error(
-    "PLANABRAIN_AI_PROVIDER must be one of: google, google_cloud, vertexexpress, vertex_express, vertex-express, geminimock, mock, openrouter, ollama, ollama_cloud, cerebras",
+    "PLANABRAIN_AI_PROVIDER must be one of: google, google_cloud, vertexexpress, vertex_express, vertex-express, geminimock, mock, openrouter, ollama, ollama_cloud, cerebras, modelstudio, alibaba, dashscope, qwen",
   );
 }
 
@@ -472,6 +530,26 @@ function resolveCerebrasBaseUrl(): string {
     throw new Error("PLANABRAIN_CEREBRAS_BASE_URL must be a valid http(s) URL");
   }
   return normalized.endsWith("/v1") ? normalized : `${normalized}/v1`;
+}
+
+const MODEL_STUDIO_DEFAULT_BASE_URL =
+  "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
+const MODEL_STUDIO_COMPATIBLE_PATH = "/compatible-mode/v1";
+
+function resolveModelStudioBaseUrl(): string {
+  const explicit = readOptionalEnv("PLANABRAIN_MODELSTUDIO_BASE_URL");
+  if (!explicit) {
+    return MODEL_STUDIO_DEFAULT_BASE_URL;
+  }
+  const normalized = normalizeApiBaseUrl(explicit);
+  if (!normalized) {
+    throw new Error(
+      "PLANABRAIN_MODELSTUDIO_BASE_URL must be a valid http(s) URL",
+    );
+  }
+  return normalized.endsWith(MODEL_STUDIO_COMPATIBLE_PATH)
+    ? normalized
+    : `${normalized}${MODEL_STUDIO_COMPATIBLE_PATH}`;
 }
 
 function resolveOllamaHost(): string {

@@ -9,7 +9,7 @@
 ## 주요 기능
 
 - Hitomi 갤러리 조회
-- 갤러리 뷰어 HTML을 40MB 이하면 개인 채팅 파일로, 그보다 크면 send.vis.ee 링크로 전달
+- 갤러리 뷰어 HTML을 send.vis.ee로 올려 개인 채팅으로 전달
 - YouTube, Spotify, Apple Music 추적 파라미터 정리
 - Spotify, YouTube Music, Apple Music 링크는 표지·제목·아티스트 카드 이미지와 함께 전달
 - X/Twitter → `fxtwitter`, Instagram 릴/게시물 → 채팅 미리보기 전송
@@ -96,7 +96,6 @@ npm run dev
   - 개인 채팅: `<ID>`
   - 그룹: `@봇계정 <ID>`
   - `받기`로 단일 뷰어 HTML을 준비한 뒤, `다운로드`는 개인 채팅으로 보냅니다.
-  - 뷰어가 40MB 이하면 HTML 파일을, 그보다 크면 send.vis.ee 링크를 보냅니다.
 - 명령어
   - `/start`
   - `/ping`
@@ -127,6 +126,7 @@ npm run dev
 - 응답이 길이 제한으로 끊기면 자동으로 이어서 받아 한 번 더 합칩니다.
 - 최종 텔레그램 전송 전에는 1024토큰 기준으로 한 번 더 정리해 문장 중간 출처 삽입과 과도한 장문 응답을 줄입니다.
 - 내부 메타 문장이나 reasoning 누출은 후처리에서 제거합니다.
+- 선생님이 먼저 연 친밀 장면은 같은 수위로 이어가고, 모델이 거절하면 한 번 더 시도합니다.
 
 ## AI Provider
 
@@ -152,6 +152,26 @@ npm run dev
 - 필수: `OPENROUTER_API_KEY`
 - 권장 검색 방식: `openrouter:web_search` server tool
 
+### Alibaba Cloud Model Studio
+
+- `PLANABRAIN_AI_PROVIDER=modelstudio` (별칭: `alibaba`, `dashscope`, `qwen`)
+- 필수: `MODEL_STUDIO_API_KEY`
+- 기본 모델: `qwen-plus`
+- 기본 엔드포인트: `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`
+- OpenAI Chat Completions 호환 방식이며 이미지 입력은 지원하지 않습니다.
+- 검색은 기본 활성입니다. `web_search`, `web_fetch` 툴을 사용하며 검색 백엔드로 `OLLAMA_API_KEY`가 필요합니다. 키가 없으면 검색이 자동으로 꺼지고, `PLANABRAIN_MODELSTUDIO_ENABLE_WEB_SEARCH=0`으로 직접 끌 수도 있습니다.
+- 임베딩은 Model Studio를 쓰지 않으므로 `GOOGLE_API_KEY` 또는 `PLANABRAIN_EMBEDDING_PROVIDER`가 따로 필요합니다.
+
+최소 설정 예시:
+
+```bash
+PLANABRAIN_AI_PROVIDER=modelstudio
+MODEL_STUDIO_API_KEY=YOUR_MODEL_STUDIO_API_KEY_HERE
+OLLAMA_API_KEY=YOUR_OLLAMA_API_KEY_HERE
+```
+
+`OLLAMA_API_KEY`가 없으면 시의성 질문에 "확인 불가" 응답이 나옵니다. 검색 결과와 출처를 확인하지 못한 답변은 폐기하는 설계이기 때문입니다.
+
 ### Ollama Cloud
 
 - `PLANABRAIN_AI_PROVIDER=ollama`
@@ -173,6 +193,11 @@ npm run dev
 - `PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS`
 - `PLANABRAIN_DELIVERY_REWRITE_ENABLED`
 - `PLANABRAIN_CHAT_THINKING_MODE`
+- `PLANABRAIN_SYSTEM_PROMPT`
+- `PLANABRAIN_PERSONA_PROFILE` (`live` 기본, `original`은 동결 백업)
+- `PLANABRAIN_INTIMACY_ENABLED`
+- `PLANABRAIN_INTIMACY_FALLBACK_PROVIDER`
+- `PLANABRAIN_INTIMACY_FALLBACK_MODEL`
 - `PLANABRAIN_EMBEDDING_MODEL`
 - `PLANABRAIN_WEB_FETCH_ENABLED`
 - `PLANABRAIN_WEB_FETCH_TIMEOUT_MS`
@@ -211,6 +236,13 @@ npm run dev
 - `PLANABRAIN_OPENROUTER_WEB_SEARCH_MAX_RESULTS`
 - `PLANABRAIN_OPENROUTER_WEB_SEARCH_MAX_TOTAL_RESULTS`
 - `PLANABRAIN_OPENROUTER_WEB_SEARCH_CONTEXT_SIZE`
+
+### Model Studio
+
+- `MODEL_STUDIO_API_KEY`
+- `PLANABRAIN_MODELSTUDIO_MODEL`
+- `PLANABRAIN_MODELSTUDIO_BASE_URL`
+- `PLANABRAIN_MODELSTUDIO_ENABLE_WEB_SEARCH`
 
 ### Ollama
 
@@ -337,4 +369,5 @@ cd planabrain && npm run typecheck && npm run build
 - `/schedule`, `/timer` 기반 일정/타이머 예약
 - Instagram 릴/게시물을 텔레그램 동영상·사진 미리보기로 전송
 - Threads 포스트 링크 추적 파라미터 정리
+- 구글 공유 링크(share.google)를 실제 주소로 변환
 - `/version` 명령으로 현재 실행 버전 확인

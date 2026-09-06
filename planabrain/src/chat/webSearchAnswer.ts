@@ -3,12 +3,15 @@ import type { InputImage } from "../integrations/gemini/chat.js";
 import { buildSystemPrompt } from "../config/systemPrompt.js";
 import {
   ProviderRateLimitError,
-  invokeChatWithMetadata,
   isSearchToolAvailable,
   mergeWebCitations,
   type ChatInvocationMetadata,
   type WebCitation,
 } from "../integrations/gemini/chat.js";
+import {
+  invokeChatWithIntimacyRecovery,
+  looksUserInitiatedIntimacy,
+} from "./intimacyMode.js";
 import {
   canFetchUrls,
   extractUrls,
@@ -61,12 +64,26 @@ export async function answerWithWebSearch(params: {
       : [];
 
   const currentInfoRequired = isCurrentInformationRequest(currentTurnText);
-  const searchToolEnabled = isSearchToolAvailable(params.settings);
-  const deliveryEnabled = params.settings.deliveryRewriteEnabled;
+  const intimacyActive =
+    params.settings.intimacyEnabled &&
+    looksUserInitiatedIntimacy(
+      currentTurnText,
+      history.map((message) => message.content),
+    );
+  const searchToolEnabled =
+    isSearchToolAvailable(params.settings) &&
+    !(
+      intimacyActive &&
+      !isExplicitSearchRequest(currentTurnText) &&
+      !currentInfoRequired
+    );
+  const deliveryEnabled =
+    params.settings.deliveryRewriteEnabled && !intimacyActive;
   const deliveryLimit =
     params.settings.deliveryMaxOutputTokens ?? DEFAULT_DELIVERY_MAX_TOKENS;
   const basePrompt = buildSystemPrompt(params.settings, {
     searchEnabled: searchToolEnabled,
+    intimacyActive,
   });
   const systemContent = deliveryEnabled
     ? `${basePrompt}\n\n${buildDeliveryGenerationRules(
@@ -95,10 +112,11 @@ export async function answerWithWebSearch(params: {
 
   let invocation: ChatInvocationMetadata;
   try {
-    invocation = await invokeChatWithMetadata({
+    invocation = await invokeChatWithIntimacyRecovery({
       settings: generationSettings,
       enableSearchTool: searchToolEnabled,
       webFetchUrlSource: currentTurnText,
+      intimacyActive,
       messages: [
         {
           role: "system",

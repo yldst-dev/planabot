@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "tsx src/cli/index.ts",
     "build": "tsc -p tsconfig.json",
-    "test": "node --import tsx --test src/integrations/*.test.ts src/memoryflow/*.test.ts",
+    "test": "node --import tsx --test src/config/*.test.ts src/chat/*.test.ts src/integrations/*.test.ts src/memoryflow/*.test.ts",
     "start": "node dist/cli/index.js",
     "health": "node dist/health/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
