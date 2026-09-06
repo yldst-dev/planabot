@@ -14,6 +14,7 @@
 - Spotify, YouTube Music, Apple Music 링크는 표지·제목·아티스트 카드 이미지와 함께 전달
 - X/Twitter → `fxtwitter`, Instagram 릴/게시물 → 채팅 미리보기 전송
 - Threads 포스트 링크 추적 파라미터 정리
+- 구글 공유 링크(share.google)를 실제 주소로 변환
 - 일정/타이머 등록과 예약 메시지 전송
 - `프라나야` 호출 기반 AI 응답
 - 그룹 채팅 답장 체인 기준 맥락 유지
