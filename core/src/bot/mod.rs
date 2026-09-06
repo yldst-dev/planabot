@@ -16,7 +16,10 @@ use teloxide::utils::command::BotCommands;
 use crate::urlchanger;
 
 pub use state::AppState;
-pub(crate) use telegram::{SendOptions, send_in_thread, send_reply_with_fallback};
+pub(crate) use telegram::{
+    SendOptions, send_in_thread, send_photo_in_thread, send_photo_reply_with_fallback,
+    send_reply_with_fallback,
+};
 
 pub type HandlerResult = Result<()>;
 

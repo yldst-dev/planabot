@@ -1,16 +1,22 @@
-use crate::bot::{AppState, HandlerResult, SendOptions, send_in_thread, send_reply_with_fallback};
+use crate::bot::{
+    AppState, HandlerResult, SendOptions, send_in_thread, send_photo_in_thread,
+    send_photo_reply_with_fallback, send_reply_with_fallback,
+};
 use crate::urlchanger::link_utils::{
-    LinkConversion, MusicPlatform, contains_instagram_link, contains_music_link,
+    LinkConversion, MusicLink, MusicPlatform, contains_instagram_link, contains_music_link,
     contains_threads_link, contains_x_link, convert_instagram_links, convert_threads_links,
     convert_x_links, extract_music_links,
 };
-use crate::urlchanger::music_resolver::{ResolvedMusicLink, music_http, resolve_music_links};
+use crate::urlchanger::music_card::build_music_card;
 use chrono::Utc;
 use log::{error, warn};
 use teloxide::dispatching::DpHandlerDescription;
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, InputFile};
+
+const CAPTION_LIMIT: usize = 1024;
+const MUSIC_CARD_FILE_NAME: &str = "music_card.png";
 
 fn is_recent_message(msg: &Message, seconds: i64) -> bool {
     let now = Utc::now().timestamp();
@@ -26,6 +32,7 @@ where
     <B as Requester>::GetChatMember: Send,
     <B as Requester>::DeleteMessage: Send,
     <B as Requester>::SendMessage: Send,
+    <B as Requester>::SendPhoto: Send,
 {
     Update::filter_message().branch(
         dptree::filter(|msg: Message, state: AppState| {
@@ -65,6 +72,7 @@ where
     <B as Requester>::GetChatMember: Send,
     <B as Requester>::DeleteMessage: Send,
     <B as Requester>::SendMessage: Send,
+    <B as Requester>::SendPhoto: Send,
 {
     state.record_group_chat(&msg).await;
 
@@ -75,87 +83,72 @@ where
         return Ok(());
     }
 
-    let resolved_links = resolve_music_links(music_http(), &links).await;
-    let youtube_only = is_youtube_only(&resolved_links);
-    let youtube_music_only = is_youtube_music_only(&resolved_links);
-    let any_tracking = resolved_links.iter().any(|link| link.had_tracking);
-    let youtube_had_tracking = youtube_only && any_tracking;
-    let youtube_music_had_tracking = youtube_music_only && any_tracking;
+    let youtube_only = is_youtube_only(&links);
+    let any_tracking = links.iter().any(|link| link.had_tracking);
 
     if youtube_only && !any_tracking {
         return Ok(());
     }
 
-    let chat_member = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
-        Ok(member) => member,
+    let privileged = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
+        Ok(member) => member.kind.is_privileged(),
         Err(e) => {
             error!("관리자 권한 확인 중 오류 발생: {:?}", e);
-            return handle_without_admin_rights(&bot, &msg, &resolved_links).await;
+            false
         }
     };
 
-    if youtube_only && chat_member.kind.is_privileged() {
-        if youtube_had_tracking {
-            return handle_youtube_with_admin_rights(&bot, &msg, &resolved_links).await;
-        } else {
-            return handle_youtube_without_admin_rights(&bot, &msg, &resolved_links, false).await;
-        }
-    }
     if youtube_only {
-        return handle_youtube_without_admin_rights(
-            &bot,
-            &msg,
-            &resolved_links,
-            youtube_had_tracking,
-        )
-        .await;
-    }
-    if youtube_music_only && chat_member.kind.is_privileged() {
-        return handle_youtube_music_with_admin_rights(
-            &bot,
-            &msg,
-            &resolved_links,
-            youtube_music_had_tracking,
-        )
-        .await;
-    }
-    if youtube_music_only {
-        return handle_youtube_music_without_admin_rights(
-            &bot,
-            &msg,
-            &resolved_links,
-            youtube_music_had_tracking,
-        )
-        .await;
+        return if privileged {
+            handle_youtube_with_admin_rights(&bot, &msg, &links).await
+        } else {
+            handle_youtube_without_admin_rights(&bot, &msg, &links, any_tracking).await
+        };
     }
 
-    if chat_member.kind.is_privileged() {
-        handle_with_admin_rights(&bot, &msg, &resolved_links).await
+    let card = build_music_card(&links).await;
+
+    if privileged {
+        handle_with_admin_rights(&bot, &msg, &links, card).await
     } else {
-        handle_without_admin_rights(&bot, &msg, &resolved_links).await
+        handle_without_admin_rights(&bot, &msg, &links, card).await
     }
 }
 
 async fn handle_with_admin_rights<B>(
     bot: &B,
     msg: &Message,
-    links: &[ResolvedMusicLink],
+    links: &[MusicLink],
+    card: Option<Vec<u8>>,
 ) -> HandlerResult
 where
     B: Requester + ?Sized,
     B::Err: Send + Sync + 'static,
     <B as Requester>::DeleteMessage: Send,
     <B as Requester>::SendMessage: Send,
+    <B as Requester>::SendPhoto: Send,
 {
     if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
         warn!("메시지 삭제 실패: {:?}", e);
-        return handle_without_admin_rights(bot, msg, links).await;
+        return handle_without_admin_rights(bot, msg, links, card).await;
     }
 
     let username = display_name(msg);
     let cleaned_text = build_cleaned_message_text(msg.text().unwrap_or(""), links);
     let message = format!("정리 완료.\n선생님.\n{}: {}", username, cleaned_text);
-    let reply_markup = build_music_keyboard(links);
+    let caption = music_card_caption(&username);
+    let reply_markup = build_links_keyboard(links);
+
+    if let Some(png) = card.filter(|_| fits_caption(&caption)) {
+        let mut request = send_photo_in_thread(bot, msg, music_card_file(png)).caption(caption);
+        if let Some(markup) = reply_markup.clone() {
+            request = request.reply_markup(markup);
+        }
+        match request.await {
+            Ok(_) => return Ok(()),
+            Err(e) => warn!("음악 카드 전송 실패, 텍스트로 대체합니다: {:?}", e),
+        }
+    }
 
     let mut request = send_in_thread(bot, msg, message);
     if let Some(markup) = reply_markup {
@@ -166,10 +159,44 @@ where
     Ok(())
 }
 
+async fn handle_without_admin_rights<B>(
+    bot: &B,
+    msg: &Message,
+    links: &[MusicLink],
+    card: Option<Vec<u8>>,
+) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: Send + Sync + 'static,
+    <B as Requester>::SendMessage: Send,
+    <B as Requester>::SendPhoto: Send,
+{
+    let text = build_cleaned_links_text(links);
+    let opts = SendOptions {
+        reply_markup: build_links_keyboard(links),
+        ..SendOptions::default()
+    };
+
+    let caption = music_card_caption(&display_name(msg));
+
+    if let Some(png) = card.filter(|_| fits_caption(&caption)) {
+        match send_photo_reply_with_fallback(bot, msg, music_card_file(png), caption, opts.clone())
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(e) => warn!("음악 카드 답장 실패, 텍스트로 대체합니다: {:?}", e),
+        }
+    }
+
+    send_reply_with_fallback(bot, msg, text, opts).await?;
+
+    Ok(())
+}
+
 async fn handle_youtube_with_admin_rights<B>(
     bot: &B,
     msg: &Message,
-    links: &[ResolvedMusicLink],
+    links: &[MusicLink],
 ) -> HandlerResult
 where
     B: Requester + ?Sized,
@@ -190,81 +217,19 @@ where
     } else {
         format!("정리 완료.\n선생님.\n{}: {}", username, cleaned_text)
     };
-    let reply_markup = build_youtube_keyboard(links);
+    let reply_markup = build_links_keyboard(links);
     let mut request = send_in_thread(bot, msg, message);
     if let Some(markup) = reply_markup {
         request = request.reply_markup(markup);
     }
     request.await?;
-    Ok(())
-}
-
-async fn handle_youtube_music_with_admin_rights<B>(
-    bot: &B,
-    msg: &Message,
-    links: &[ResolvedMusicLink],
-    had_tracking: bool,
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::DeleteMessage: Send,
-    <B as Requester>::SendMessage: Send,
-{
-    if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
-        warn!("메시지 삭제 실패(유튜브 뮤직): {:?}", e);
-        return handle_youtube_music_without_admin_rights(bot, msg, links, had_tracking).await;
-    }
-
-    let username = display_name(msg);
-    let cleaned_text = youtube_cleaned_text(links);
-    let message = if cleaned_text.contains('\n') {
-        format!("정리 완료.\n선생님.\n{}:\n{}", username, cleaned_text)
-    } else {
-        format!("정리 완료.\n선생님.\n{}: {}", username, cleaned_text)
-    };
-    let reply_markup = build_music_keyboard(links);
-
-    let mut request = send_in_thread(bot, msg, message);
-    if let Some(markup) = reply_markup {
-        request = request.reply_markup(markup);
-    }
-    request.await?;
-
-    Ok(())
-}
-
-async fn handle_without_admin_rights<B>(
-    bot: &B,
-    msg: &Message,
-    links: &[ResolvedMusicLink],
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::SendMessage: Send,
-{
-    let text = build_cleaned_links_text(links);
-    let markup = build_music_keyboard(links);
-
-    send_reply_with_fallback(
-        bot,
-        msg,
-        text,
-        SendOptions {
-            reply_markup: markup,
-            ..SendOptions::default()
-        },
-    )
-    .await?;
-
     Ok(())
 }
 
 async fn handle_youtube_without_admin_rights<B>(
     bot: &B,
     msg: &Message,
-    links: &[ResolvedMusicLink],
+    links: &[MusicLink],
     had_tracking: bool,
 ) -> HandlerResult
 where
@@ -272,7 +237,7 @@ where
     B::Err: Send + Sync + 'static,
     <B as Requester>::SendMessage: Send,
 {
-    let markup = build_youtube_keyboard(links);
+    let markup = build_links_keyboard(links);
     let text = if had_tracking {
         "정리 완료.\n선생님.\n추적 파라미터를 제거했습니다.\n확인 바랍니다."
     } else {
@@ -292,38 +257,19 @@ where
     Ok(())
 }
 
-async fn handle_youtube_music_without_admin_rights<B>(
-    bot: &B,
-    msg: &Message,
-    links: &[ResolvedMusicLink],
-    had_tracking: bool,
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::SendMessage: Send,
-{
-    let text = if had_tracking {
-        "정리 완료.\n선생님.\n추적 파라미터를 제거했습니다.\n확인 바랍니다."
-    } else {
-        "확인 완료.\n선생님.\n음악 플랫폼 링크입니다.\n원본 링크와 플랫폼 링크를 제공합니다."
-    };
-    let markup = build_music_keyboard(links);
-    send_reply_with_fallback(
-        bot,
-        msg,
-        text,
-        SendOptions {
-            reply_markup: markup,
-            ..SendOptions::default()
-        },
-    )
-    .await?;
-
-    Ok(())
+fn music_card_file(png: Vec<u8>) -> InputFile {
+    InputFile::memory(png).file_name(MUSIC_CARD_FILE_NAME)
 }
 
-fn build_cleaned_links_text(links: &[ResolvedMusicLink]) -> String {
+fn music_card_caption(username: &str) -> String {
+    format!("정리 완료. 선생님.\n{}:", username)
+}
+
+fn fits_caption(text: &str) -> bool {
+    text.chars().count() <= CAPTION_LIMIT
+}
+
+fn build_cleaned_links_text(links: &[MusicLink]) -> String {
     if links.is_empty() {
         return "확인 완료.\n선생님.\n정리된 링크가 없습니다.".to_string();
     }
@@ -358,66 +304,16 @@ fn build_cleaned_links_text(links: &[ResolvedMusicLink]) -> String {
     }
 }
 
-fn build_music_keyboard(links: &[ResolvedMusicLink]) -> Option<InlineKeyboardMarkup> {
-    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
-    let multi = links.len() > 1;
-
-    for (idx, link) in links.iter().enumerate() {
-        let suffix = if multi {
-            format!(" #{}", idx + 1)
-        } else {
-            String::new()
-        };
-        if let Ok(parsed) = reqwest::Url::parse(&link.cleaned) {
-            rows.push(vec![InlineKeyboardButton::url(
-                format!("원본{}", suffix),
-                parsed,
-            )]);
-        } else {
-            warn!("원본 음악 URL 파싱 오류: {}", link.cleaned);
-        }
-        let mut current_row: Vec<InlineKeyboardButton> = Vec::new();
-        for platform in music_platform_order() {
-            if platform == link.platform {
-                continue;
-            }
-            let Some(url) = link.platform_links.get(&platform) else {
-                continue;
-            };
-            match reqwest::Url::parse(url) {
-                Ok(parsed) => {
-                    let label = format!("{}{}", platform_label(platform), suffix);
-                    current_row.push(InlineKeyboardButton::url(label, parsed));
-                    if current_row.len() == 2 {
-                        rows.push(current_row);
-                        current_row = Vec::new();
-                    }
-                }
-                Err(e) => warn!("플랫폼 URL 파싱 오류: {}, URL: {}", e, url),
-            }
-        }
-        if !current_row.is_empty() {
-            rows.push(current_row);
-        }
-    }
-
-    if rows.is_empty() {
-        None
-    } else {
-        Some(InlineKeyboardMarkup::new(rows))
-    }
-}
-
-fn build_youtube_keyboard(links: &[ResolvedMusicLink]) -> Option<InlineKeyboardMarkup> {
+fn build_links_keyboard(links: &[MusicLink]) -> Option<InlineKeyboardMarkup> {
     let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
     let multi = links.len() > 1;
     let mut current_row: Vec<InlineKeyboardButton> = Vec::new();
 
     for (idx, link) in links.iter().enumerate() {
         let label = if multi {
-            format!("원본 #{}", idx + 1)
+            format!("링크 #{}", idx + 1)
         } else {
-            "원본".to_string()
+            "링크".to_string()
         };
         match reqwest::Url::parse(&link.cleaned) {
             Ok(parsed) => {
@@ -427,7 +323,7 @@ fn build_youtube_keyboard(links: &[ResolvedMusicLink]) -> Option<InlineKeyboardM
                     current_row = Vec::new();
                 }
             }
-            Err(e) => warn!("유튜브 URL 파싱 오류: {}, URL: {}", e, link.cleaned),
+            Err(e) => warn!("음악 URL 파싱 오류: {}, URL: {}", e, link.cleaned),
         }
     }
 
@@ -442,25 +338,7 @@ fn build_youtube_keyboard(links: &[ResolvedMusicLink]) -> Option<InlineKeyboardM
     }
 }
 
-fn music_platform_order() -> [MusicPlatform; 4] {
-    [
-        MusicPlatform::Spotify,
-        MusicPlatform::YouTubeMusic,
-        MusicPlatform::YouTube,
-        MusicPlatform::AppleMusic,
-    ]
-}
-
-fn platform_label(platform: MusicPlatform) -> &'static str {
-    match platform {
-        MusicPlatform::Spotify => "스포티파이",
-        MusicPlatform::YouTubeMusic => "유튜브 뮤직",
-        MusicPlatform::YouTube => "유튜브",
-        MusicPlatform::AppleMusic => "애플 뮤직",
-    }
-}
-
-fn build_cleaned_message_text(original: &str, links: &[ResolvedMusicLink]) -> String {
+fn build_cleaned_message_text(original: &str, links: &[MusicLink]) -> String {
     let mut text = original.to_string();
     for link in links {
         text = text.replace(&link.original, &link.cleaned);
@@ -468,7 +346,7 @@ fn build_cleaned_message_text(original: &str, links: &[ResolvedMusicLink]) -> St
     text
 }
 
-fn youtube_cleaned_text(links: &[ResolvedMusicLink]) -> String {
+fn youtube_cleaned_text(links: &[MusicLink]) -> String {
     if links.len() == 1 {
         links[0].cleaned.clone()
     } else {
@@ -480,18 +358,11 @@ fn youtube_cleaned_text(links: &[ResolvedMusicLink]) -> String {
     }
 }
 
-fn is_youtube_only(links: &[ResolvedMusicLink]) -> bool {
+fn is_youtube_only(links: &[MusicLink]) -> bool {
     !links.is_empty()
         && links
             .iter()
             .all(|link| link.platform == MusicPlatform::YouTube)
-}
-
-fn is_youtube_music_only(links: &[ResolvedMusicLink]) -> bool {
-    !links.is_empty()
-        && links
-            .iter()
-            .all(|link| link.platform == MusicPlatform::YouTubeMusic)
 }
 
 pub async fn handle_x_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult

@@ -11,6 +11,7 @@
 - Hitomi 갤러리 조회
 - 갤러리 뷰어 HTML을 40MB 이하면 개인 채팅 파일로, 그보다 크면 send.vis.ee 링크로 전달
 - YouTube, Spotify, Apple Music 추적 파라미터 정리
+- Spotify, YouTube Music, Apple Music 링크는 표지·제목·아티스트 카드 이미지와 함께 전달
 - X/Twitter → `fxtwitter`, Instagram → `vxinstagram` 변환
 - Threads 포스트 링크 추적 파라미터 정리
 - 일정/타이머 등록과 예약 메시지 전송
