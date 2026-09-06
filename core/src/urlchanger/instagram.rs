@@ -71,10 +71,11 @@ pub async fn fetch_instagram_media(original_url: &str) -> Result<InstagramMedia>
                 return Ok(media);
             }
         }
-        if let Ok(Some(video_url)) = crawler_og_video(original_url).await
-            && let Some(media) = download_if_kind(&video_url, InstagramMediaKind::Video).await
-        {
-            return Ok(media);
+        if let Ok(Some(video_url)) = crawler_og_video(original_url).await {
+            let media = download_if_kind(&video_url, InstagramMediaKind::Video).await;
+            if let Some(media) = media {
+                return Ok(media);
+            }
         }
     }
 
