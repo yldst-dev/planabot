@@ -12,7 +12,7 @@
 - 갤러리 뷰어 HTML을 40MB 이하면 개인 채팅 파일로, 그보다 크면 send.vis.ee 링크로 전달
 - YouTube, Spotify, Apple Music 추적 파라미터 정리
 - Spotify, YouTube Music, Apple Music 링크는 표지·제목·아티스트 카드 이미지와 함께 전달
-- X/Twitter → `fxtwitter`, Instagram → `vxinstagram` 변환
+- X/Twitter → `fxtwitter`, Instagram 릴/게시물 → 채팅 미리보기 전송
 - Threads 포스트 링크 추적 파라미터 정리
 - 일정/타이머 등록과 예약 메시지 전송
 - `프라나야` 호출 기반 AI 응답
@@ -334,6 +334,6 @@ cd planabrain && npm run typecheck && npm run build
 - 내부 메타 응답 누출 필터링
 - 응답 잘림 자동 이어쓰기
 - `/schedule`, `/timer` 기반 일정/타이머 예약
-- Instagram 임베드 변환 도메인 `vxinstagram` 적용
+- Instagram 릴/게시물을 텔레그램 동영상·사진 미리보기로 전송
 - Threads 포스트 링크 추적 파라미터 정리
 - `/version` 명령으로 현재 실행 버전 확인

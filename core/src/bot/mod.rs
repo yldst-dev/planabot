@@ -18,7 +18,7 @@ use crate::urlchanger;
 pub use state::AppState;
 pub(crate) use telegram::{
     SendOptions, send_in_thread, send_photo_in_thread, send_photo_reply_with_fallback,
-    send_reply_with_fallback,
+    send_reply_with_fallback, send_video_in_thread, send_video_reply_with_fallback,
 };
 
 pub type HandlerResult = Result<()>;
@@ -35,6 +35,7 @@ where
     <B as Requester>::DeleteMessage: Send,
     <B as Requester>::SendMessage: Send,
     <B as Requester>::SendPhoto: Send,
+    <B as Requester>::SendVideo: Send,
     <B as Requester>::SendDocument: Send,
     <B as Requester>::EditMessageText: Send,
     <B as Requester>::EditMessageReplyMarkup: Send,

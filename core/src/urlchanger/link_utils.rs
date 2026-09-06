@@ -33,8 +33,12 @@ static THREADS_LINK_RE: Lazy<Regex> = Lazy::new(|| {
 static THREADS_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(https?://(?:www\.)?threads\.(?:com|net)/(?:@[\w.]+/post|t)/\S+)").unwrap()
 });
+static GOOGLE_SHARE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"https?://share\.google/[A-Za-z0-9_-]+").unwrap());
+static GOOGLE_SHARE_CAPTURE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(https?://share\.google/[A-Za-z0-9_-]+)").unwrap());
 
-const INSTAGRAM_PRIMARY_HOST: &str = "vxinstagram.com";
+const INSTAGRAM_PRIMARY_HOST: &str = "kirkstagram.com";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkConversion {
@@ -79,25 +83,57 @@ pub fn contains_threads_link(text: &str) -> bool {
     THREADS_LINK_RE.is_match(text)
 }
 
-pub fn clean_music_url(url_str: &str) -> String {
-    if let Ok(mut url) = Url::parse(url_str) {
-        if url.query().is_some() {
-            let query_pairs: Vec<(String, String)> = url
-                .query_pairs()
-                .filter(|(k, _)| !is_tracking_param(k))
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
+pub fn contains_google_share_link(text: &str) -> bool {
+    GOOGLE_SHARE_RE.is_match(text)
+}
 
-            if query_pairs.is_empty() {
-                url.set_query(None);
-            } else {
-                let mut pairs = url.query_pairs_mut();
-                pairs.clear();
-                for (key, value) in query_pairs {
-                    pairs.append_pair(&key, &value);
-                }
+pub fn extract_google_share_links(text: &str) -> Vec<String> {
+    let mut links: Vec<String> = Vec::new();
+    for cap in GOOGLE_SHARE_CAPTURE_RE.captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            let url = m.as_str().to_string();
+            if !links.contains(&url) {
+                links.push(url);
             }
         }
+    }
+    links
+}
+
+pub fn clean_tracking_params(url_str: &str) -> String {
+    match Url::parse(url_str) {
+        Ok(mut url) => {
+            strip_tracking_query(&mut url);
+            url.to_string()
+        }
+        Err(_) => url_str.to_string(),
+    }
+}
+
+fn strip_tracking_query(url: &mut Url) {
+    if url.query().is_none() {
+        return;
+    }
+    let query_pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(k, _)| !is_tracking_param(k))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+    if query_pairs.is_empty() {
+        url.set_query(None);
+    } else {
+        let mut pairs = url.query_pairs_mut();
+        pairs.clear();
+        for (key, value) in query_pairs {
+            pairs.append_pair(&key, &value);
+        }
+    }
+}
+
+pub fn clean_music_url(url_str: &str) -> String {
+    if let Ok(mut url) = Url::parse(url_str) {
+        strip_tracking_query(&mut url);
 
         if url.host_str() == Some("youtu.be") {
             let path = url.path().to_string();
@@ -440,10 +476,25 @@ mod tests {
         let text = "https://www.instagram.com/p/DR_uVJVklbf/?utm_source=ig_web_copy_link&igsh=Nm9hazRuaXNrdGo1";
         let pairs = convert_instagram_links(text);
         assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0].converted, "https://vxinstagram.com/p/DR_uVJVklbf/");
+        assert_eq!(pairs[0].converted, "https://kirkstagram.com/p/DR_uVJVklbf/");
         assert_eq!(
             pairs[0].cleaned_original,
             "https://www.instagram.com/p/DR_uVJVklbf/"
+        );
+    }
+
+    #[test]
+    fn test_convert_instagram_reel_rewrites_host() {
+        let text = "https://www.instagram.com/reel/Dcx3ct3CWX_/";
+        let pairs = convert_instagram_links(text);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(
+            pairs[0].converted,
+            "https://kirkstagram.com/reel/Dcx3ct3CWX_/"
+        );
+        assert_eq!(
+            pairs[0].cleaned_original,
+            "https://www.instagram.com/reel/Dcx3ct3CWX_/"
         );
     }
 
@@ -490,6 +541,34 @@ mod tests {
         let text = "https://www.threads.com/@meta/post/DG7ABCDxyz1";
         assert!(contains_threads_link(text));
         assert!(convert_threads_links(text).is_empty());
+    }
+
+    #[test]
+    fn test_extract_google_share_links_dedupes_and_stops_at_punctuation() {
+        let text = "봐봐 https://share.google/MzxpBP1tsi6KkgPpw. 그리고 https://share.google/MzxpBP1tsi6KkgPpw https://share.google/abc_-1";
+        assert!(contains_google_share_link(text));
+        let links = extract_google_share_links(text);
+        assert_eq!(
+            links,
+            vec![
+                "https://share.google/MzxpBP1tsi6KkgPpw".to_string(),
+                "https://share.google/abc_-1".to_string()
+            ]
+        );
+        assert!(!contains_google_share_link("https://share.google/"));
+    }
+
+    #[test]
+    fn test_clean_tracking_params_keeps_other_query() {
+        assert_eq!(
+            clean_tracking_params("https://example.com/a?utm_source=x&id=7&fbclid=y"),
+            "https://example.com/a?id=7"
+        );
+        assert_eq!(
+            clean_tracking_params("https://example.com/a?utm_source=x"),
+            "https://example.com/a"
+        );
+        assert_eq!(clean_tracking_params("not a url"), "not a url");
     }
 
     #[test]

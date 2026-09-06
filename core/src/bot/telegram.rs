@@ -182,6 +182,17 @@ where
     req
 }
 
+pub(crate) fn send_video_in_thread<B>(bot: &B, msg: &Message, video: InputFile) -> B::SendVideo
+where
+    B: Requester + ?Sized,
+{
+    let mut req = bot.send_video(msg.chat.id, video);
+    if let Some(thread_id) = msg.thread_id {
+        req = req.message_thread_id(thread_id);
+    }
+    req
+}
+
 fn send_photo_in_chat<B>(bot: &B, msg: &Message, photo: InputFile) -> B::SendPhoto
 where
     B: Requester + ?Sized,
@@ -272,6 +283,112 @@ fn apply_photo_send_options<B>(
 where
     B: Requester + ?Sized,
 {
+    if !caption.is_empty() {
+        req = req.caption(caption.to_string());
+    }
+    if let Some(markup) = &opts.reply_markup {
+        req = req.reply_markup(markup.clone());
+    }
+    if let Some(disable_notification) = opts.disable_notification {
+        req = req.disable_notification(disable_notification);
+    }
+    if let Some(parse_mode) = opts.parse_mode {
+        req = req.parse_mode(parse_mode);
+    }
+    req
+}
+
+fn send_video_in_chat<B>(bot: &B, msg: &Message, video: InputFile) -> B::SendVideo
+where
+    B: Requester + ?Sized,
+{
+    bot.send_video(msg.chat.id, video)
+}
+
+fn reply_video_in_thread<B>(bot: &B, msg: &Message, video: InputFile) -> B::SendVideo
+where
+    B: Requester + ?Sized,
+{
+    send_video_in_thread(bot, msg, video)
+        .reply_parameters(ReplyParameters::new(msg.id).allow_sending_without_reply())
+}
+
+fn reply_video_in_chat<B>(bot: &B, msg: &Message, video: InputFile) -> B::SendVideo
+where
+    B: Requester + ?Sized,
+{
+    bot.send_video(msg.chat.id, video)
+        .reply_parameters(ReplyParameters::new(msg.id).allow_sending_without_reply())
+}
+
+pub(crate) async fn send_video_reply_with_fallback<B>(
+    bot: &B,
+    msg: &Message,
+    video: InputFile,
+    caption: impl Into<String>,
+    opts: SendOptions,
+) -> Result<Message>
+where
+    B: Requester + ?Sized,
+    B::Err: std::error::Error + Send + Sync + 'static,
+{
+    let caption = caption.into();
+    let request = apply_video_send_options::<B>(
+        reply_video_in_thread(bot, msg, video.clone()),
+        &caption,
+        &opts,
+    );
+
+    match request.await {
+        Ok(message) => Ok(message),
+        Err(err) => {
+            let err_text = err.to_string().to_lowercase();
+            if is_thread_not_found(&err_text) {
+                let fallback = apply_video_send_options::<B>(
+                    reply_video_in_chat(bot, msg, video.clone()),
+                    &caption,
+                    &opts,
+                );
+                return match fallback.await {
+                    Ok(message) => Ok(message),
+                    Err(err) => {
+                        if is_reply_target_missing(&err.to_string().to_lowercase()) {
+                            let fallback = apply_video_send_options::<B>(
+                                send_video_in_chat(bot, msg, video),
+                                &caption,
+                                &opts,
+                            );
+                            Ok(fallback.await?)
+                        } else {
+                            Err(err.into())
+                        }
+                    }
+                };
+            }
+
+            if is_reply_target_missing(&err_text) {
+                let fallback = apply_video_send_options::<B>(
+                    send_video_in_thread(bot, msg, video),
+                    &caption,
+                    &opts,
+                );
+                return Ok(fallback.await?);
+            }
+
+            Err(err.into())
+        }
+    }
+}
+
+fn apply_video_send_options<B>(
+    mut req: B::SendVideo,
+    caption: &str,
+    opts: &SendOptions,
+) -> B::SendVideo
+where
+    B: Requester + ?Sized,
+{
+    req = req.supports_streaming(true);
     if !caption.is_empty() {
         req = req.caption(caption.to_string());
     }
