@@ -33,6 +33,8 @@ coverage/
 /.codex/skills
 /.sisyphus
 /.skills
+/.playwright-mcp
+/.tmp
 
 # planabrain build/deps
 /planabrain/dist
