@@ -17,6 +17,7 @@ struct HealthResponse {
     uptime: u64,
     version: &'static str,
     timestamp: String,
+    planabrain_server: bool,
 }
 
 async fn health_check(
@@ -38,6 +39,7 @@ async fn health_check(
         uptime,
         version: env!("CARGO_PKG_VERSION"),
         timestamp: chrono::Utc::now().to_rfc3339(),
+        planabrain_server: crate::planabrain::server::is_ready(),
     }))
 }
 

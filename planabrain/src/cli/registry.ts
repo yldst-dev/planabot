@@ -12,6 +12,7 @@ import {
   runMemoryUpdateFactCommand,
 } from "./commands/memory.js";
 import { runScheduleInterpretCommand } from "./commands/schedule.js";
+import { runServeCommand } from "./commands/serve.js";
 import {
   runTodoAddCommand,
   runTodoCompleteCommand,
@@ -33,6 +34,7 @@ export const COMMANDS = {
   ask: (args, context) => runAskCommand(args, context.loadSettings()),
   tokens: (args) => runTokensCommand(args),
   "turn-prepare": () => runTurnPrepareCommand(),
+  serve: (args, context) => runServeCommand(args, context),
   "memory-prepare": (args) => runMemoryPrepareCommand(args),
   "memory-assistant": (args) => runMemoryAssistantCommand(args),
   "memory-exchange": (args) => runMemoryExchangeCommand(args),

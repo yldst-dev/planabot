@@ -114,14 +114,10 @@ export function parseTurnPrepareInput(raw: string): TurnPrepareInput {
   };
 }
 
-export async function runTurnPrepareCommand(): Promise<void> {
-  const input = parseTurnPrepareInput(await readStdin());
-  if (input.nowMs) {
-    process.env.PLANABRAIN_NOW_MS = String(input.nowMs);
-  }
-  const output = await prepareTurn(input, {
+export function buildTurnPrepareDeps(nowMs?: number): TurnPrepareDeps {
+  return {
     interpretTodo: (userId, text) => interpretTodoRequest(userId, text),
-    interpretSchedule: (text) => interpretScheduleRequest(text),
+    interpretSchedule: (text) => interpretScheduleRequest(text, { nowMs }),
     listTodos: (userId) => listTodos(userId),
     prepareMemory: async (params) => {
       const engine = new LocalMemoryEngine();
@@ -138,7 +134,12 @@ export async function runTurnPrepareCommand(): Promise<void> {
         engine.close();
       }
     },
-  });
+  };
+}
+
+export async function runTurnPrepareCommand(): Promise<void> {
+  const input = parseTurnPrepareInput(await readStdin());
+  const output = await prepareTurn(input, buildTurnPrepareDeps(input.nowMs));
   process.stdout.write(`${JSON.stringify(output)}\n`);
 }
 

@@ -69,20 +69,31 @@ export async function runMemoryExchangeCommand(args: string[]): Promise<void> {
     "Usage: planabrain memory-exchange <userId> <chatId> <userText> <assistantText>"
   );
 
+  const result = await rememberExchangeTurn({
+    userId: String(userId),
+    chatId: String(chatId),
+    conversationId,
+    userText,
+    assistantText,
+  });
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+}
+
+export async function rememberExchangeTurn(params: {
+  userId: string;
+  chatId: string;
+  conversationId?: string;
+  userText: string;
+  assistantText: string;
+}): Promise<unknown> {
   const engine = new LocalMemoryEngine();
   try {
-    const result = await engine.rememberExchange({
-      userId: String(userId),
-      chatId: String(chatId),
-      conversationId,
-      userText,
-      assistantText
-    });
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return await engine.rememberExchange(params);
   } finally {
     engine.close();
   }
 }
+
 
 export async function runMemoryResetUserCommand(args: string[]): Promise<void> {
   const [userId] = args;

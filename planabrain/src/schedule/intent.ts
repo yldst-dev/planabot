@@ -26,10 +26,14 @@ type ParsedTime = {
   kind: "schedule" | "timer";
 };
 
-export function interpretScheduleRequest(text: string): ScheduleInterpretOutput {
+export function interpretScheduleRequest(
+  text: string,
+  options: { nowMs?: number } = {},
+): ScheduleInterpretOutput {
+  const now = resolveNow(options.nowMs);
   const userText = extractUserText(text);
   const normalized = normalizeIntentText(userText);
-  const parsedTime = parseScheduleTime(userText);
+  const parsedTime = parseScheduleTime(userText, now);
   const related =
     isScheduleRelated(normalized) ||
     isScheduleContextText(text) ||
@@ -63,7 +67,6 @@ export function interpretScheduleRequest(text: string): ScheduleInterpretOutput 
     return emptyOutput();
   }
 
-  const now = nowMs();
   const maxDelay = parsedTime.kind === "timer" ? MAX_TIMER_MS : MAX_SCHEDULE_MS;
   if (parsedTime.dueAtMs <= now) {
     return {
@@ -91,11 +94,13 @@ export function interpretScheduleRequest(text: string): ScheduleInterpretOutput 
   };
 }
 
-function parseScheduleTime(text: string): ParsedTime | undefined {
-  return parseRelativeTime(text) ?? parseAbsoluteDateTime(text) ?? parseKoreanDateTime(text);
+function parseScheduleTime(text: string, now: number): ParsedTime | undefined {
+  return (
+    parseRelativeTime(text, now) ?? parseAbsoluteDateTime(text) ?? parseKoreanDateTime(text, now)
+  );
 }
 
-function parseRelativeTime(text: string): ParsedTime | undefined {
+function parseRelativeTime(text: string, now: number): ParsedTime | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
   const pattern = /(?:(\d+)\s*일\s*)?(?:(\d+)\s*시간\s*)?(?:(\d+)\s*분\s*)?(?:(\d+)\s*초\s*)?(?:뒤|후|있다가)/;
   const match = normalized.match(pattern);
@@ -111,7 +116,7 @@ function parseRelativeTime(text: string): ParsedTime | undefined {
       return undefined;
     }
     return {
-      dueAtMs: nowMs() + durationMs,
+      dueAtMs: now + durationMs,
       durationMs,
       matchedText: timer[0],
       kind: "timer"
@@ -126,7 +131,7 @@ function parseRelativeTime(text: string): ParsedTime | undefined {
     return undefined;
   }
   return {
-    dueAtMs: nowMs() + durationMs,
+    dueAtMs: now + durationMs,
     durationMs,
     matchedText: match[0],
     kind: "timer"
@@ -155,16 +160,16 @@ function parseAbsoluteDateTime(text: string): ParsedTime | undefined {
   };
 }
 
-function parseKoreanDateTime(text: string): ParsedTime | undefined {
+function parseKoreanDateTime(text: string, now: number): ParsedTime | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
   const time = normalized.match(/(?:(오전|오후|새벽|밤|저녁|낮)\s*)?(\d{1,2})시(?:\s*(\d{1,2})분?)?/);
   if (!time) {
     return undefined;
   }
-  const now = nowKstParts();
-  let year = now.year;
-  let month = now.month;
-  let day = now.day;
+  const today = nowKstParts(now);
+  let year = today.year;
+  let month = today.month;
+  let day = today.day;
   let dateText = "";
 
   const monthDay = normalized.match(/(\d{1,2})월\s*(\d{1,2})일/);
@@ -175,12 +180,12 @@ function parseKoreanDateTime(text: string): ParsedTime | undefined {
     month = Number(monthDay[1]);
     day = Number(monthDay[2]);
     dateText = monthDay[0];
-    if (kstDateMs(year, month, day, 23, 59) <= nowMs()) {
+    if (kstDateMs(year, month, day, 23, 59) <= now) {
       year += 1;
     }
   } else if (relativeDay) {
     const offset = relativeDay[0] === "오늘" ? 0 : relativeDay[0] === "내일" ? 1 : relativeDay[0] === "모레" ? 2 : 3;
-    const parts = addKstDays(now.year, now.month, now.day, offset);
+    const parts = addKstDays(today.year, today.month, today.day, offset);
     year = parts.year;
     month = parts.month;
     day = parts.day;
@@ -188,12 +193,12 @@ function parseKoreanDateTime(text: string): ParsedTime | undefined {
   } else if (weekday) {
     const weekOffset = weekday[1] === "다담주" ? 14 : weekday[1] === "다음주" ? 7 : 0;
     const targetDay = weekdayIndex(weekday[2]);
-    const currentDay = kstWeekday(now.year, now.month, now.day);
+    const currentDay = kstWeekday(today.year, today.month, today.day);
     let offset = targetDay - currentDay + weekOffset;
     if (offset <= 0 && weekOffset === 0) {
       offset += 7;
     }
-    const parts = addKstDays(now.year, now.month, now.day, offset);
+    const parts = addKstDays(today.year, today.month, today.day, offset);
     year = parts.year;
     month = parts.month;
     day = parts.day;
@@ -203,7 +208,7 @@ function parseKoreanDateTime(text: string): ParsedTime | undefined {
   const hour = normalizeHour(Number(time[2]), time[1]);
   const minute = Number(time[3] ?? 0);
   let dueAtMs = kstDateMs(year, month, day, hour, minute);
-  if (!dateText && dueAtMs <= nowMs()) {
+  if (!dateText && dueAtMs <= now) {
     const parts = addKstDays(year, month, day, 1);
     year = parts.year;
     month = parts.month;
@@ -309,6 +314,13 @@ function kstDateMs(year: number, month: number, day: number, hour: number, minut
   return ms;
 }
 
+function resolveNow(explicit?: number): number {
+  if (typeof explicit === "number" && Number.isFinite(explicit) && explicit > 0) {
+    return explicit;
+  }
+  return nowMs();
+}
+
 function nowMs(): number {
   const raw = process.env.PLANABRAIN_NOW_MS?.trim();
   if (raw) {
@@ -320,8 +332,8 @@ function nowMs(): number {
   return Date.now();
 }
 
-function nowKstParts(): { year: number; month: number; day: number } {
-  const date = new Date(nowMs() + KST_OFFSET_MS);
+function nowKstParts(now: number): { year: number; month: number; day: number } {
+  const date = new Date(now + KST_OFFSET_MS);
   return {
     year: date.getUTCFullYear(),
     month: date.getUTCMonth() + 1,

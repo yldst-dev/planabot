@@ -8,6 +8,8 @@ use anyhow::{Context, Result, anyhow};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
+
+pub(crate) mod server;
 use tokio::process::Command as TokioCommand;
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +110,47 @@ pub(crate) struct TurnPrepareInput {
     pub token_budget: Option<u32>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AskRequest<'a> {
+    user_id: &'a str,
+    question: &'a str,
+    current_turn_text: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    memory_context: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image: Option<AskImage>,
+    memory_enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AskImage {
+    path: String,
+    mime_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AskResponse {
+    answer: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExchangeRequest<'a> {
+    user_id: &'a str,
+    chat_scope: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conversation_id: Option<&'a str>,
+    user_text: &'a str,
+    assistant_text: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExchangeResponse {
+    ok: bool,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TurnPrepareOutput {
@@ -126,6 +169,15 @@ pub(crate) struct TurnPrepareOutput {
 pub(crate) async fn prepare_turn(input: &TurnPrepareInput) -> Result<TurnPrepareOutput> {
     if !is_planabrain_enabled() {
         return Err(anyhow!("planabrain 비활성화"));
+    }
+    if let Some(output) = server::post_json::<_, TurnPrepareOutput>(
+        "/v1/turn-prepare",
+        input,
+        PLANABRAIN_COMMAND_TIMEOUT,
+    )
+    .await?
+    {
+        return Ok(output);
     }
     let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
     let mut command = build_planabrain_command(&root)?;
@@ -251,6 +303,35 @@ pub(crate) async fn run_planabrain_ask(
         return Err(anyhow!("planabrain 비활성화"));
     }
 
+    let request = AskRequest {
+        user_id,
+        question,
+        current_turn_text,
+        memory_context,
+        image: image_input.as_ref().map(|image| AskImage {
+            path: absolute_path(&image.path).to_string_lossy().into_owned(),
+            mime_type: image.mime_type.clone(),
+        }),
+        memory_enabled: !is_local_memory_enabled(),
+    };
+    let served =
+        server::post_json::<_, AskResponse>("/v1/ask", &request, PLANABRAIN_ASK_TIMEOUT).await;
+    match served {
+        Ok(Some(response)) => {
+            if let Some(image) = image_input.as_ref() {
+                let _ = std::fs::remove_file(&image.path);
+            }
+            return Ok(response.answer);
+        }
+        Ok(None) => {}
+        Err(err) => {
+            if let Some(image) = image_input.as_ref() {
+                let _ = std::fs::remove_file(&image.path);
+            }
+            return Err(err);
+        }
+    }
+
     let mut prepared = prepare_planabrain_ask(
         question,
         current_turn_text,
@@ -266,6 +347,16 @@ pub(crate) async fn run_planabrain_ask(
     success_stdout(output, "ask")
 }
 
+fn absolute_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
+}
+
 pub(crate) async fn remember_planabrain_exchange(
     current_turn_text: &str,
     answer: &str,
@@ -277,8 +368,28 @@ pub(crate) async fn remember_planabrain_exchange(
         return Ok(());
     }
 
-    let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
     let chat_scope = format!("chat_{chat_id}");
+    let request = ExchangeRequest {
+        user_id,
+        chat_scope: &chat_scope,
+        conversation_id: conversation_scope_id,
+        user_text: current_turn_text,
+        assistant_text: answer,
+    };
+    if let Some(response) = server::post_json::<_, ExchangeResponse>(
+        "/v1/memory-exchange",
+        &request,
+        PLANABRAIN_COMMAND_TIMEOUT,
+    )
+    .await?
+    {
+        if response.ok {
+            return Ok(());
+        }
+        return Err(anyhow!("planabrain 서버가 메모리 교환을 거부했습니다"));
+    }
+
+    let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
     let (command, temp_files) = build_memory_exchange_command(
         &root,
         current_turn_text,

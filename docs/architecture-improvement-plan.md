@@ -23,7 +23,7 @@
 | 4 | 죽은 RAG 코드 제거, CLI 명령 레지스트리, provider 인터페이스와 OpenAI 호환 provider 통합 | G3 | 완료 |
 | 5 | 링크 핸들러 공통 파이프라인, `bot/handlers.rs` 분할 | G4 | 완료 |
 | 6 | 저장소 추상화와 원자적 쓰기, 갤러리 청구 만료 | G5 | 완료 |
-| 7 | planabrain 상주 프로세스(HTTP)로 전환 | G2 | 대기 |
+| 7 | planabrain 상주 프로세스(HTTP)로 전환 | G2 | 완료 |
 
 ## 원칙
 
@@ -42,8 +42,10 @@
 - 2026-09-08: 5단계 완료. `bot/handlers.rs`(1,868줄)를 `handlers/{command,plana,schedule,callback,message}.rs`로 나누고 진입점 일곱 개만 `handlers/mod.rs`에서 내보낸다. 동작과 문구는 그대로다. 남은 것: `Requester` 제네릭 바운드는 여전히 각 함수에 붙어 있으며, 목 `Requester`를 도입해 핸들러 테스트를 붙이는 일은 다음 단계 이후로 미뤘다.
 - 2026-09-08: 6단계 완료. `core/src/persist.rs`의 `write_json_atomic`(임시 파일 후 rename)이 그룹 목록, planabrain 응답 기록, 일정, 갤러리 청구 저장을 모두 맡는다. 상태와 일정 저장소는 비동기 쓰기 잠금을 스냅샷 전에 잡아 오래된 스냅샷이 나중에 착지하는 경쟁을 없앴다. 갤러리 다운로드 청구는 `.planabot/share_claims.json`(`PLANABOT_SHARE_CLAIMS_PATH`)에 24시간 만료로 보관되어 자정 재시동 뒤에도 유효하다.
 
+- 2026-09-08: 7단계 완료. `planabrain serve`가 127.0.0.1의 자동 선택 포트에서 `/v1/turn-prepare`, `/v1/ask`, `/v1/memory-exchange`, `/v1/health`를 토큰 인증으로 제공하고, 표준 입력이 닫히면 함께 종료된다. Rust는 `planabrain::server::spawn_supervisor`가 시작 시 서버를 띄워 준비 신호(`{"ready":true,"port":N}`)를 읽고 종료 시 지수 백오프로 다시 띄운다. 브리지 세 함수는 서버가 있으면 HTTP로, 연결이 안 되면 기존 CLI 실행으로 자동 복귀한다. 실제 데몬 상대 왕복은 약 6밀리초로 CLI 실행(약 500밀리초)보다 빠르다. 서버는 `PLANABOT_PLANABRAIN_SERVER=0`으로 끌 수 있다. 서버는 설정을 시작 시 한 번 읽으므로 `.env` 변경은 봇 재시작이 필요하다.
+
 ## 다음 작업
 
-- 7단계: planabrain 상주 프로세스. `turn-prepare`, `ask`, `memory-exchange` 세 호출을 로컬 HTTP나 유닉스 소켓으로 바꾸고 Rust가 프로세스를 감독한다. 이번 3단계에서 호출이 `run_planabrain_output` 한 곳으로 모였으므로 교체 지점은 그 함수와 `build_planabrain_command`뿐이다.
+- 나머지 CLI 호출(`todo-list`, `memory-reset-user`, `schedule-interpret`, `tokens`)도 상주 서버 경로로 옮길 수 있다. 빈도가 낮아 미뤘다.
 - 임베딩 파이프라인(`integrations/gemini/embeddings.ts`, `PLANABRAIN_EMBEDDING_*`, `PLANABRAIN_OPENROUTER_EMBEDDING_*`)은 RAG 제거 후 참조가 없다. 제거할지 사용자 확인이 필요하다.
 - `Requester` 목 구현과 텔레그램 핸들러 테스트, 설정 60필드의 provider별 그룹화, 런타임 이미지의 Node 툴체인 축소(Docker 검증 필요).

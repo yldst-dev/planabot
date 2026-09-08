@@ -33,6 +33,7 @@ async fn main() -> Result<()> {
 
     tokio::spawn(health::run_health_server());
     spawn_reboot_scheduler();
+    planabrain::server::spawn_supervisor();
 
     let me = get_me_or_reboot(&bot).await?;
     let bot_username = me.user.username.clone().unwrap_or_default();
