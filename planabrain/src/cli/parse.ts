@@ -1,52 +1,11 @@
-export type Command =
-  | "ingest"
-  | "ask"
-  | "tokens"
-  | "memory-prepare"
-  | "memory-assistant"
-  | "memory-exchange"
-  | "memory-reset-user"
-  | "memory-reset-all"
-  | "memory-list-facts"
-  | "memory-delete-fact"
-  | "memory-update-fact"
-  | "memory-migrate-json"
-  | "todo-list"
-  | "todo-add"
-  | "todo-complete"
-  | "todo-update"
-  | "todo-delete"
-  | "todo-interpret"
-  | "schedule-interpret"
-  | "turn-prepare";
+import { COMMAND_NAMES, isCommand, type Command } from "./registry.js";
+
+export type { Command };
 
 export function parseCli(argv: string[]): { command: Command; args: string[] } {
   const [, , command, ...rest] = argv;
-  if (
-    command !== "ingest" &&
-    command !== "ask" &&
-    command !== "tokens" &&
-    command !== "memory-prepare" &&
-    command !== "memory-assistant" &&
-    command !== "memory-exchange" &&
-    command !== "memory-reset-user" &&
-    command !== "memory-reset-all" &&
-    command !== "memory-list-facts" &&
-    command !== "memory-delete-fact" &&
-    command !== "memory-update-fact" &&
-    command !== "memory-migrate-json" &&
-    command !== "todo-list" &&
-    command !== "todo-add" &&
-    command !== "todo-complete" &&
-    command !== "todo-update" &&
-    command !== "todo-delete" &&
-    command !== "todo-interpret" &&
-    command !== "schedule-interpret" &&
-    command !== "turn-prepare"
-  ) {
-    throw new Error(
-      "Usage: planabrain <ingest|ask|tokens|memory-prepare|memory-assistant|memory-exchange|memory-reset-user|memory-reset-all|memory-list-facts|memory-delete-fact|memory-update-fact|memory-migrate-json|todo-list|todo-add|todo-complete|todo-update|todo-delete|todo-interpret|schedule-interpret|turn-prepare> [...]"
-    );
+  if (!command || !isCommand(command)) {
+    throw new Error(`Usage: planabrain <${COMMAND_NAMES.join("|")}> [...]`);
   }
   return { command, args: rest };
 }
