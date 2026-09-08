@@ -18,7 +18,7 @@
 | 단계 | 내용 | 목표 | 상태 |
 |---|---|---|---|
 | 1 | 데이터 루트 단일화(`PLANABRAIN_DATA_DIR`), 로컬 데이터 이전 | G1 | 완료 |
-| 2 | CI 릴리즈 게이트, send-vis-ee-api 테스트, Docker 빌드 검증, Dockerfile 캐시 레이어와 런타임 축소, compose healthcheck | G6 | 대기 |
+| 2 | CI 릴리즈 게이트, send-vis-ee-api 테스트, Docker 빌드 검증, Dockerfile 캐시 레이어, 이미지 healthcheck | G6 | 완료 |
 | 3 | 브리지 타임아웃·취소·동시성 제한 정리, 준비 단계 명령 통합(`turn-prepare`) | G2 | 대기 |
 | 4 | 죽은 RAG 코드 제거, CLI 명령 레지스트리, provider 인터페이스와 OpenAI 호환 provider 통합 | G3 | 대기 |
 | 5 | 링크 핸들러 공통 파이프라인, `bot/handlers.rs` 분할 | G4 | 대기 |
@@ -36,3 +36,4 @@
 
 - 2026-09-08: 계획 작성. 1단계 시작.
 - 2026-09-08: 1단계 완료. TS는 `config/paths.ts`의 `resolveDataPath`로, Rust는 `planabrain_data_root`로 같은 기준을 쓰고, Rust가 자식 프로세스에 `PLANABRAIN_DATA_DIR`를 항상 넘긴다. 기본값은 planabrain 폴더의 상위이므로 배포에서는 `/app/.planabrain`이 되어 `planabrain-data` 볼륨과 일치한다. 로컬 데이터는 `planabrain/.planabrain`에서 `.planabrain`으로 옮겼다. 로컬 compose에도 `.planabrain` 바인드 마운트를 추가했다.
+- 2026-09-08: 2단계 완료. CI에 Go 모듈 두 개의 gofmt·vet·테스트와 Docker 이미지 빌드 잡을 추가하고 릴리즈가 둘을 기다리게 했다. Dockerfile에 Cargo 의존성 사전 빌드 레이어와 두 헬스 엔드포인트를 함께 보는 HEALTHCHECK를 넣었고, `.dockerignore`에 `.planabrain`, `sub2api` 등을 추가했다. planabrain 헬스 응답의 버전은 package.json에서 읽는다. 런타임 이미지에서 Node 툴체인 전체 복사를 줄이는 일은 Docker로 검증할 수 있을 때 하기로 미뤘다.

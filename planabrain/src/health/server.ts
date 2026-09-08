@@ -1,4 +1,18 @@
+import { readFileSync } from "node:fs";
+
 import express, { Request, Response } from "express";
+
+export const HEALTH_VERSION = readPackageVersion();
+
+function readPackageVersion(): string {
+  try {
+    const raw = readFileSync(new URL("../../package.json", import.meta.url), "utf8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === "string" ? parsed.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
 const app = express();
 const PORT = process.env.BRAIN_HEALTH_PORT || 8081;
@@ -14,7 +28,7 @@ app.get("/health", (req: Request, res: Response) => {
   res.json({
     status: "ok",
     uptime: Math.floor((Date.now() - startTime) / 1000),
-    version: "0.1.3",
+    version: HEALTH_VERSION,
     timestamp: new Date().toISOString(),
   });
 });

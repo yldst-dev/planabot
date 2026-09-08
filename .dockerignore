@@ -15,3 +15,11 @@ planabrain/dist
 *.tmp
 *.swp
 .DS_Store
+.planabrain
+sub2api
+.tmp
+.playwright-mcp
+hiromi/downloads
+hiromi/bin
+hiromi/hiromi
+hiromi/bot

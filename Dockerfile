@@ -10,8 +10,11 @@ FROM ${RUST_IMAGE} AS builder
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
-COPY core/src ./core/src
+RUN mkdir -p core/src && echo 'fn main() {}' > core/src/main.rs \
+    && cargo build --release \
+    && rm -rf core/src target/release/planabot target/release/deps/planabot-* target/release/.fingerprint/planabot-*
 
+COPY core/src ./core/src
 RUN cargo build --release
 
 FROM ${GO_IMAGE} AS hiromi-builder
@@ -67,6 +70,9 @@ COPY --from=planabrain-builder /app/planabrain/node_modules /app/planabrain/node
 COPY --from=planabrain-builder /app/planabrain/dist /app/planabrain/dist
 
 EXPOSE 8080 8081
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD node -e "const q=process.env.HEALTH_SECRET_CORE?'?secret='+encodeURIComponent(process.env.HEALTH_SECRET_CORE):'';const b=process.env.HEALTH_SECRET_BRAIN?'?secret='+encodeURIComponent(process.env.HEALTH_SECRET_BRAIN):'';Promise.all([fetch('http://127.0.0.1:'+(process.env.HEALTH_PORT||'8080')+'/health'+q),fetch('http://127.0.0.1:'+(process.env.BRAIN_HEALTH_PORT||'8081')+'/health'+b)]).then(r=>process.exit(r.every(x=>x.ok)?0:1)).catch(()=>process.exit(1))"
 
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY scripts/reset-local-memory.sh /usr/local/bin/reset-local-memory
