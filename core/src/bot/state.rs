@@ -6,11 +6,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use log::warn;
 use serde::{Deserialize, Serialize};
 use teloxide::types::{ChatId, ChatKind, Message, MessageId, PublicChatKind, UserId};
-use tokio::fs;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 
 use crate::hiromi_share::ShareClaim;
 use crate::hitomi::GalleryClient;
+use crate::persist::{read_json_or_default, write_json_atomic};
 use crate::schedule::ScheduleStore;
 
 #[derive(Debug)]
@@ -91,8 +91,29 @@ pub struct AppState {
     image_rate_limiter: Arc<Mutex<ImageRateLimiter>>,
     planabrain_semaphore: Arc<Semaphore>,
     pub(crate) schedule_store: ScheduleStore,
-    share_claims: Arc<RwLock<HashMap<String, ShareClaim>>>,
+    share_claims: Arc<RwLock<HashMap<String, StoredShareClaim>>>,
+    share_claims_path: PathBuf,
+    write_lock: Arc<AsyncMutex<()>>,
     pub hiromi_bin: PathBuf,
+}
+
+const SHARE_CLAIM_TTL_MS: i64 = 24 * 60 * 60 * 1000;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredShareClaim {
+    claim: ShareClaim,
+    created_at_ms: i64,
+}
+
+fn is_share_claim_live(created_at_ms: i64, now_ms: i64) -> bool {
+    now_ms.saturating_sub(created_at_ms) < SHARE_CLAIM_TTL_MS
+}
+
+fn unix_now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 impl AppState {
@@ -115,6 +136,8 @@ impl AppState {
         let image_rate_limiter = ImageRateLimiter::new(2, Duration::from_secs(60));
         let schedule_store = ScheduleStore::new();
         let hiromi_bin = crate::hiromi_share::hiromi_bin();
+        let share_claims_path = resolve_share_claims_path();
+        let share_claims = load_share_claims(&share_claims_path, unix_now_ms());
 
         Self {
             bot_username,
@@ -130,22 +153,44 @@ impl AppState {
             image_rate_limiter: Arc::new(Mutex::new(image_rate_limiter)),
             planabrain_semaphore: Arc::new(Semaphore::new(4)),
             schedule_store,
-            share_claims: Arc::new(RwLock::new(HashMap::new())),
+            share_claims: Arc::new(RwLock::new(share_claims)),
+            share_claims_path,
+            write_lock: Arc::new(AsyncMutex::new(())),
             hiromi_bin,
         }
     }
 
-    pub(crate) fn put_share_claim(&self, claim: ShareClaim) {
-        if let Ok(mut claims) = self.share_claims.write() {
-            claims.insert(claim.token.clone(), claim);
+    pub(crate) async fn put_share_claim(&self, claim: ShareClaim) {
+        let _guard = self.write_lock.lock().await;
+        let now = unix_now_ms();
+        let snapshot = {
+            let mut claims = match self.share_claims.write() {
+                Ok(claims) => claims,
+                Err(_) => return,
+            };
+            claims.retain(|_, stored| is_share_claim_live(stored.created_at_ms, now));
+            claims.insert(
+                claim.token.clone(),
+                StoredShareClaim {
+                    claim,
+                    created_at_ms: now,
+                },
+            );
+            claims.values().cloned().collect::<Vec<_>>()
+        };
+        if let Err(err) = write_json_atomic(&self.share_claims_path, &snapshot).await {
+            warn!("갤러리 다운로드 청구 저장 실패: {}", err);
         }
     }
 
     pub(crate) fn get_share_claim(&self, token: &str) -> Option<ShareClaim> {
-        self.share_claims
-            .read()
-            .ok()
-            .and_then(|claims| claims.get(token).cloned())
+        let now = unix_now_ms();
+        self.share_claims.read().ok().and_then(|claims| {
+            claims
+                .get(token)
+                .filter(|stored| is_share_claim_live(stored.created_at_ms, now))
+                .map(|stored| stored.claim.clone())
+        })
     }
 
     pub(crate) fn is_after_boot(&self, msg: &Message) -> bool {
@@ -209,6 +254,7 @@ impl AppState {
         conversation_scope_id: &str,
         owner_user_id: Option<u64>,
     ) {
+        let _guard = self.write_lock.lock().await;
         let snapshot = {
             let mut tracker = match self.planabrain_replies.write() {
                 Ok(tracker) => tracker,
@@ -243,6 +289,7 @@ impl AppState {
         }
 
         let chat_id = msg.chat.id;
+        let _guard = self.write_lock.lock().await;
         let snapshot = {
             let mut registry = match self.group_registry.write() {
                 Ok(registry) => registry,
@@ -330,6 +377,27 @@ fn resolve_group_registry_path() -> PathBuf {
     }
 }
 
+fn resolve_share_claims_path() -> PathBuf {
+    let raw = std::env::var("PLANABOT_SHARE_CLAIMS_PATH")
+        .unwrap_or_else(|_| ".planabot/share_claims.json".to_string());
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    }
+}
+
+fn load_share_claims(path: &Path, now_ms: i64) -> HashMap<String, StoredShareClaim> {
+    read_json_or_default::<Vec<StoredShareClaim>>(path)
+        .into_iter()
+        .filter(|stored| is_share_claim_live(stored.created_at_ms, now_ms))
+        .map(|stored| (stored.claim.token.clone(), stored))
+        .collect()
+}
+
 fn resolve_planabrain_replies_path() -> PathBuf {
     let raw = std::env::var("PLANABOT_PLANABRAIN_REPLIES_PATH")
         .unwrap_or_else(|_| ".planabot/planabrain_replies.json".to_string());
@@ -364,30 +432,62 @@ fn load_planabrain_replies(path: &Path) -> PlanabrainReplyTracker {
 }
 
 async fn persist_group_registry(path: &Path, ids: &[i64]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).await?;
-    }
     let mut sorted = ids.to_vec();
     sorted.sort_unstable();
     sorted.dedup();
-    let payload = serde_json::to_string_pretty(&sorted).unwrap_or_else(|_| "[]".to_string());
-    fs::write(path, payload).await
+    write_json_atomic(path, &sorted).await
 }
 
 async fn persist_planabrain_replies(
     path: &Path,
     records: &[PlanabrainReplyRecord],
 ) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).await?;
-    }
-    let payload = serde_json::to_string_pretty(records).unwrap_or_else(|_| "[]".to_string());
-    fs::write(path, payload).await
+    write_json_atomic(path, records).await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PlanabrainReplyRecord, PlanabrainReplyTracker};
+    use super::{
+        PlanabrainReplyRecord, PlanabrainReplyTracker, SHARE_CLAIM_TTL_MS, StoredShareClaim,
+        is_share_claim_live, load_share_claims,
+    };
+    use crate::hiromi_share::ShareClaim;
+
+    #[test]
+    fn share_claims_expire_after_ttl() {
+        assert!(is_share_claim_live(1_000, 1_000 + SHARE_CLAIM_TTL_MS - 1));
+        assert!(!is_share_claim_live(1_000, 1_000 + SHARE_CLAIM_TTL_MS));
+    }
+
+    #[test]
+    fn expired_share_claims_are_dropped_on_load() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("planabot_share_claims_{}.json", std::process::id()));
+        let claim = |token: &str| ShareClaim {
+            token: token.to_string(),
+            gallery_id: "1".into(),
+            title: "t".into(),
+            pages: 1,
+            url: String::new(),
+            path: String::new(),
+            size: 0,
+        };
+        let stored = vec![
+            StoredShareClaim {
+                claim: claim("fresh"),
+                created_at_ms: 10_000,
+            },
+            StoredShareClaim {
+                claim: claim("stale"),
+                created_at_ms: 0,
+            },
+        ];
+        std::fs::write(&path, serde_json::to_string(&stored).unwrap()).unwrap();
+        let loaded = load_share_claims(&path, SHARE_CLAIM_TTL_MS + 5_000);
+        assert!(loaded.contains_key("fresh"));
+        assert!(!loaded.contains_key("stale"));
+        let _ = std::fs::remove_file(path);
+    }
     use teloxide::types::{ChatId, MessageId};
 
     #[test]

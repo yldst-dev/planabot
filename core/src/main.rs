@@ -3,6 +3,7 @@ mod config;
 mod health;
 mod hiromi_share;
 mod hitomi;
+mod persist;
 mod planabrain;
 mod reboot;
 mod schedule;

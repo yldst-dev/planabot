@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, MessageId, ParseMode, ReplyParameters, ThreadId};
 use teloxide::utils::html;
-use tokio::fs;
 use tokio::time::{self, Duration};
 
 const MAX_SCHEDULE_ITEMS: usize = 500;
@@ -33,6 +32,7 @@ static TITLE_COMMAND_SUFFIX: LazyLock<Regex> = LazyLock::new(|| {
 pub(crate) struct ScheduleStore {
     path: PathBuf,
     items: Arc<Mutex<Vec<ScheduleItem>>>,
+    write_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -99,13 +99,19 @@ impl ScheduleStore {
     pub(crate) fn new() -> Self {
         let path = resolve_schedule_path();
         let items = load_schedule_items(&path);
+        Self::with_items(path, items)
+    }
+
+    fn with_items(path: PathBuf, items: Vec<ScheduleItem>) -> Self {
         Self {
             path,
             items: Arc::new(Mutex::new(items)),
+            write_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
     pub(crate) async fn add(&self, input: NewSchedule) -> Result<ScheduleMutation> {
+        let _guard = self.write_lock.lock().await;
         let now = now_ms();
         let mut title = normalize_title(&input.title);
         if title.is_empty() {
@@ -174,6 +180,7 @@ impl ScheduleStore {
     }
 
     pub(crate) async fn cancel(&self, owner_user_id: u64, query: &str) -> Result<ScheduleMutation> {
+        let _guard = self.write_lock.lock().await;
         let now = now_ms();
         let (result, snapshot) = {
             let mut items = lock_items(&self.items);
@@ -215,6 +222,7 @@ impl ScheduleStore {
     }
 
     async fn claim_due(&self, now: i64) -> Result<Vec<ScheduleItem>> {
+        let _guard = self.write_lock.lock().await;
         let (due, snapshot) = {
             let mut items = lock_items(&self.items);
             let mut due = Vec::new();
@@ -236,6 +244,7 @@ impl ScheduleStore {
     }
 
     async fn mark_sent(&self, id: &str) -> Result<()> {
+        let _guard = self.write_lock.lock().await;
         let now = now_ms();
         let snapshot = {
             let mut items = lock_items(&self.items);
@@ -254,6 +263,7 @@ impl ScheduleStore {
     }
 
     async fn mark_failed(&self, id: &str, error: &str) -> Result<()> {
+        let _guard = self.write_lock.lock().await;
         let now = now_ms();
         let snapshot = {
             let mut items = lock_items(&self.items);
@@ -465,17 +475,11 @@ fn load_schedule_items(path: &Path) -> Vec<ScheduleItem> {
 }
 
 async fn persist_schedule_items(path: &Path, items: &[ScheduleItem]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).await?;
-    }
     let payload = serde_json::json!({
         "version": 1,
         "items": items,
     });
-    let text = serde_json::to_string_pretty(&payload)?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, text).await?;
-    fs::rename(tmp, path).await?;
+    crate::persist::write_json_atomic(path, &payload).await?;
     Ok(())
 }
 
@@ -761,10 +765,10 @@ mod tests {
 
     #[tokio::test]
     async fn add_rejects_past_due_time() {
-        let store = ScheduleStore {
-            path: std::env::temp_dir().join(format!("planabot_schedule_test_{}.json", now_ms())),
-            items: Arc::new(Mutex::new(Vec::new())),
-        };
+        let store = ScheduleStore::with_items(
+            std::env::temp_dir().join(format!("planabot_schedule_test_{}.json", now_ms())),
+            Vec::new(),
+        );
         let result = store
             .add(NewSchedule {
                 owner_user_id: 1,
@@ -793,10 +797,10 @@ mod tests {
 
     #[tokio::test]
     async fn add_uses_default_title_when_command_only() {
-        let store = ScheduleStore {
-            path: std::env::temp_dir().join(format!("planabot_schedule_test_{}.json", now_ms())),
-            items: Arc::new(Mutex::new(Vec::new())),
-        };
+        let store = ScheduleStore::with_items(
+            std::env::temp_dir().join(format!("planabot_schedule_test_{}.json", now_ms())),
+            Vec::new(),
+        );
         let result = store
             .add(NewSchedule {
                 owner_user_id: 1,

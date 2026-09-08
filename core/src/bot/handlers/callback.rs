@@ -186,7 +186,7 @@ where
                     .unwrap_or_else(|| {
                         build_share_ready_keyboard(&info, &claim.token, include_save)
                     });
-                state.put_share_claim(claim.clone());
+                state.put_share_claim(claim.clone()).await;
                 if let Err(err) = bot
                     .edit_message_reply_markup(chat_id, message_id)
                     .reply_markup(keyboard)
