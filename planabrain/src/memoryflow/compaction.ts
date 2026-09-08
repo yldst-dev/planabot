@@ -1,5 +1,5 @@
 import { loadSettings } from "../config/settings.js";
-import { invokeChat } from "../integrations/gemini/chat.js";
+import { invokeChat } from "../integrations/chat.js";
 import { summarizeTurns } from "./extractors.js";
 import type { Turn } from "./types.js";
 

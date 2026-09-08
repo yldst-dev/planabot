@@ -6,7 +6,8 @@ import {
   type ChatInvocationMetadata,
   type ChatInvocationParams,
   type ChatMessage,
-} from "../integrations/gemini/chat.js";
+  providerHasCredentials as chatProviderHasCredentials,
+} from "../integrations/chat.js";
 
 const INTIMACY_LEXICON =
   /야한|야하게|야해|야설|19금|성인\s*채팅|에로|섹스|섹시|자위|오르가즘|사정|정액|펠라|삽입|성기|음경|음순|클리토리스|자지|보지|젖꼭지|유두|가슴을\s*만|옷을\s*벗|벗겨|벗기|안아(?:줘|요|라|보)?|끌어안|포옹|허그|손(?:을)?\s*잡|손잡아|키스|입맞춤|뽀뽀|쓰다듬|토닥|만져(?:줘|봐|요)?|기대(?:어|줘)|옆에\s*와|가까이\s*(?:와|앉아|있어)|무릎에\s*앉|업혀|접촉|터치해|머리\s*쓰다듬|볼을\s*만|hentai|nsfw|\bporn\b|\bfuck\b|\bcock\b|\bpussy\b|\bblowjob\b|\borgasm\b|\bcum\b/iu;
@@ -86,24 +87,7 @@ export function providerHasCredentials(
   settings: Settings,
   provider: Settings["aiProvider"],
 ): boolean {
-  switch (provider) {
-    case "google":
-      return Boolean(settings.googleApiKey);
-    case "vertexexpress":
-      return Boolean(settings.vertexExpressApiKey);
-    case "openrouter":
-      return Boolean(settings.openRouterApiKey);
-    case "ollama":
-      return settings.ollamaApiKeys.length > 0;
-    case "cerebras":
-      return Boolean(settings.cerebrasApiKey);
-    case "modelstudio":
-      return Boolean(settings.modelStudioApiKey);
-    case "geminimock":
-      return Boolean(settings.geminiMockBaseUrl);
-    default:
-      return false;
-  }
+  return chatProviderHasCredentials(settings, provider);
 }
 
 export function resolveIntimacyRetrySettings(settings: Settings): Settings {

@@ -1,5 +1,5 @@
 import type { Settings } from "../../config/settings.js";
-import type { InputImage } from "../../integrations/gemini/chat.js";
+import type { InputImage } from "../../integrations/chat.js";
 import { answerWithWebSearch } from "../../chat/webSearchAnswer.js";
 
 export async function runAskCommand(args: string[], settings: Settings): Promise<void> {

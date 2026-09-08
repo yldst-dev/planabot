@@ -4,7 +4,7 @@ import test from "node:test";
 import { answerWithWebSearch } from "../chat/webSearchAnswer.js";
 import { buildSystemPrompt } from "../config/systemPrompt.js";
 import type { Settings } from "../config/settings.js";
-import { buildSearchQuery, invokeChatWithMetadata } from "./gemini/chat.js";
+import { buildSearchQuery, invokeChatWithMetadata } from "./chat.js";
 
 function createSettings(overrides: Partial<Settings> = {}): Settings {
   return {

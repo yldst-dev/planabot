@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { loadSettings, type Settings } from "../config/settings.js";
-import { isSearchToolAvailable } from "./gemini/chat.js";
+import { isSearchToolAvailable } from "./chat.js";
 
 function settingsFor(overrides: Partial<Settings>): Settings {
   return {

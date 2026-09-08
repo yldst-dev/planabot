@@ -1,6 +1,6 @@
 import { buildSystemPrompt } from "../config/systemPrompt.js";
 import type { Settings } from "../config/settings.js";
-import { invokeChat } from "../integrations/gemini/chat.js";
+import { invokeChat } from "../integrations/chat.js";
 
 export type VerifiedCitation = {
   url: string;

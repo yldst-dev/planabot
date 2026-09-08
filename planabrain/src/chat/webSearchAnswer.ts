@@ -1,5 +1,5 @@
 import type { Settings } from "../config/settings.js";
-import type { InputImage } from "../integrations/gemini/chat.js";
+import type { InputImage } from "../integrations/chat.js";
 import { buildSystemPrompt } from "../config/systemPrompt.js";
 import {
   ProviderRateLimitError,
@@ -9,7 +9,7 @@ import {
   usesPreSearchContext,
   type ChatInvocationMetadata,
   type WebCitation,
-} from "../integrations/gemini/chat.js";
+} from "../integrations/chat.js";
 import {
   invokeChatWithIntimacyRecovery,
   looksUserInitiatedIntimacy,

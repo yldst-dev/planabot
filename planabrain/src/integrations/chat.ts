@@ -6,19 +6,19 @@ import {
   type SafetySetting,
 } from "@google/generative-ai";
 
-import type { Settings } from "../../config/settings.js";
-import { sanitizeAssistantOutput } from "../../chat/sanitizeOutput.js";
-import { createGoogleSearchTool } from "../googleSearch/retrievalTool.js";
-import { invokeVertexExpressChat } from "../google/vertexExpress.js";
-import { invokeOllamaApi } from "../ollama/api.js";
-import { fetchWebPage } from "../webFetch.js";
-import { WebToolPolicy } from "../webToolPolicy.js";
+import type { Settings } from "../config/settings.js";
+import { sanitizeAssistantOutput } from "../chat/sanitizeOutput.js";
+import { createGoogleSearchTool } from "./googleSearch/retrievalTool.js";
+import { invokeVertexExpressChat } from "./google/vertexExpress.js";
+import { invokeOllamaApi } from "./ollama/api.js";
+import { fetchWebPage } from "./webFetch.js";
+import { WebToolPolicy } from "./webToolPolicy.js";
 import {
   ProviderApiError,
   classifyHttpStatus,
   fetchWithTimeout,
   isRetryable,
-} from "../providerError.js";
+} from "./providerError.js";
 
 const DEFAULT_CHAT_TEMPERATURE = 1.0;
 const DEFAULT_CHAT_TOP_P = 0.7;
@@ -279,56 +279,115 @@ export async function invokeChatWithMetadata(
   };
 }
 
-async function invokeChatOnce(params: {
+const UNSUPPORTED_IMAGE_MESSAGE =
+  "이미지 입력은 현재 openrouter 또는 ollama provider에서만 지원합니다.";
+
+type ChatProviderName = Settings["aiProvider"];
+
+export type ChatInvocationOnceParams = {
   settings: Settings;
   messages: ChatMessage[];
   enableSearchTool?: boolean;
   webFetchUrlSource?: string;
-}): Promise<ChatInvocationResult> {
+};
+
+type ChatProvider = {
+  supportsImages: boolean;
+  hasCredentials: (settings: Settings) => boolean;
+  searchAvailable: (settings: Settings) => boolean;
+  invoke: (params: ChatInvocationOnceParams) => Promise<ChatInvocationResult>;
+};
+
+const CHAT_PROVIDERS: Record<ChatProviderName, ChatProvider> = {
+  google: {
+    supportsImages: false,
+    hasCredentials: (settings) => Boolean(settings.googleApiKey),
+    searchAvailable: () => true,
+    invoke: (params) => invokeGoogleChat(params),
+  },
+  vertexexpress: {
+    supportsImages: true,
+    hasCredentials: (settings) => Boolean(settings.vertexExpressApiKey),
+    searchAvailable: () => true,
+    invoke: (params) => invokeVertexExpressChat(params),
+  },
+  geminimock: {
+    supportsImages: false,
+    hasCredentials: (settings) => Boolean(settings.geminiMockBaseUrl),
+    searchAvailable: () => false,
+    invoke: (params) => invokeGeminiMockChat(params.settings, params.messages),
+  },
+  openrouter: {
+    supportsImages: true,
+    hasCredentials: (settings) => Boolean(settings.openRouterApiKey),
+    searchAvailable: (settings) => {
+      if (!settings.openRouterWebSearchEnabled) {
+        return false;
+      }
+      return settings.openRouterWebSearchBackend === "ollama"
+        ? settings.ollamaApiKeys.length > 0
+        : true;
+    },
+    invoke: (params) =>
+      invokeOpenRouterChat(params.settings, params.messages, params.enableSearchTool),
+  },
+  cerebras: {
+    supportsImages: true,
+    hasCredentials: (settings) => Boolean(settings.cerebrasApiKey),
+    searchAvailable: (settings) =>
+      settings.cerebrasWebSearchEnabled && settings.ollamaApiKeys.length > 0,
+    invoke: (params) =>
+      invokeCerebrasChat(
+        params.settings,
+        params.messages,
+        params.enableSearchTool,
+        params.webFetchUrlSource,
+      ),
+  },
+  modelstudio: {
+    supportsImages: false,
+    hasCredentials: (settings) => Boolean(settings.modelStudioApiKey),
+    searchAvailable: (settings) =>
+      settings.modelStudioWebSearchEnabled && settings.ollamaApiKeys.length > 0,
+    invoke: (params) =>
+      invokeModelStudioChat(
+        params.settings,
+        params.messages,
+        params.enableSearchTool,
+        params.webFetchUrlSource,
+      ),
+  },
+  ollama: {
+    supportsImages: true,
+    hasCredentials: (settings) => settings.ollamaApiKeys.length > 0,
+    searchAvailable: (settings) => settings.ollamaWebSearchEnabled,
+    invoke: (params) =>
+      invokeOllamaChat(
+        params.settings,
+        params.messages,
+        params.enableSearchTool,
+        params.webFetchUrlSource,
+      ),
+  },
+};
+
+export function providerHasCredentials(
+  settings: Settings,
+  provider: ChatProviderName,
+): boolean {
+  return CHAT_PROVIDERS[provider]?.hasCredentials(settings) ?? false;
+}
+
+async function invokeChatOnce(params: ChatInvocationOnceParams): Promise<ChatInvocationResult> {
+  const provider = CHAT_PROVIDERS[params.settings.aiProvider];
+  if (!provider) {
+    throw new Error(`지원하지 않는 provider입니다: ${params.settings.aiProvider}`);
+  }
   const hasImages = params.messages.some((message) => (message.images?.length ?? 0) > 0);
-  if (params.settings.aiProvider === "google") {
-    if (hasImages) {
-      throw new Error("이미지 입력은 현재 openrouter 또는 ollama provider에서만 지원합니다.");
-    }
-    return invokeGoogleChat(params);
+  if (hasImages && !provider.supportsImages) {
+    throw new Error(UNSUPPORTED_IMAGE_MESSAGE);
   }
-  if (params.settings.aiProvider === "vertexexpress") {
-    return invokeVertexExpressChat(params);
-  }
-  if (params.settings.aiProvider === "openrouter") {
-    return invokeOpenRouterChat(params.settings, params.messages, params.enableSearchTool);
-  }
-  if (params.settings.aiProvider === "cerebras") {
-    return invokeCerebrasChat(
-      params.settings,
-      params.messages,
-      params.enableSearchTool,
-      params.webFetchUrlSource,
-    );
-  }
-  if (params.settings.aiProvider === "modelstudio") {
-    if (hasImages) {
-      throw new Error("이미지 입력은 현재 openrouter 또는 ollama provider에서만 지원합니다.");
-    }
-    return invokeModelStudioChat(
-      params.settings,
-      params.messages,
-      params.enableSearchTool,
-      params.webFetchUrlSource,
-    );
-  }
-  if (params.settings.aiProvider === "geminimock" && hasImages) {
-    throw new Error("이미지 입력은 현재 openrouter 또는 ollama provider에서만 지원합니다.");
-  }
-  if (params.settings.aiProvider === "ollama") {
-    return invokeOllamaChat(
-      params.settings,
-      params.messages,
-      params.enableSearchTool,
-      params.webFetchUrlSource,
-    );
-  }
-  return invokeGeminiMockChat(params.settings, params.messages);
+  return provider.invoke(params);
 }
 
 function createChatModel(settings: Settings): ChatGoogleGenerativeAI {
@@ -460,125 +519,26 @@ async function invokeOpenRouterChat(
   );
 }
 
-async function invokeCerebrasChat(
+type OpenAICompatibleToolChatConfig = {
+  providerName: string;
+  apiKey: string;
+  baseUrl: string;
+  webSearchAvailable: boolean;
+  webFetchAvailable: boolean;
+};
+
+async function invokeOpenAICompatibleToolChat(
+  config: OpenAICompatibleToolChatConfig,
   settings: Settings,
   messages: ChatMessage[],
-  enableSearchTool: boolean | undefined,
   webFetchUrlSource: string | undefined,
 ): Promise<ChatInvocationResult> {
-  if (!settings.cerebrasApiKey) {
-    throw new Error(
-      "CEREBRAS_API_KEY is required when PLANABRAIN_AI_PROVIDER=cerebras",
-    );
-  }
-  if (!settings.cerebrasBaseUrl) {
-    throw new Error(
-      "PLANABRAIN_CEREBRAS_BASE_URL is required when PLANABRAIN_AI_PROVIDER=cerebras",
-    );
-  }
-
-  const webSearchAvailable = Boolean(
-    enableSearchTool &&
-      settings.cerebrasWebSearchEnabled &&
-      settings.ollamaApiKeys.length > 0,
-  );
-  const webFetchAvailable = Boolean(enableSearchTool && settings.webFetchEnabled);
-  const tools = buildWebTools(webSearchAvailable, webFetchAvailable);
+  const tools = buildWebTools(config.webSearchAvailable, config.webFetchAvailable);
   const maxIterations = tools
     ? Math.max(1, settings.ollamaToolMaxIterations)
     : 1;
-  const url = `${settings.cerebrasBaseUrl}/chat/completions`;
-  const headers = { authorization: `Bearer ${settings.cerebrasApiKey}` };
-  const workingMessages: Array<Record<string, unknown>> = messages.map(
-    (message) => ({
-      role: normalizeOpenAIRole(message.role),
-      content: message.content,
-    }),
-  );
-  const webToolPolicy = new WebToolPolicy(webFetchUrlSource ?? "");
-
-  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
-    const payload: Record<string, unknown> = {
-      model: settings.chatModel,
-      temperature: DEFAULT_CHAT_TEMPERATURE,
-      top_p: DEFAULT_CHAT_TOP_P,
-      messages: workingMessages,
-    };
-    if (tools) {
-      payload.tools = tools;
-    }
-    if (settings.chatMaxOutputTokens) {
-      payload.max_tokens = settings.chatMaxOutputTokens;
-    }
-
-    const choice = await withRateLimitRetry(() =>
-      postOpenAIChatChoice({ providerName: "Cerebras", url, headers, payload }),
-    );
-    const toolCalls = tools ? extractOllamaToolCalls(choice.message) : [];
-    if (toolCalls.length === 0) {
-      const result = extractOpenAIResult({
-        choices: [{ message: choice.message, finish_reason: choice.finishReason }],
-      });
-      if (!result.content) {
-        throw new ProviderApiError({
-          kind: "empty_or_filtered",
-          provider: "Cerebras",
-          status: 200,
-          message: "Cerebras API response missing choices[0].message.content",
-        });
-      }
-      return withWebToolCitations(result, webToolPolicy);
-    }
-
-    workingMessages.push(choice.message);
-    for (const toolCall of toolCalls) {
-      const result = await executeOllamaToolCall(
-        settings,
-        toolCall,
-        webToolPolicy,
-      );
-      workingMessages.push({
-        role: "tool",
-        tool_call_id: toolCall.id,
-        content: JSON.stringify(result),
-      });
-    }
-  }
-
-  throw new Error("Cerebras tool-calling exceeded iteration limit");
-}
-
-async function invokeModelStudioChat(
-  settings: Settings,
-  messages: ChatMessage[],
-  enableSearchTool: boolean | undefined,
-  webFetchUrlSource: string | undefined,
-): Promise<ChatInvocationResult> {
-  if (!settings.modelStudioApiKey) {
-    throw new Error(
-      "MODEL_STUDIO_API_KEY is required when PLANABRAIN_AI_PROVIDER=modelstudio",
-    );
-  }
-  if (!settings.modelStudioBaseUrl) {
-    throw new Error(
-      "PLANABRAIN_MODELSTUDIO_BASE_URL is required when PLANABRAIN_AI_PROVIDER=modelstudio",
-    );
-  }
-
-  const webSearchAvailable = Boolean(
-    enableSearchTool &&
-      settings.modelStudioWebSearchEnabled &&
-      settings.ollamaApiKeys.length > 0,
-  );
-  const webFetchAvailable = Boolean(
-    enableSearchTool && settings.modelStudioWebSearchEnabled && settings.webFetchEnabled,
-  );
-  const tools = buildWebTools(webSearchAvailable, webFetchAvailable);
-  const maxIterations = tools
-    ? Math.max(1, settings.ollamaToolMaxIterations)
-    : 1;
-  const url = `${settings.modelStudioBaseUrl}/chat/completions`;
-  const headers = { authorization: `Bearer ${settings.modelStudioApiKey}` };
+  const url = `${config.baseUrl}/chat/completions`;
+  const headers = { authorization: `Bearer ${config.apiKey}` };
   const workingMessages: Array<Record<string, unknown>> = messages.map(
     (message) => ({
       role: normalizeOpenAIRole(message.role),
@@ -603,7 +563,7 @@ async function invokeModelStudioChat(
 
     const choice = await withRateLimitRetry(() =>
       postOpenAIChatChoice({
-        providerName: "ModelStudio",
+        providerName: config.providerName,
         url,
         headers,
         payload,
@@ -617,9 +577,9 @@ async function invokeModelStudioChat(
       if (!result.content) {
         throw new ProviderApiError({
           kind: "empty_or_filtered",
-          provider: "ModelStudio",
+          provider: config.providerName,
           status: 200,
-          message: "ModelStudio API response missing choices[0].message.content",
+          message: `${config.providerName} API response missing choices[0].message.content`,
         });
       }
       return withWebToolCitations(result, webToolPolicy);
@@ -640,33 +600,81 @@ async function invokeModelStudioChat(
     }
   }
 
-  throw new Error("ModelStudio tool-calling exceeded iteration limit");
+  throw new Error(`${config.providerName} tool-calling exceeded iteration limit`);
+}
+
+async function invokeCerebrasChat(
+  settings: Settings,
+  messages: ChatMessage[],
+  enableSearchTool: boolean | undefined,
+  webFetchUrlSource: string | undefined,
+): Promise<ChatInvocationResult> {
+  if (!settings.cerebrasApiKey) {
+    throw new Error(
+      "CEREBRAS_API_KEY is required when PLANABRAIN_AI_PROVIDER=cerebras",
+    );
+  }
+  if (!settings.cerebrasBaseUrl) {
+    throw new Error(
+      "PLANABRAIN_CEREBRAS_BASE_URL is required when PLANABRAIN_AI_PROVIDER=cerebras",
+    );
+  }
+  return invokeOpenAICompatibleToolChat(
+    {
+      providerName: "Cerebras",
+      apiKey: settings.cerebrasApiKey,
+      baseUrl: settings.cerebrasBaseUrl,
+      webSearchAvailable: Boolean(
+        enableSearchTool &&
+          settings.cerebrasWebSearchEnabled &&
+          settings.ollamaApiKeys.length > 0,
+      ),
+      webFetchAvailable: Boolean(enableSearchTool && settings.webFetchEnabled),
+    },
+    settings,
+    messages,
+    webFetchUrlSource,
+  );
+}
+
+async function invokeModelStudioChat(
+  settings: Settings,
+  messages: ChatMessage[],
+  enableSearchTool: boolean | undefined,
+  webFetchUrlSource: string | undefined,
+): Promise<ChatInvocationResult> {
+  if (!settings.modelStudioApiKey) {
+    throw new Error(
+      "MODEL_STUDIO_API_KEY is required when PLANABRAIN_AI_PROVIDER=modelstudio",
+    );
+  }
+  if (!settings.modelStudioBaseUrl) {
+    throw new Error(
+      "PLANABRAIN_MODELSTUDIO_BASE_URL is required when PLANABRAIN_AI_PROVIDER=modelstudio",
+    );
+  }
+  return invokeOpenAICompatibleToolChat(
+    {
+      providerName: "ModelStudio",
+      apiKey: settings.modelStudioApiKey,
+      baseUrl: settings.modelStudioBaseUrl,
+      webSearchAvailable: Boolean(
+        enableSearchTool &&
+          settings.modelStudioWebSearchEnabled &&
+          settings.ollamaApiKeys.length > 0,
+      ),
+      webFetchAvailable: Boolean(
+        enableSearchTool && settings.modelStudioWebSearchEnabled && settings.webFetchEnabled,
+      ),
+    },
+    settings,
+    messages,
+    webFetchUrlSource,
+  );
 }
 
 export function isSearchToolAvailable(settings: Settings): boolean {
-  if (settings.aiProvider === "openrouter") {
-    if (!settings.openRouterWebSearchEnabled) {
-      return false;
-    }
-    return settings.openRouterWebSearchBackend === "ollama"
-      ? settings.ollamaApiKeys.length > 0
-      : true;
-  }
-  if (settings.aiProvider === "cerebras") {
-    return settings.cerebrasWebSearchEnabled && settings.ollamaApiKeys.length > 0;
-  }
-  if (settings.aiProvider === "modelstudio") {
-    return (
-      settings.modelStudioWebSearchEnabled && settings.ollamaApiKeys.length > 0
-    );
-  }
-  if (settings.aiProvider === "ollama") {
-    return settings.ollamaWebSearchEnabled;
-  }
-  if (settings.aiProvider === "google" || settings.aiProvider === "vertexexpress") {
-    return true;
-  }
-  return false;
+  return CHAT_PROVIDERS[settings.aiProvider]?.searchAvailable(settings) ?? false;
 }
 
 function buildOpenRouterWebSearchTool(

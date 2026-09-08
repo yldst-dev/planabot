@@ -12,7 +12,7 @@ import type { Settings } from "../config/settings.js";
 import {
   invokeChatWithMetadata,
   parseOpenRouterCitations,
-} from "./gemini/chat.js";
+} from "./chat.js";
 
 function createSettings(
   overrides: Partial<Settings> = {},
