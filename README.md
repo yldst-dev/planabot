@@ -160,7 +160,6 @@ npm run dev
 - 기본 엔드포인트: `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`
 - OpenAI Chat Completions 호환 방식이며 이미지 입력은 지원하지 않습니다.
 - 검색은 기본 활성입니다. `web_search`, `web_fetch` 툴을 사용하며 검색 백엔드로 `OLLAMA_API_KEY`가 필요합니다. 키가 없으면 검색이 자동으로 꺼지고, `PLANABRAIN_MODELSTUDIO_ENABLE_WEB_SEARCH=0`으로 직접 끌 수도 있습니다.
-- 임베딩은 Model Studio를 쓰지 않으므로 `GOOGLE_API_KEY` 또는 `PLANABRAIN_EMBEDDING_PROVIDER`가 따로 필요합니다.
 
 최소 설정 예시:
 
@@ -198,7 +197,6 @@ OLLAMA_API_KEY=YOUR_OLLAMA_API_KEY_HERE
 - `PLANABRAIN_INTIMACY_ENABLED`
 - `PLANABRAIN_INTIMACY_FALLBACK_PROVIDER`
 - `PLANABRAIN_INTIMACY_FALLBACK_MODEL`
-- `PLANABRAIN_EMBEDDING_MODEL`
 - `PLANABRAIN_DATA_DIR` (planabrain 데이터 루트, 기본값은 저장소 루트이며 `.planabrain/*` 상대 경로의 기준)
 - `PLANABOT_PLANABRAIN_SERVER` (기본 1, planabrain 상주 서버 사용 여부)
 - `PLANABRAIN_SERVER_PORT` (기본 0, 상주 서버가 쓸 루프백 포트이며 0이면 자동 선택)
@@ -217,7 +215,6 @@ OLLAMA_API_KEY=YOUR_OLLAMA_API_KEY_HERE
 - `VERTEX_EXPRESS_API_KEY`
 - `PLANABRAIN_VERTEX_EXPRESS_API_VERSION`
 - `PLANABRAIN_VERTEX_EXPRESS_MODEL`
-- `PLANABRAIN_VERTEX_EXPRESS_EMBEDDING_MODEL`
 - `PLANABRAIN_VERTEX_EXPRESS_THINKING_LEVEL`
 - `gemini-3-flash-preview`에서는 `PLANABRAIN_VERTEX_EXPRESS_THINKING_LEVEL=off`가 사실상 `MINIMAL`로 적용됩니다.
 
@@ -255,7 +252,6 @@ OLLAMA_API_KEY=YOUR_OLLAMA_API_KEY_HERE
 - `PLANABRAIN_OLLAMA_SEARCH_HOST`
 - `PLANABRAIN_OLLAMA_MODEL`
 - `PLANABRAIN_OLLAMA_THINKING_MODE`
-- `PLANABRAIN_OLLAMA_EMBEDDING_MODEL`
 - `PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH`
 - `PLANABRAIN_OLLAMA_ENABLE_WEB_FETCH`
 - `PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS`
@@ -362,7 +358,6 @@ cd planabrain && npm run typecheck && npm run build
 
 - 그룹 대화 답장 체인 맥락 유지
 - 이미지 분석을 planabrain 멀티모달 경로로 통합
-- Google 의존성 없이 Ollama 임베딩 지원
 - OpenRouter 웹 검색 tool 지원
 - Vertex Express provider 지원
 - Ollama 다중 API 키 fallback 지원

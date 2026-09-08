@@ -26,33 +26,6 @@ export type VertexExpressChatResult = {
   finishReason?: string;
 };
 
-export function createVertexExpressEmbeddingsClient(settings: Settings): {
-  embedDocuments(texts: string[]): Promise<number[][]>;
-  embedQuery(text: string): Promise<number[]>;
-} {
-  const ai = createVertexExpressClient(settings);
-  return {
-    async embedDocuments(texts: string[]): Promise<number[][]> {
-      if (texts.length === 0) {
-        return [];
-      }
-      const response = await ai.models.embedContent({
-        model: settings.embeddingModel,
-        contents: texts,
-      });
-      return normalizeVertexEmbeddings(response.embeddings, texts.length);
-    },
-    async embedQuery(text: string): Promise<number[]> {
-      const response = await ai.models.embedContent({
-        model: settings.embeddingModel,
-        contents: [text],
-      });
-      const vectors = normalizeVertexEmbeddings(response.embeddings, 1);
-      return vectors[0] ?? [];
-    },
-  };
-}
-
 export async function invokeVertexExpressChat(params: {
   settings: Settings;
   messages: VertexChatMessage[];
@@ -155,26 +128,6 @@ function createVertexExpressClient(settings: Settings): GoogleGenAI {
   } finally {
     console.debug = originalConsoleDebug;
   }
-}
-
-function normalizeVertexEmbeddings(
-  embeddings: Array<{ values?: number[] }> | undefined,
-  expectedCount: number,
-): number[][] {
-  if (!Array.isArray(embeddings)) {
-    throw new Error("Vertex Express embeddings response missing embeddings");
-  }
-  const vectors = embeddings.map((embedding) =>
-    Array.isArray(embedding.values)
-      ? embedding.values.filter((value) => Number.isFinite(value))
-      : [],
-  );
-  if (vectors.length !== expectedCount) {
-    throw new Error(
-      `Vertex Express embeddings count mismatch: expected=${expectedCount} actual=${vectors.length}`,
-    );
-  }
-  return vectors;
 }
 
 function buildVertexSafetySettingsOff(): SafetySetting[] {

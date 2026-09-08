@@ -113,9 +113,8 @@ test("modelstudio defaults to qwen-plus and honours the model override", () => {
   );
 });
 
-test("modelstudio keeps google as the embedding provider", () => {
+test("modelstudio enables web search by default", () => {
   const settings = withEnv(MODEL_STUDIO_ENV, loadSettings);
-  assert.equal(settings.embeddingProvider, "google");
   assert.equal(settings.modelStudioWebSearchEnabled, true);
 });
 

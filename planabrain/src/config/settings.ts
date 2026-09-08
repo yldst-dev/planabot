@@ -50,11 +50,6 @@ export type Settings = {
   deliveryMaxOutputTokens?: number;
   deliveryRewriteEnabled: boolean;
   chatThinkingMode: "default" | "off" | "minimal" | "low" | "medium" | "high";
-  embeddingProvider: "google" | "vertexexpress" | "ollama" | "openrouter";
-  embeddingModel: string;
-  openRouterEmbeddingModel?: string;
-  openRouterEmbeddingBaseUrl?: string;
-  openRouterEmbeddingApiKey?: string;
   indexPath: string;
   systemPrompt: string;
   personaProfile: "live" | "original";
@@ -157,14 +152,6 @@ export function loadSettings(): Settings {
   const intimacyFallbackModel = readOptionalEnv(
     "PLANABRAIN_INTIMACY_FALLBACK_MODEL",
   );
-  const embeddingProvider = resolveEmbeddingProvider(aiProvider);
-  const openRouterEmbeddingApiKey =
-    readOptionalEnv("PLANABRAIN_OPENROUTER_EMBEDDING_API_KEY") ?? openRouterApiKey;
-  if (embeddingProvider === "openrouter" && !openRouterEmbeddingApiKey) {
-    throw new Error(
-      "OPENROUTER_API_KEY or PLANABRAIN_OPENROUTER_EMBEDDING_API_KEY is required when PLANABRAIN_EMBEDDING_PROVIDER=openrouter",
-    );
-  }
   const openRouterWebSearchEnabled = parseBooleanEnv(
     "PLANABRAIN_OPENROUTER_ENABLE_WEB_SEARCH",
     true,
@@ -259,9 +246,7 @@ export function loadSettings(): Settings {
         ? resolveGeminiMockBaseUrl()
         : undefined,
     openRouterBaseUrl:
-      aiProvider === "openrouter" ||
-      embeddingProvider === "openrouter" ||
-      intimacyFallbackProvider === "openrouter"
+      aiProvider === "openrouter" || intimacyFallbackProvider === "openrouter"
         ? resolveOpenRouterBaseUrl()
         : undefined,
     openRouterSiteUrl:
@@ -324,34 +309,6 @@ export function loadSettings(): Settings {
     chatMaxOutputTokens,
     deliveryMaxOutputTokens,
     deliveryRewriteEnabled,
-    embeddingModel:
-      (aiProvider === "ollama"
-        ? process.env.PLANABRAIN_OLLAMA_EMBEDDING_MODEL
-        : undefined) ??
-      (aiProvider === "vertexexpress"
-        ? process.env.PLANABRAIN_VERTEX_EXPRESS_EMBEDDING_MODEL
-        : undefined) ??
-      (aiProvider === "google"
-        ? process.env.PLANABRAIN_GEMINI_EMBEDDING_MODEL
-        : undefined) ??
-      process.env.PLANABRAIN_EMBEDDING_MODEL ??
-      (aiProvider === "ollama"
-        ? "embeddinggemma"
-        : aiProvider === "vertexexpress"
-          ? "gemini-embedding-001"
-          : "gemini-embedding-001"),
-    embeddingProvider,
-    openRouterEmbeddingModel:
-      embeddingProvider === "openrouter"
-        ? (readOptionalEnv("PLANABRAIN_OPENROUTER_EMBEDDING_MODEL") ??
-          "google/gemini-embedding-001")
-        : undefined,
-    openRouterEmbeddingBaseUrl:
-      embeddingProvider === "openrouter"
-        ? resolveOpenRouterEmbeddingBaseUrl()
-        : undefined,
-    openRouterEmbeddingApiKey:
-      embeddingProvider === "openrouter" ? openRouterEmbeddingApiKey : undefined,
     indexPath,
     systemPrompt:
       process.env.PLANABRAIN_SYSTEM_PROMPT ??
@@ -453,44 +410,6 @@ function resolveAiProvider(
   );
 }
 
-function resolveEmbeddingProvider(
-  aiProvider: Settings["aiProvider"],
-): Settings["embeddingProvider"] {
-  const raw = process.env.PLANABRAIN_EMBEDDING_PROVIDER?.trim().toLowerCase();
-  if (raw) {
-    if (raw === "openrouter" || raw === "open-router") {
-      return "openrouter";
-    }
-    if (
-      raw === "ollama" ||
-      raw === "ollama_cloud" ||
-      raw === "ollama-cloud"
-    ) {
-      return "ollama";
-    }
-    if (
-      raw === "vertexexpress" ||
-      raw === "vertex_express" ||
-      raw === "vertex-express"
-    ) {
-      return "vertexexpress";
-    }
-    if (raw === "google" || raw === "google_cloud" || raw === "google-cloud") {
-      return "google";
-    }
-    throw new Error(
-      "PLANABRAIN_EMBEDDING_PROVIDER must be one of: google, vertexexpress, ollama, openrouter",
-    );
-  }
-  if (aiProvider === "ollama") {
-    return "ollama";
-  }
-  if (aiProvider === "vertexexpress") {
-    return "vertexexpress";
-  }
-  return "google";
-}
-
 function resolveGeminiMockBaseUrl(): string {
   const explicit = process.env.PLANABRAIN_GEMINIMOCK_BASE_URL?.trim();
   if (explicit) {
@@ -538,17 +457,6 @@ function resolveOpenRouterBaseUrl(): string {
   return normalizeOpenRouterBaseUrl(
     readOptionalEnv("PLANABRAIN_OPENROUTER_BASE_URL"),
     "PLANABRAIN_OPENROUTER_BASE_URL",
-  );
-}
-
-function resolveOpenRouterEmbeddingBaseUrl(): string {
-  const explicit = readOptionalEnv("PLANABRAIN_OPENROUTER_EMBEDDING_BASE_URL");
-  if (!explicit) {
-    return resolveOpenRouterBaseUrl();
-  }
-  return normalizeOpenRouterBaseUrl(
-    explicit,
-    "PLANABRAIN_OPENROUTER_EMBEDDING_BASE_URL",
   );
 }
 

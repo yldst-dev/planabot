@@ -33,8 +33,6 @@ function createSettings(overrides: Partial<Settings> = {}): Settings {
     chatModel: "gemini-3.7-flash",
     deliveryRewriteEnabled: false,
     chatThinkingMode: "off",
-    embeddingProvider: "openrouter",
-    embeddingModel: "gemini-embedding-001",
     indexPath: ".planabrain/index.json",
     systemPrompt: "테스트 시스템",
     personaProfile: "live",

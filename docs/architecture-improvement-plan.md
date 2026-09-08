@@ -47,5 +47,5 @@
 ## 다음 작업
 
 - 나머지 CLI 호출(`todo-list`, `memory-reset-user`, `schedule-interpret`, `tokens`)도 상주 서버 경로로 옮길 수 있다. 빈도가 낮아 미뤘다.
-- 임베딩 파이프라인(`integrations/gemini/embeddings.ts`, `PLANABRAIN_EMBEDDING_*`, `PLANABRAIN_OPENROUTER_EMBEDDING_*`)은 RAG 제거 후 참조가 없다. 제거할지 사용자 확인이 필요하다.
 - `Requester` 목 구현과 텔레그램 핸들러 테스트, 설정 60필드의 provider별 그룹화, 런타임 이미지의 Node 툴체인 축소(Docker 검증 필요).
+- 2026-09-08: 임베딩 파이프라인 제거. `integrations/gemini/embeddings.ts`, Vertex Express 임베딩 클라이언트, `embeddingProvider`·`embeddingModel`·`openRouterEmbedding*` 설정과 관련 환경 변수 문서를 지웠다. 예전 RAG 인덱스 파일(`.planabrain/index.json`)은 더 이상 읽지 않으므로 지워도 된다.

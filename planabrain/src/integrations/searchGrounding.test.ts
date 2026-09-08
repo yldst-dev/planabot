@@ -41,8 +41,6 @@ function createSettings(
     chatModel: "google/gemini-3-flash-preview",
     deliveryRewriteEnabled: false,
     chatThinkingMode: "off",
-    embeddingProvider: "openrouter",
-    embeddingModel: "gemini-embedding-001",
     indexPath: ".planabrain/index.json",
     systemPrompt: "테스트 시스템",
     personaProfile: "live",
