@@ -1,19 +1,14 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
+use std::process::Stdio;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use log::warn;
 use once_cell::sync::Lazy;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command as TokioCommand;
-use tokio::task;
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LocalMemoryPrepareOutput {
-    memory_context: String,
-}
 
 #[derive(Debug, Deserialize)]
 struct LocalMemoryResetOutput {
@@ -95,6 +90,121 @@ impl std::fmt::Display for PlanabrainError {
 impl std::error::Error for PlanabrainError {}
 
 const PLANABRAIN_ERROR_JSON_PREFIX: &str = "PLANABRAIN_ERROR_JSON:";
+const PLANABRAIN_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+const PLANABRAIN_ASK_TIMEOUT: Duration = Duration::from_secs(200);
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TurnPrepareInput {
+    pub user_id: String,
+    pub chat_scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    pub question: String,
+    pub memory_query_text: String,
+    pub now_ms: i64,
+    pub memory_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TurnPrepareOutput {
+    #[serde(default)]
+    pub todo: Option<TodoInterpretOutput>,
+    #[serde(default)]
+    pub schedule: Option<ScheduleInterpretOutput>,
+    #[serde(default)]
+    pub todo_list: Option<TodoListOutput>,
+    #[serde(default)]
+    pub memory_context: Option<String>,
+    #[serde(default)]
+    pub errors: HashMap<String, String>,
+}
+
+pub(crate) async fn prepare_turn(input: &TurnPrepareInput) -> Result<TurnPrepareOutput> {
+    if !is_planabrain_enabled() {
+        return Err(anyhow!("planabrain 비활성화"));
+    }
+    let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
+    let mut command = build_planabrain_command(&root)?;
+    command.current_dir(&root).arg("turn-prepare");
+    apply_dotenv_path(&mut command, &root);
+    let payload = serde_json::to_vec(input).context("turn-prepare 입력 직렬화 실패")?;
+    let output = run_planabrain_output(
+        command,
+        Some(payload),
+        PLANABRAIN_COMMAND_TIMEOUT,
+        "turn-prepare",
+    )
+    .await?;
+    let stdout = success_stdout(output, "turn-prepare")?;
+    serde_json::from_str(stdout.trim()).context("turn-prepare 결과 파싱 실패")
+}
+
+pub(crate) async fn run_planabrain_output(
+    command: ProcessCommand,
+    stdin_payload: Option<Vec<u8>>,
+    timeout: Duration,
+    label: &str,
+) -> Result<std::process::Output> {
+    let mut command = TokioCommand::from(command);
+    command
+        .kill_on_drop(true)
+        .stdin(if stdin_payload.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let run = async {
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("planabrain {label} 실행 실패"))?;
+        if let Some((payload, mut stdin)) = stdin_payload.zip(child.stdin.take()) {
+            stdin
+                .write_all(&payload)
+                .await
+                .with_context(|| format!("planabrain {label} 입력 전달 실패"))?;
+            let _ = stdin.shutdown().await;
+        }
+        child
+            .wait_with_output()
+            .await
+            .with_context(|| format!("planabrain {label} 실행 실패"))
+    };
+    match tokio::time::timeout(timeout, run).await {
+        Ok(result) => result,
+        Err(_) => Err(anyhow!(
+            "planabrain {label} 시간 초과 ({}초)",
+            timeout.as_secs()
+        )),
+    }
+}
+
+fn success_stdout(output: std::process::Output, label: &str) -> Result<String> {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if let Some(mut structured) = parse_planabrain_error(&stderr) {
+            if structured.message.trim().is_empty() {
+                structured.message = stderr_without_error_json(&stderr);
+            }
+            return Err(anyhow::Error::new(structured));
+        }
+        return Err(anyhow!("planabrain {label} 오류: {}", stderr.trim()));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn apply_dotenv_path(command: &mut ProcessCommand, root: &Path) {
+    let repo_root = root.parent().unwrap_or(root);
+    let dotenv_path = repo_root.join(".env");
+    if dotenv_path.exists() {
+        command.env("DOTENV_CONFIG_PATH", dotenv_path);
+    }
+}
 
 fn parse_planabrain_error(stderr: &str) -> Option<PlanabrainError> {
     let json = stderr
@@ -133,54 +243,27 @@ pub(crate) fn extract_plana_question(text: &str) -> Option<String> {
 pub(crate) async fn run_planabrain_ask(
     question: &str,
     current_turn_text: &str,
-    memory_query_text: &str,
+    memory_context: Option<&str>,
     user_id: &str,
-    chat_id: i64,
-    conversation_scope_id: Option<&str>,
     image_input: Option<ImageInput>,
 ) -> Result<String> {
     if !is_planabrain_enabled() {
         return Err(anyhow!("planabrain 비활성화"));
     }
 
-    let question = question.to_string();
-    let current_turn_text = current_turn_text.to_string();
-    let memory_query_text = memory_query_text.to_string();
-    let user_id = user_id.to_string();
-    let conversation_scope_id = conversation_scope_id.map(|value| value.to_string());
-    let mut prepared = task::spawn_blocking(move || {
-        prepare_planabrain_ask(
-            question,
-            current_turn_text,
-            memory_query_text,
-            user_id,
-            chat_id,
-            conversation_scope_id,
-            image_input,
-        )
-    })
-    .await
-    .context("planabrain 준비 작업이 중단되었습니다")??;
+    let mut prepared = prepare_planabrain_ask(
+        question,
+        current_turn_text,
+        memory_context,
+        user_id,
+        image_input,
+    )?;
     let command = prepared
         .command
         .take()
         .context("planabrain 실행 명령이 없습니다")?;
-    let mut command = TokioCommand::from(command);
-    command.kill_on_drop(true);
-    let output = command.output().await.context("planabrain 실행 실패")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if let Some(mut structured) = parse_planabrain_error(&stderr) {
-            if structured.message.trim().is_empty() {
-                structured.message = stderr_without_error_json(&stderr);
-            }
-            return Err(anyhow::Error::new(structured));
-        }
-        return Err(anyhow!("planabrain 오류: {}", stderr.trim()));
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let output = run_planabrain_output(command, None, PLANABRAIN_ASK_TIMEOUT, "ask").await?;
+    success_stdout(output, "ask")
 }
 
 pub(crate) async fn remember_planabrain_exchange(
@@ -194,24 +277,23 @@ pub(crate) async fn remember_planabrain_exchange(
         return Ok(());
     }
 
-    let current_turn_text = current_turn_text.to_string();
-    let answer = answer.to_string();
-    let user_id = user_id.to_string();
+    let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
     let chat_scope = format!("chat_{chat_id}");
-    let conversation_scope_id = conversation_scope_id.map(|value| value.to_string());
-    task::spawn_blocking(move || {
-        let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
-        run_planabrain_memory_exchange(
-            &root,
-            &current_turn_text,
-            &answer,
-            &user_id,
-            &chat_scope,
-            conversation_scope_id.as_deref(),
-        )
-    })
-    .await
-    .context("로컬 장기 메모리 교환 저장 작업이 중단되었습니다")?
+    let (command, temp_files) = build_memory_exchange_command(
+        &root,
+        current_turn_text,
+        answer,
+        user_id,
+        &chat_scope,
+        conversation_scope_id,
+    )?;
+    let result =
+        run_planabrain_output(command, None, PLANABRAIN_COMMAND_TIMEOUT, "memory-exchange").await;
+    for path in temp_files {
+        let _ = std::fs::remove_file(path);
+    }
+    success_stdout(result?, "memory-exchange")?;
+    Ok(())
 }
 
 pub(crate) async fn reset_user_memory(user_id: &str) -> Result<bool> {
@@ -228,14 +310,51 @@ pub(crate) async fn reset_user_memory(user_id: &str) -> Result<bool> {
         Err(err) => return Err(err.into()),
     };
 
-    let root = root.clone();
-    let user_id = user_id.to_string();
-    let removed_local =
-        task::spawn_blocking(move || run_planabrain_memory_reset_user(&root, &user_id))
-            .await
-            .context("로컬 장기 메모리 정리 작업이 중단되었습니다")??;
+    let removed_local = run_planabrain_memory_reset_user(&root, user_id).await?;
 
     Ok(removed_planabrain || removed_local.removed)
+}
+
+pub(crate) async fn interpret_schedule_request(text: &str) -> Result<ScheduleInterpretOutput> {
+    const MAX_CLI_TEXT_CHARS: usize = 2000;
+    if !is_planabrain_enabled() {
+        return Err(anyhow!("planabrain 비활성화"));
+    }
+
+    let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
+    let mut command = build_planabrain_command(&root)?;
+    command
+        .current_dir(&root)
+        .arg("schedule-interpret")
+        .env("PLANABRAIN_NOW_MS", crate::schedule::now_ms().to_string());
+    apply_dotenv_path(&mut command, &root);
+
+    let mut text_file = None;
+    if text.chars().count() > MAX_CLI_TEXT_CHARS {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("planabrain_schedule_text_{timestamp}.txt"));
+        std::fs::write(&path, text).context("planabrain 텍스트 파일 저장 실패")?;
+        command.env("PLANABRAIN_SCHEDULE_TEXT_FILE", &path);
+        text_file = Some(path);
+    } else {
+        command.arg(text);
+    }
+
+    let result = run_planabrain_output(
+        command,
+        None,
+        PLANABRAIN_COMMAND_TIMEOUT,
+        "schedule-interpret",
+    )
+    .await;
+    if let Some(path) = text_file.as_ref() {
+        let _ = std::fs::remove_file(path);
+    }
+    let stdout = success_stdout(result?, "schedule-interpret")?;
+    serde_json::from_str(stdout.trim()).context("schedule-interpret 결과 파싱 실패")
 }
 
 pub(crate) async fn list_user_todos(user_id: &str) -> Result<TodoListOutput> {
@@ -243,64 +362,9 @@ pub(crate) async fn list_user_todos(user_id: &str) -> Result<TodoListOutput> {
         return Err(anyhow!("planabrain 비활성화"));
     }
 
-    let user_id = user_id.to_string();
-    task::spawn_blocking(move || {
-        let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
-        let stdout = run_planabrain_simple_command(&root, &["todo-list", &user_id], None)?;
-        serde_json::from_str(stdout.trim()).context("todo-list 결과 파싱 실패")
-    })
-    .await
-    .context("todo-list 실행 작업이 중단되었습니다")?
-}
-
-pub(crate) async fn interpret_todo_request(
-    user_id: &str,
-    text: &str,
-) -> Result<TodoInterpretOutput> {
-    if !is_planabrain_enabled() {
-        return Err(anyhow!("planabrain 비활성화"));
-    }
-
-    let user_id = user_id.to_string();
-    let text = text.to_string();
-    task::spawn_blocking(move || {
-        let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
-        let stdout = run_planabrain_text_command(
-            &root,
-            "todo-interpret",
-            &[&user_id],
-            &text,
-            "PLANABRAIN_TODO_TEXT_FILE",
-            "planabrain_todo_text",
-        )?;
-        serde_json::from_str(stdout.trim()).context("todo-interpret 결과 파싱 실패")
-    })
-    .await
-    .context("todo-interpret 실행 작업이 중단되었습니다")?
-}
-
-pub(crate) async fn interpret_schedule_request(text: &str) -> Result<ScheduleInterpretOutput> {
-    if !is_planabrain_enabled() {
-        return Err(anyhow!("planabrain 비활성화"));
-    }
-
-    let text = text.to_string();
-    task::spawn_blocking(move || {
-        let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
-        let now = crate::schedule::now_ms().to_string();
-        let stdout = run_planabrain_text_command_with_string_env(
-            &root,
-            "schedule-interpret",
-            &[],
-            &text,
-            "PLANABRAIN_SCHEDULE_TEXT_FILE",
-            "planabrain_schedule_text",
-            Some(vec![("PLANABRAIN_NOW_MS", now)]),
-        )?;
-        serde_json::from_str(stdout.trim()).context("schedule-interpret 결과 파싱 실패")
-    })
-    .await
-    .context("schedule-interpret 실행 작업이 중단되었습니다")?
+    let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
+    let stdout = run_planabrain_simple_command(&root, &["todo-list", user_id]).await?;
+    serde_json::from_str(stdout.trim()).context("todo-list 결과 파싱 실패")
 }
 
 pub(crate) fn is_planabrain_allowed(chat_id: i64, user_id: Option<i64>, is_private: bool) -> bool {
@@ -345,7 +409,7 @@ pub(crate) fn truncate_message(text: &str, limit: usize) -> String {
     out
 }
 
-fn find_planabrain_root() -> Option<PathBuf> {
+pub(crate) fn find_planabrain_root() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     let candidates = [cwd.join("planabrain"), cwd.join("..").join("planabrain")];
     candidates
@@ -361,10 +425,11 @@ fn planabrain_memory_file(planabrain_root: &Path, user_id: &str) -> Result<PathB
 
 fn resolve_planabrain_memory_dir(planabrain_root: &Path) -> Result<PathBuf> {
     let data_root = planabrain_data_root(planabrain_root);
-    if let Ok(raw) = std::env::var("PLANABRAIN_MEMORY_DIR") {
-        if !raw.trim().is_empty() {
-            return Ok(resolve_relative(&data_root, raw.trim()));
-        }
+    let explicit_memory_dir = std::env::var("PLANABRAIN_MEMORY_DIR")
+        .ok()
+        .filter(|raw| !raw.trim().is_empty());
+    if let Some(raw) = explicit_memory_dir {
+        return Ok(resolve_relative(&data_root, raw.trim()));
     }
 
     let index_path = std::env::var("PLANABRAIN_INDEX_PATH")
@@ -490,50 +555,25 @@ impl Drop for PreparedPlanabrainAsk {
 }
 
 fn prepare_planabrain_ask(
-    question: String,
-    current_turn_text: String,
-    memory_query_text: String,
-    user_id: String,
-    chat_id: i64,
-    conversation_scope_id: Option<String>,
+    question: &str,
+    current_turn_text: &str,
+    memory_context: Option<&str>,
+    user_id: &str,
     image_input: Option<ImageInput>,
 ) -> Result<PreparedPlanabrainAsk> {
     const MAX_CLI_QUESTION_CHARS: usize = 2000;
     let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
-    let chat_scope = format!("chat_{chat_id}");
-
-    let final_question = question;
-    let local_memory_enabled = is_local_memory_enabled();
-    let mut memory_context = None;
-    if local_memory_enabled {
-        match prepare_question_with_planabrain_memory(
-            &root,
-            &memory_query_text,
-            &user_id,
-            &chat_scope,
-            conversation_scope_id.as_deref(),
-        ) {
-            Ok(Some(context)) => {
-                memory_context = Some(context);
-            }
-            Ok(None) => {}
-            Err(err) => {
-                warn!("로컬 장기 메모리 준비 실패: {}", err);
-            }
-        }
-    }
 
     let mut command = build_planabrain_command(&root)?;
-    let repo_root = root.parent().unwrap_or(&root);
-    let dotenv_path = repo_root.join(".env");
+    apply_dotenv_path(&mut command, &root);
 
     let mut question_file = None;
     command
         .current_dir(&root)
-        .env("PLANABRAIN_USER_ID", &user_id)
-        .env("PLANABRAIN_CURRENT_TURN_TEXT", &current_turn_text)
+        .env("PLANABRAIN_USER_ID", user_id)
+        .env("PLANABRAIN_CURRENT_TURN_TEXT", current_turn_text)
         .env_remove("PLANABRAIN_MEMORY_CONTEXT");
-    if let Some(memory_context) = memory_context.as_deref() {
+    if let Some(memory_context) = memory_context {
         command.env("PLANABRAIN_MEMORY_CONTEXT", memory_context);
     }
     if let Some(image_input) = image_input.as_ref() {
@@ -548,25 +588,22 @@ fn prepare_planabrain_ask(
             .env("PLANABRAIN_IMAGE_FILE", image_path)
             .env("PLANABRAIN_IMAGE_MIME_TYPE", &image_input.mime_type);
     }
-    if local_memory_enabled {
+    if is_local_memory_enabled() {
         command.env("PLANABRAIN_MEMORY_ENABLED", "0");
     }
-    if dotenv_path.exists() {
-        command.env("DOTENV_CONFIG_PATH", dotenv_path);
-    }
 
-    if final_question.chars().count() > MAX_CLI_QUESTION_CHARS {
+    if question.chars().count() > MAX_CLI_QUESTION_CHARS {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
         let path = std::env::temp_dir().join(format!("planabrain_question_{timestamp}.txt"));
-        std::fs::write(&path, &final_question).context("planabrain 질문 파일 저장 실패")?;
+        std::fs::write(&path, question).context("planabrain 질문 파일 저장 실패")?;
         command.env("PLANABRAIN_QUESTION_FILE", &path);
         question_file = Some(path);
         command.arg("ask");
     } else {
-        command.arg("ask").arg(&final_question);
+        command.arg("ask").arg(question);
     }
 
     Ok(PreparedPlanabrainAsk {
@@ -576,7 +613,7 @@ fn prepare_planabrain_ask(
     })
 }
 
-fn build_planabrain_command(root: &Path) -> Result<ProcessCommand> {
+pub(crate) fn build_planabrain_command(root: &Path) -> Result<ProcessCommand> {
     let dist_entry = root.join("dist/cli/index.js");
     let src_entry = root.join("src/cli/index.ts");
     let mut cmd = if dist_entry.exists() {
@@ -598,179 +635,29 @@ fn build_planabrain_command(root: &Path) -> Result<ProcessCommand> {
     Ok(cmd)
 }
 
-fn run_planabrain_simple_command(
-    root: &Path,
-    args: &[&str],
-    envs: Option<Vec<(&str, PathBuf)>>,
-) -> Result<String> {
-    run_planabrain_simple_command_with_string_env(root, args, envs, None)
-}
-
-fn run_planabrain_simple_command_with_string_env(
-    root: &Path,
-    args: &[&str],
-    envs: Option<Vec<(&str, PathBuf)>>,
-    string_envs: Option<Vec<(&str, String)>>,
-) -> Result<String> {
+async fn run_planabrain_simple_command(root: &Path, args: &[&str]) -> Result<String> {
+    let label = args.first().copied().unwrap_or("command");
     let mut command = build_planabrain_command(root)?;
     command.current_dir(root);
     for arg in args {
         command.arg(arg);
     }
-    let repo_root = root.parent().unwrap_or(root);
-    let dotenv_path = repo_root.join(".env");
-    if dotenv_path.exists() {
-        command.env("DOTENV_CONFIG_PATH", dotenv_path);
-    }
-    if let Some(envs) = envs {
-        for (key, value) in envs {
-            command.env(key, value);
-        }
-    }
-    if let Some(string_envs) = string_envs {
-        for (key, value) in string_envs {
-            command.env(key, value);
-        }
-    }
-
-    let output = command.output().context("planabrain 명령 실행 실패")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("planabrain 오류: {}", stderr.trim()));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    apply_dotenv_path(&mut command, root);
+    let output = run_planabrain_output(command, None, PLANABRAIN_COMMAND_TIMEOUT, label).await?;
+    success_stdout(output, label)
 }
 
-fn run_planabrain_text_command(
-    root: &Path,
-    command_name: &str,
-    leading_args: &[&str],
-    text: &str,
-    text_file_env: &str,
-    temp_prefix: &str,
-) -> Result<String> {
-    run_planabrain_text_command_with_string_env(
-        root,
-        command_name,
-        leading_args,
-        text,
-        text_file_env,
-        temp_prefix,
-        None,
-    )
-}
-
-fn run_planabrain_text_command_with_string_env(
-    root: &Path,
-    command_name: &str,
-    leading_args: &[&str],
-    text: &str,
-    text_file_env: &str,
-    temp_prefix: &str,
-    extra_envs: Option<Vec<(&str, String)>>,
-) -> Result<String> {
-    const MAX_CLI_TEXT_CHARS: usize = 2000;
-    if text.chars().count() <= MAX_CLI_TEXT_CHARS {
-        let mut args = Vec::with_capacity(leading_args.len() + 2);
-        args.push(command_name);
-        args.extend_from_slice(leading_args);
-        args.push(text);
-        return run_planabrain_simple_command_with_string_env(root, &args, None, extra_envs);
-    }
-
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!("{temp_prefix}_{timestamp}.txt"));
-    std::fs::write(&path, text).context("planabrain 텍스트 파일 저장 실패")?;
-    let mut args = Vec::with_capacity(leading_args.len() + 1);
-    args.push(command_name);
-    args.extend_from_slice(leading_args);
-    let result = run_planabrain_simple_command_with_string_env(
-        root,
-        &args,
-        Some(vec![(text_file_env, path.clone())]),
-        extra_envs,
-    );
-    let _ = std::fs::remove_file(path);
-    result
-}
-
-fn prepare_question_with_planabrain_memory(
-    planabrain_root: &Path,
-    question: &str,
-    user_id: &str,
-    chat_scope: &str,
-    conversation_scope_id: Option<&str>,
-) -> Result<Option<String>> {
-    const MAX_LOCAL_MEMORY_TEXT_CHARS: usize = 2000;
-    let mut command = build_planabrain_command(planabrain_root)?;
-    let mut text_file = None;
-    let command = command
-        .current_dir(planabrain_root)
-        .arg("memory-prepare")
-        .arg(user_id)
-        .arg(chat_scope);
-    if let Some(conversation_scope_id) = conversation_scope_id {
-        command.env("PLANABRAIN_CONVERSATION_ID", conversation_scope_id);
-    }
-
-    if question.chars().count() > MAX_LOCAL_MEMORY_TEXT_CHARS {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!("local_memory_question_{timestamp}.txt"));
-        std::fs::write(&path, question).context("로컬 장기 메모리 질문 파일 저장 실패")?;
-        command.env("PLANABRAIN_LOCAL_MEMORY_TEXT_FILE", &path);
-        text_file = Some(path);
-    } else {
-        command.arg(question);
-    }
-
-    if let Some(budget) = resolve_local_memory_token_budget() {
-        command.arg(budget.to_string());
-    }
-
-    let output = command
-        .output()
-        .context("planabrain memory-prepare 실행 실패")?;
-
-    if let Some(path) = text_file.as_ref() {
-        let _ = std::fs::remove_file(path);
-    }
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("planabrain memory-prepare 오류: {}", stderr.trim()));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: LocalMemoryPrepareOutput =
-        serde_json::from_str(stdout.trim()).context("memory-prepare 결과 파싱 실패")?;
-
-    let context = parsed.memory_context.trim();
-    if context.is_empty() || context.eq_ignore_ascii_case("memory_context: none") {
-        return Ok(None);
-    }
-
-    Ok(Some(context.to_string()))
-}
-
-fn run_planabrain_memory_exchange(
+fn build_memory_exchange_command(
     planabrain_root: &Path,
     current_turn_text: &str,
     answer: &str,
     user_id: &str,
     chat_scope: &str,
     conversation_scope_id: Option<&str>,
-) -> Result<()> {
+) -> Result<(ProcessCommand, Vec<PathBuf>)> {
     const MAX_LOCAL_MEMORY_TEXT_CHARS: usize = 2000;
     let mut command = build_planabrain_command(planabrain_root)?;
-    let mut user_text_file = None;
-    let mut assistant_text_file = None;
-    let command = command
+    command
         .current_dir(planabrain_root)
         .arg("memory-exchange")
         .arg(user_id)
@@ -779,6 +666,7 @@ fn run_planabrain_memory_exchange(
         command.env("PLANABRAIN_CONVERSATION_ID", conversation_scope_id);
     }
 
+    let mut temp_files = Vec::new();
     if current_turn_text.chars().count() > MAX_LOCAL_MEMORY_TEXT_CHARS
         || answer.chars().count() > MAX_LOCAL_MEMORY_TEXT_CHARS
     {
@@ -804,33 +692,13 @@ fn run_planabrain_memory_exchange(
                 "PLANABRAIN_LOCAL_MEMORY_ASSISTANT_TEXT_FILE",
                 &assistant_path,
             );
-        user_text_file = Some(user_path);
-        assistant_text_file = Some(assistant_path);
+        temp_files.push(user_path);
+        temp_files.push(assistant_path);
     } else {
         command.arg(current_turn_text).arg(answer);
     }
 
-    let output = command
-        .output()
-        .context("planabrain memory-exchange 실행 실패");
-
-    if let Some(path) = user_text_file.as_ref() {
-        let _ = std::fs::remove_file(path);
-    }
-    if let Some(path) = assistant_text_file.as_ref() {
-        let _ = std::fs::remove_file(path);
-    }
-    let output = output?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!(
-            "planabrain memory-exchange 오류: {}",
-            stderr.trim()
-        ));
-    }
-
-    Ok(())
+    Ok((command, temp_files))
 }
 
 pub(crate) fn source_suffix_start(text: &str) -> Option<usize> {
@@ -844,33 +712,27 @@ fn take_chars(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
 }
 
-fn run_planabrain_memory_reset_user(
+async fn run_planabrain_memory_reset_user(
     planabrain_root: &Path,
     user_id: &str,
 ) -> Result<LocalMemoryResetOutput> {
     let mut command = build_planabrain_command(planabrain_root)?;
-    let output = command
+    command
         .current_dir(planabrain_root)
         .arg("memory-reset-user")
-        .arg(user_id)
-        .output()
-        .context("planabrain memory-reset-user 실행 실패")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!(
-            "planabrain memory-reset-user 오류: {}",
-            stderr.trim()
-        ));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: LocalMemoryResetOutput =
-        serde_json::from_str(stdout.trim()).context("memory-reset-user 결과 파싱 실패")?;
-    Ok(parsed)
+        .arg(user_id);
+    let output = run_planabrain_output(
+        command,
+        None,
+        PLANABRAIN_COMMAND_TIMEOUT,
+        "memory-reset-user",
+    )
+    .await?;
+    let stdout = success_stdout(output, "memory-reset-user")?;
+    serde_json::from_str(stdout.trim()).context("memory-reset-user 결과 파싱 실패")
 }
 
-fn is_local_memory_enabled() -> bool {
+pub(crate) fn is_local_memory_enabled() -> bool {
     let Ok(raw) = std::env::var("PLANABOT_LOCAL_MEMORY_ENABLED") else {
         return true;
     };
@@ -879,7 +741,7 @@ fn is_local_memory_enabled() -> bool {
     !(normalized.is_empty() || normalized == "0" || normalized == "false")
 }
 
-fn resolve_local_memory_token_budget() -> Option<u32> {
+pub(crate) fn resolve_local_memory_token_budget() -> Option<u32> {
     std::env::var("PLANABOT_LOCAL_MEMORY_TOKEN_BUDGET")
         .ok()
         .and_then(|raw| raw.trim().parse::<u32>().ok())
@@ -888,8 +750,112 @@ fn resolve_local_memory_token_budget() -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{data_root_from, truncate_message};
+    use super::{
+        TurnPrepareInput, TurnPrepareOutput, data_root_from, prepare_turn, run_planabrain_output,
+        truncate_message,
+    };
     use std::path::{Path, PathBuf};
+    use std::process::Command as ProcessCommand;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn run_planabrain_output_pipes_stdin_and_captures_stdout() {
+        let mut command = ProcessCommand::new("sh");
+        command.arg("-c").arg("cat");
+        let output = run_planabrain_output(
+            command,
+            Some(b"hello turn".to_vec()),
+            Duration::from_secs(5),
+            "echo",
+        )
+        .await
+        .expect("command succeeds");
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "hello turn");
+    }
+
+    #[tokio::test]
+    async fn run_planabrain_output_times_out_and_kills_the_child() {
+        let mut command = ProcessCommand::new("sh");
+        command.arg("-c").arg("sleep 5; echo late");
+        let started = std::time::Instant::now();
+        let error = run_planabrain_output(command, None, Duration::from_millis(200), "sleep")
+            .await
+            .expect_err("timeout expected");
+        assert!(error.to_string().contains("시간 초과"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn turn_prepare_output_parses_cli_contract() {
+        let raw = r#"{"todo":{"handled":false,"action":"none","message":"","items":[]},"schedule":{"handled":true,"action":"add","kind":"timer","title":"요청하신 내용","dueAtMs":1788800600000,"durationMs":600000},"todoList":null,"memoryContext":null,"errors":{}}"#;
+        let parsed: TurnPrepareOutput = serde_json::from_str(raw).expect("parse");
+        assert!(
+            !parsed
+                .todo
+                .as_ref()
+                .map(|todo| todo.handled)
+                .unwrap_or(true)
+        );
+        let schedule = parsed.schedule.expect("schedule");
+        assert!(schedule.handled);
+        assert_eq!(schedule.action, "add");
+        assert_eq!(schedule.kind.as_deref(), Some("timer"));
+        assert_eq!(schedule.duration_ms, Some(600_000));
+        assert!(parsed.todo_list.is_none());
+        assert!(parsed.memory_context.is_none());
+        assert!(parsed.errors.is_empty());
+
+        let with_errors: TurnPrepareOutput =
+            serde_json::from_str(r#"{"errors":{"memory":"sqlite locked"}}"#).expect("parse");
+        assert_eq!(
+            with_errors.errors.get("memory").map(String::as_str),
+            Some("sqlite locked")
+        );
+    }
+
+    #[test]
+    fn turn_prepare_input_serializes_camel_case_and_skips_empty_options() {
+        let input = TurnPrepareInput {
+            user_id: "u1".into(),
+            chat_scope: "chat_1".into(),
+            conversation_id: None,
+            question: "q".into(),
+            memory_query_text: "q".into(),
+            now_ms: 5,
+            memory_enabled: false,
+            token_budget: None,
+        };
+        let json = serde_json::to_string(&input).expect("serialize");
+        assert!(json.contains("\"userId\":\"u1\""));
+        assert!(json.contains("\"chatScope\":\"chat_1\""));
+        assert!(json.contains("\"nowMs\":5"));
+        assert!(!json.contains("conversationId"));
+        assert!(!json.contains("tokenBudget"));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn prepare_turn_runs_against_real_cli() {
+        let input = TurnPrepareInput {
+            user_id: "turn_test_user".into(),
+            chat_scope: "chat_turn_test".into(),
+            conversation_id: None,
+            question: "10분 타이머 맞춰줘".into(),
+            memory_query_text: "10분 타이머 맞춰줘".into(),
+            now_ms: crate::schedule::now_ms(),
+            memory_enabled: false,
+            token_budget: None,
+        };
+        let prepared = prepare_turn(&input).await.expect("turn-prepare");
+        eprintln!("prepared: {prepared:?}");
+        assert!(
+            prepared
+                .schedule
+                .map(|schedule| schedule.handled)
+                .unwrap_or(false)
+        );
+    }
 
     #[test]
     fn data_root_defaults_to_parent_of_planabrain_root() {

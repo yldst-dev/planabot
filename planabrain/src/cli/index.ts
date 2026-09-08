@@ -27,6 +27,7 @@ loadEnv();
 import { loadSettings } from "../config/settings.js";
 import { runAskCommand } from "./commands/ask.js";
 import { runIngestCommand } from "./commands/ingest.js";
+import { runTurnPrepareCommand } from "./commands/turn.js";
 import {
   runMemoryAssistantCommand,
   runMemoryDeleteFactCommand,
@@ -123,6 +124,10 @@ export async function main(argv: string[]): Promise<void> {
   }
   if (parsed.command === "schedule-interpret") {
     await runScheduleInterpretCommand(parsed.args);
+    return;
+  }
+  if (parsed.command === "turn-prepare") {
+    await runTurnPrepareCommand();
     return;
   }
 

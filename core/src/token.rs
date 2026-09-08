@@ -1,10 +1,9 @@
 use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
-use std::path::PathBuf;
-use std::process::Command as ProcessCommand;
-use tokio::task;
+use std::time::Duration;
 
 const MAX_INLINE_TEXT_CHARS: usize = 2000;
+const TOKEN_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 pub(crate) struct TokenCount {
@@ -18,36 +17,14 @@ struct CliTokenCount {
 }
 
 pub(crate) async fn count_text_tokens(text: &str) -> Result<TokenCount> {
-    let text = text.to_string();
-    let handle = task::spawn_blocking(move || count_text_tokens_blocking(&text));
-    handle.await.context("토큰 측정 작업이 중단되었습니다")?
-}
-
-fn count_text_tokens_blocking(text: &str) -> Result<TokenCount> {
-    let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
+    let root = crate::planabrain::find_planabrain_root()
+        .context("planabrain 디렉터리를 찾지 못했습니다")?;
     let model = resolve_token_model();
 
-    let dist_entry = root.join("dist/cli/index.js");
-    let src_entry = root.join("src/cli/index.ts");
-    let mut command = if dist_entry.exists() {
-        let mut cmd = ProcessCommand::new("node");
-        cmd.arg(dist_entry);
-        cmd
-    } else {
-        let tsx_path = root.join("node_modules/.bin/tsx");
-        if !tsx_path.exists() {
-            return Err(anyhow!(
-                "planabrain 실행 파일이 없습니다. dist 빌드 또는 tsx 설치가 필요합니다."
-            ));
-        }
-        let mut cmd = ProcessCommand::new(tsx_path);
-        cmd.arg(src_entry);
-        cmd
-    };
-
+    let mut command = crate::planabrain::build_planabrain_command(&root)?;
+    command.current_dir(&root);
     let repo_root = root.parent().unwrap_or(&root);
     let dotenv_path = repo_root.join(".env");
-    let command = command.current_dir(&root);
     if dotenv_path.exists() {
         command.env("DOTENV_CONFIG_PATH", dotenv_path);
     }
@@ -67,11 +44,14 @@ fn count_text_tokens_blocking(text: &str) -> Result<TokenCount> {
         command.arg(text);
     }
 
-    let output = command.output().context("planabrain tokens 실행 실패")?;
+    let result =
+        crate::planabrain::run_planabrain_output(command, None, TOKEN_COMMAND_TIMEOUT, "tokens")
+            .await;
 
     if let Some(path) = text_file.as_ref() {
         let _ = std::fs::remove_file(path);
     }
+    let output = result?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -85,14 +65,6 @@ fn count_text_tokens_blocking(text: &str) -> Result<TokenCount> {
     Ok(TokenCount {
         total_tokens: parsed.tokens,
     })
-}
-
-fn find_planabrain_root() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    let candidates = [cwd.join("planabrain"), cwd.join("..").join("planabrain")];
-    candidates
-        .into_iter()
-        .find(|candidate| candidate.join("package.json").exists())
 }
 
 fn resolve_token_model() -> String {

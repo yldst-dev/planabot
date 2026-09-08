@@ -17,7 +17,8 @@ export type Command =
   | "todo-update"
   | "todo-delete"
   | "todo-interpret"
-  | "schedule-interpret";
+  | "schedule-interpret"
+  | "turn-prepare";
 
 export function parseCli(argv: string[]): { command: Command; args: string[] } {
   const [, , command, ...rest] = argv;
@@ -40,10 +41,11 @@ export function parseCli(argv: string[]): { command: Command; args: string[] } {
     command !== "todo-update" &&
     command !== "todo-delete" &&
     command !== "todo-interpret" &&
-    command !== "schedule-interpret"
+    command !== "schedule-interpret" &&
+    command !== "turn-prepare"
   ) {
     throw new Error(
-      "Usage: planabrain <ingest|ask|tokens|memory-prepare|memory-assistant|memory-exchange|memory-reset-user|memory-reset-all|memory-list-facts|memory-delete-fact|memory-update-fact|memory-migrate-json|todo-list|todo-add|todo-complete|todo-update|todo-delete|todo-interpret|schedule-interpret> [...]"
+      "Usage: planabrain <ingest|ask|tokens|memory-prepare|memory-assistant|memory-exchange|memory-reset-user|memory-reset-all|memory-list-facts|memory-delete-fact|memory-update-fact|memory-migrate-json|todo-list|todo-add|todo-complete|todo-update|todo-delete|todo-interpret|schedule-interpret|turn-prepare> [...]"
     );
   }
   return { command, args: rest };
