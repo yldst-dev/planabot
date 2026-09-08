@@ -140,6 +140,7 @@ export async function invokeChatWithIntimacyRecovery(
       citations: [],
       searchUsed: false,
       finishReason: "SAFETY",
+      wireMessages: [],
     };
   }
   if (
@@ -178,6 +179,7 @@ export async function invokeChatWithIntimacyRecovery(
         citations: first.citations,
         searchUsed: first.searchUsed,
         finishReason: "SAFETY",
+        wireMessages: [],
       };
     }
     throw error;

@@ -17,7 +17,7 @@ type Params = {
 export const DEFAULT_DELIVERY_MAX_TOKENS = 1024;
 const MAX_VERIFIED_CITATIONS = 5;
 const MAX_VERIFIED_SOURCE_CHARS = 1500;
-const MAX_VERIFIED_LABEL_CHARS = 60;
+const MAX_VERIFIED_LABEL_CHARS = 40;
 
 export function deliveryRuleLines(): string[] {
   return [

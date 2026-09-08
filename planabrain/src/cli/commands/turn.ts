@@ -14,11 +14,20 @@ export type TurnPrepareInput = {
   tokenBudget?: number;
 };
 
+export type RecentTurn = {
+  role: "user" | "assistant";
+  text: string;
+  at: number;
+  wireMessages?: Array<{ role: "user" | "assistant"; content: string }>;
+  epoch?: number;
+};
+
 export type TurnPrepareOutput = {
   todo: { handled: boolean } | null;
   schedule: { handled: boolean } | null;
   todoList: unknown | null;
   memoryContext: string | null;
+  recentTurns: RecentTurn[];
   errors: Record<string, string>;
 };
 
@@ -33,6 +42,7 @@ export type TurnPrepareDeps = {
     userText: string;
     tokenBudget?: number;
   }) => Promise<string | null>;
+  listRecentTurns: (input: { chatScope: string; conversationId: string }) => Promise<RecentTurn[]>;
 };
 
 export async function prepareTurn(
@@ -44,6 +54,7 @@ export async function prepareTurn(
     schedule: null,
     todoList: null,
     memoryContext: null,
+    recentTurns: [],
     errors: {},
   };
 
@@ -82,6 +93,16 @@ export async function prepareTurn(
       });
     } catch (error) {
       output.errors.memory = describeError(error);
+    }
+    if (input.conversationId) {
+      try {
+        output.recentTurns = await deps.listRecentTurns({
+          chatScope: input.chatScope,
+          conversationId: input.conversationId,
+        });
+      } catch (error) {
+        output.errors.recentTurns = describeError(error);
+      }
     }
   }
 
@@ -130,6 +151,24 @@ export function buildTurnPrepareDeps(nowMs?: number): TurnPrepareDeps {
           tokenBudget: params.tokenBudget,
         });
         return normalizeMemoryContext(prepared.memoryContext);
+      } finally {
+        engine.close();
+      }
+    },
+    listRecentTurns: async (params) => {
+      const engine = new LocalMemoryEngine();
+      try {
+        const turns = await engine.listConversationTurns({
+          chatId: params.chatScope,
+          conversationId: params.conversationId,
+        });
+        return turns.map((turn) => ({
+          role: turn.role,
+          text: turn.text,
+          at: turn.at,
+          ...(turn.wireMessages ? { wireMessages: turn.wireMessages } : {}),
+          ...(typeof turn.epoch === "number" ? { epoch: turn.epoch } : {}),
+        }));
       } finally {
         engine.close();
       }

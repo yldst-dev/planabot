@@ -206,6 +206,7 @@ where
         prepared.memory_context.as_deref(),
         &user_id,
         image_input,
+        &prepared.recent_turns,
     );
     tokio::pin!(ask_fut);
     let timeout = time::sleep(PLANABRAIN_RESPONSE_TIMEOUT);
@@ -233,8 +234,8 @@ where
     };
 
     match answer {
-        Ok(answer) => {
-            let answer = answer.trim().to_string();
+        Ok(outcome) => {
+            let answer = outcome.answer.trim().to_string();
             let reply = planabrain::truncate_message(&answer, 4000);
             let sent = deliver_planabrain_answer(&bot, &msg, reply).await?;
             state
@@ -247,6 +248,7 @@ where
                     &user_id,
                     msg.chat.id.0,
                     Some(&conversation_scope_id),
+                    outcome.transcript.as_ref(),
                 )
                 .await
                 {

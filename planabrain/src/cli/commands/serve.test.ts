@@ -37,6 +37,8 @@ function createSettings(overrides: Partial<Settings> = {}): Settings {
     systemPrompt: "테스트 시스템",
     personaProfile: "live",
     intimacyEnabled: false,
+    continuousChat: false,
+    searchQueryRewriteEnabled: false,
     memoryEnabled: false,
     memoryMaxMessages: 0,
     memoryDir: ".planabrain/memory",

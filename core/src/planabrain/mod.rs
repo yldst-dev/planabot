@@ -121,6 +121,23 @@ struct AskRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     image: Option<AskImage>,
     memory_enabled: bool,
+    #[serde(skip_serializing_if = "<[serde_json::Value]>::is_empty")]
+    recent_turns: &'a [serde_json::Value],
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AskTranscript {
+    #[serde(default)]
+    pub wire_messages: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub epoch: u32,
+}
+
+#[derive(Debug)]
+pub(crate) struct AskOutcome {
+    pub answer: String,
+    pub transcript: Option<AskTranscript>,
 }
 
 #[derive(Debug, Serialize)]
@@ -133,6 +150,8 @@ struct AskImage {
 #[derive(Debug, Deserialize)]
 struct AskResponse {
     answer: String,
+    #[serde(default)]
+    transcript: Option<AskTranscript>,
 }
 
 #[derive(Debug, Serialize)]
@@ -144,6 +163,10 @@ struct ExchangeRequest<'a> {
     conversation_id: Option<&'a str>,
     user_text: &'a str,
     assistant_text: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wire_messages: Option<&'a [serde_json::Value]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    epoch: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,6 +185,8 @@ pub(crate) struct TurnPrepareOutput {
     pub todo_list: Option<TodoListOutput>,
     #[serde(default)]
     pub memory_context: Option<String>,
+    #[serde(default)]
+    pub recent_turns: Vec<serde_json::Value>,
     #[serde(default)]
     pub errors: HashMap<String, String>,
 }
@@ -298,7 +323,8 @@ pub(crate) async fn run_planabrain_ask(
     memory_context: Option<&str>,
     user_id: &str,
     image_input: Option<ImageInput>,
-) -> Result<String> {
+    recent_turns: &[serde_json::Value],
+) -> Result<AskOutcome> {
     if !is_planabrain_enabled() {
         return Err(anyhow!("planabrain 비활성화"));
     }
@@ -313,6 +339,7 @@ pub(crate) async fn run_planabrain_ask(
             mime_type: image.mime_type.clone(),
         }),
         memory_enabled: !is_local_memory_enabled(),
+        recent_turns,
     };
     let served =
         server::post_json::<_, AskResponse>("/v1/ask", &request, PLANABRAIN_ASK_TIMEOUT).await;
@@ -321,7 +348,10 @@ pub(crate) async fn run_planabrain_ask(
             if let Some(image) = image_input.as_ref() {
                 let _ = std::fs::remove_file(&image.path);
             }
-            return Ok(response.answer);
+            return Ok(AskOutcome {
+                answer: response.answer,
+                transcript: response.transcript,
+            });
         }
         Ok(None) => {}
         Err(err) => {
@@ -338,13 +368,17 @@ pub(crate) async fn run_planabrain_ask(
         memory_context,
         user_id,
         image_input,
+        recent_turns,
     )?;
     let command = prepared
         .command
         .take()
         .context("planabrain 실행 명령이 없습니다")?;
     let output = run_planabrain_output(command, None, PLANABRAIN_ASK_TIMEOUT, "ask").await?;
-    success_stdout(output, "ask")
+    Ok(AskOutcome {
+        answer: success_stdout(output, "ask")?,
+        transcript: None,
+    })
 }
 
 fn absolute_path(path: &Path) -> PathBuf {
@@ -363,6 +397,7 @@ pub(crate) async fn remember_planabrain_exchange(
     user_id: &str,
     chat_id: i64,
     conversation_scope_id: Option<&str>,
+    transcript: Option<&AskTranscript>,
 ) -> Result<()> {
     if !is_local_memory_enabled() {
         return Ok(());
@@ -375,6 +410,10 @@ pub(crate) async fn remember_planabrain_exchange(
         conversation_id: conversation_scope_id,
         user_text: current_turn_text,
         assistant_text: answer,
+        wire_messages: transcript
+            .map(|value| value.wire_messages.as_slice())
+            .filter(|messages| !messages.is_empty()),
+        epoch: transcript.map(|value| value.epoch),
     };
     if let Some(response) = server::post_json::<_, ExchangeResponse>(
         "/v1/memory-exchange",
@@ -652,14 +691,19 @@ struct PreparedPlanabrainAsk {
     command: Option<ProcessCommand>,
     question_file: Option<PathBuf>,
     image_file: Option<PathBuf>,
+    recent_turns_file: Option<PathBuf>,
 }
 
 impl Drop for PreparedPlanabrainAsk {
     fn drop(&mut self) {
-        if let Some(path) = self.question_file.as_ref() {
-            let _ = std::fs::remove_file(path);
-        }
-        if let Some(path) = self.image_file.as_ref() {
+        for path in [
+            self.question_file.as_ref(),
+            self.image_file.as_ref(),
+            self.recent_turns_file.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -671,6 +715,7 @@ fn prepare_planabrain_ask(
     memory_context: Option<&str>,
     user_id: &str,
     image_input: Option<ImageInput>,
+    recent_turns: &[serde_json::Value],
 ) -> Result<PreparedPlanabrainAsk> {
     const MAX_CLI_QUESTION_CHARS: usize = 2000;
     let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
@@ -702,6 +747,21 @@ fn prepare_planabrain_ask(
     if is_local_memory_enabled() {
         command.env("PLANABRAIN_MEMORY_ENABLED", "0");
     }
+    let mut recent_turns_file = None;
+    if !recent_turns.is_empty() {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!(
+            "planabrain_recent_turns_{}_{timestamp}.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, serde_json::to_vec(recent_turns)?)
+            .context("planabrain 최근 턴 파일 저장 실패")?;
+        command.env("PLANABRAIN_RECENT_TURNS_FILE", &path);
+        recent_turns_file = Some(path);
+    }
 
     if question.chars().count() > MAX_CLI_QUESTION_CHARS {
         let timestamp = std::time::SystemTime::now()
@@ -721,6 +781,7 @@ fn prepare_planabrain_ask(
         command: Some(command),
         question_file,
         image_file: image_input.map(|input| input.path),
+        recent_turns_file,
     })
 }
 

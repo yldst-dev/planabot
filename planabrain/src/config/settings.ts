@@ -54,6 +54,8 @@ export type Settings = {
   systemPrompt: string;
   personaProfile: "live" | "original";
   intimacyEnabled: boolean;
+  continuousChat: boolean;
+  searchQueryRewriteEnabled: boolean;
   intimacyFallbackProvider?: Settings["aiProvider"];
   intimacyFallbackModel?: string;
   memoryEnabled: boolean;
@@ -146,6 +148,11 @@ export function loadSettings(): Settings {
   const chatThinkingMode = resolveChatThinkingMode(aiProvider);
   const personaProfile = resolvePersonaProfile();
   const intimacyEnabled = parseBooleanEnv("PLANABRAIN_INTIMACY_ENABLED", true);
+  const continuousChat = parseBooleanEnv("PLANABRAIN_CONTINUOUS_CHAT", false);
+  const searchQueryRewriteEnabled = parseBooleanEnv(
+    "PLANABRAIN_SEARCH_QUERY_REWRITE",
+    true,
+  );
   const intimacyFallbackProvider = resolveOptionalAiProvider(
     "PLANABRAIN_INTIMACY_FALLBACK_PROVIDER",
   );
@@ -315,6 +322,8 @@ export function loadSettings(): Settings {
       resolveDefaultSystemPrompt(personaProfile),
     personaProfile,
     intimacyEnabled,
+    continuousChat,
+    searchQueryRewriteEnabled,
     intimacyFallbackProvider,
     intimacyFallbackModel,
     memoryEnabled,

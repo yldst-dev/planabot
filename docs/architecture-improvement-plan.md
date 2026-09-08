@@ -44,8 +44,11 @@
 
 - 2026-09-08: 7단계 완료. `planabrain serve`가 127.0.0.1의 자동 선택 포트에서 `/v1/turn-prepare`, `/v1/ask`, `/v1/memory-exchange`, `/v1/health`를 토큰 인증으로 제공하고, 표준 입력이 닫히면 함께 종료된다. Rust는 `planabrain::server::spawn_supervisor`가 시작 시 서버를 띄워 준비 신호(`{"ready":true,"port":N}`)를 읽고 종료 시 지수 백오프로 다시 띄운다. 브리지 세 함수는 서버가 있으면 HTTP로, 연결이 안 되면 기존 CLI 실행으로 자동 복귀한다. 실제 데몬 상대 왕복은 약 6밀리초로 CLI 실행(약 500밀리초)보다 빠르다. 서버는 `PLANABOT_PLANABRAIN_SERVER=0`으로 끌 수 있다. 서버는 설정을 시작 시 한 번 읽으므로 `.env` 변경은 봇 재시작이 필요하다.
 
+- 2026-09-08: 임베딩 파이프라인 제거. `integrations/gemini/embeddings.ts`, Vertex Express 임베딩 클라이언트, `embeddingProvider`·`embeddingModel`·`openRouterEmbedding*` 설정과 관련 환경 변수 문서를 지웠다. 예전 RAG 인덱스 파일(`.planabrain/index.json`)은 더 이상 읽지 않으므로 지워도 된다.
+- 2026-09-08: 연속 대화와 검색 품질. Gemini 웹 게이트웨이(sub2api)는 마지막 메시지를 뺀 이력의 해시가 저장된 것과 같을 때만 같은 채팅으로 이어가므로, `PLANABRAIN_CONTINUOUS_CHAT=1`이면 시스템 프롬프트를 고정하고 기억·검색·링크 문맥을 현재 사용자 메시지 안에 넣으며, 보낸 원문(`wireMessages`)과 세대 번호(`epoch`)를 assistant 턴에 저장했다가 다음 턴에 그대로 다시 보낸다. 재전송 이력이 100,000자나 40개를 넘거나 작업 기억 한도(`PLANABRAIN_LOCAL_MEMORY_MAX_WORKING_TURNS`, 기본 24)에 닿으면 세대를 올려 새 채팅을 연다. Rust는 그룹에서 답장이 아닌 메시지의 대화 범위를 사용자별(`chat_{id}_user_{id}`)로 나눠 한 사람의 대화가 한 채팅에 이어지게 했다. 검색은 이전 사용자 발화를 포함해 모델이 검색어를 다시 만들고(`PLANABRAIN_SEARCH_QUERY_REWRITE`), 시의성 질문 직후의 짧은 정정 발화도 검색을 다시 타며, 답변 끝의 `출처번호:` 줄로 실제 참고한 결과만 출처로 남긴다(없으면 상위 3개). 실제 게이트웨이 로그에서 2턴 연속 이어짐(续接命中)을 확인했다. 검색어 재작성과 전달문 재작성은 별도 호출이라 게이트웨이에 짧은 채팅이 하나씩 더 생긴다(`auto_delete_conversation`은 이어가기를 위해 꺼 둔다).
+
 ## 다음 작업
 
 - 나머지 CLI 호출(`todo-list`, `memory-reset-user`, `schedule-interpret`, `tokens`)도 상주 서버 경로로 옮길 수 있다. 빈도가 낮아 미뤘다.
 - `Requester` 목 구현과 텔레그램 핸들러 테스트, 설정 60필드의 provider별 그룹화, 런타임 이미지의 Node 툴체인 축소(Docker 검증 필요).
-- 2026-09-08: 임베딩 파이프라인 제거. `integrations/gemini/embeddings.ts`, Vertex Express 임베딩 클라이언트, `embeddingProvider`·`embeddingModel`·`openRouterEmbedding*` 설정과 관련 환경 변수 문서를 지웠다. 예전 RAG 인덱스 파일(`.planabrain/index.json`)은 더 이상 읽지 않으므로 지워도 된다.
+- 연속 대화 모드에서 기억 문맥의 최근 대화 8턴은 게이트웨이 채팅 이력과 겹친다. 세대가 바뀔 때만 넣도록 줄일 수 있다. CLI 대체 경로(서버 없이 실행)는 보낸 원문을 저장하지 않아 이어가기가 되지 않는다.

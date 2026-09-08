@@ -4,6 +4,8 @@ import type { AddressInfo } from "node:net";
 
 import type { Settings } from "../../config/settings.js";
 import { toStructuredError } from "../../integrations/providerError.js";
+import { normalizeWireMessages } from "../../memoryflow/state-normalize.js";
+import type { RecentTurnInput } from "../../chat/webSearchAnswer.js";
 import { runAsk, type AskInput } from "./ask.js";
 import { rememberExchangeTurn } from "./memory.js";
 import { buildTurnPrepareDeps, parseTurnPrepareInput, prepareTurn } from "./turn.js";
@@ -99,8 +101,8 @@ async function handleRequest(
     }
     case "/v1/ask": {
       const input = parseAskInput(raw);
-      const answer = await runAsk(input, options.settings);
-      writeJson(response, 200, { answer });
+      const result = await runAsk(input, options.settings);
+      writeJson(response, 200, { answer: result.answer, transcript: result.transcript ?? null });
       return;
     }
     case "/v1/memory-exchange": {
@@ -126,7 +128,38 @@ export function parseAskInput(raw: string): AskInput {
     memoryContext: readOptionalString(record.memoryContext),
     image,
     memoryEnabled: typeof record.memoryEnabled === "boolean" ? record.memoryEnabled : undefined,
+    recentTurns: parseRecentTurns(record.recentTurns),
+    continuousChat: typeof record.continuousChat === "boolean" ? record.continuousChat : undefined,
   };
+}
+
+function parseRecentTurns(value: unknown): RecentTurnInput[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const turns: RecentTurnInput[] = [];
+  for (const raw of value) {
+    if (typeof raw !== "object" || raw === null) {
+      continue;
+    }
+    const record = raw as Record<string, unknown>;
+    const role = record.role === "assistant" ? "assistant" : record.role === "user" ? "user" : null;
+    const text = typeof record.text === "string" ? record.text : null;
+    if (!role || text === null) {
+      continue;
+    }
+    const wireMessages = normalizeWireMessages(record.wireMessages);
+    const epoch =
+      typeof record.epoch === "number" && Number.isFinite(record.epoch) ? record.epoch : undefined;
+    turns.push({
+      role,
+      text,
+      ...(typeof record.at === "number" ? { at: record.at } : {}),
+      ...(wireMessages ? { wireMessages } : {}),
+      ...(epoch !== undefined ? { epoch } : {}),
+    });
+  }
+  return turns;
 }
 
 export function parseExchangeInput(raw: string): {
@@ -135,14 +168,23 @@ export function parseExchangeInput(raw: string): {
   conversationId?: string;
   userText: string;
   assistantText: string;
+  wireMessages?: Array<{ role: "user" | "assistant"; content: string }>;
+  epoch?: number;
 } {
   const record = parseObject(raw);
+  const wireMessages = normalizeWireMessages(record.wireMessages);
+  const epoch =
+    typeof record.epoch === "number" && Number.isFinite(record.epoch) && record.epoch >= 0
+      ? record.epoch
+      : undefined;
   return {
     userId: readRequiredString(record.userId, "userId"),
     chatId: readRequiredString(record.chatScope ?? record.chatId, "chatScope"),
     conversationId: readOptionalString(record.conversationId),
     userText: readRequiredString(record.userText, "userText"),
     assistantText: readRequiredString(record.assistantText, "assistantText"),
+    ...(wireMessages ? { wireMessages } : {}),
+    ...(epoch !== undefined ? { epoch } : {}),
   };
 }
 

@@ -37,6 +37,11 @@ export interface ScopeDescriptor {
   scopeKind: ScopeKind;
 }
 
+export interface WireMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface Turn {
   id: string;
   role: MemoryRole;
@@ -45,6 +50,8 @@ export interface Turn {
   tokens: number;
   salience: number;
   ownerUserId?: string;
+  wireMessages?: WireMessage[];
+  epoch?: number;
 }
 
 export interface SemanticFact {
@@ -134,6 +141,8 @@ export interface RememberExchangeInput extends ScopeParams {
   userText: string;
   assistantText: string;
   at?: number;
+  wireMessages?: WireMessage[];
+  epoch?: number;
 }
 
 export interface RankedItem {

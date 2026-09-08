@@ -85,6 +85,8 @@ export async function rememberExchangeTurn(params: {
   conversationId?: string;
   userText: string;
   assistantText: string;
+  wireMessages?: Array<{ role: "user" | "assistant"; content: string }>;
+  epoch?: number;
 }): Promise<unknown> {
   const engine = new LocalMemoryEngine();
   try {

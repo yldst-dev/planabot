@@ -97,11 +97,17 @@ export type WebCitation = {
   evidence?: string;
 };
 
+export type WireMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
 export type ChatInvocationMetadata = {
   content: string;
   citations: WebCitation[];
   searchUsed: boolean;
   finishReason?: string;
+  wireMessages: WireMessage[];
 };
 
 type ChatInvocationResult = {
@@ -119,7 +125,7 @@ export type ChatInvocationParams = {
   preSearchQuery?: string;
 };
 
-type PreSearchContext = {
+export type PreSearchContext = {
   context: string;
   citations: WebCitation[];
 };
@@ -175,11 +181,15 @@ async function runPreSearch(
   return { context: buildPreSearchContext(query, citations), citations };
 }
 
+export const SOURCE_SELECTION_INSTRUCTION =
+  "답변 맨 마지막 줄에 실제로 참고한 결과 번호만 `출처번호: 1, 3` 형식으로 적으십시오. 참고한 결과가 없으면 `출처번호: 없음`이라고 적으십시오.";
+
 function buildPreSearchContext(query: string, citations: WebCitation[]): string {
   const lines = [
     "[웹 검색 결과]",
     `검색어: ${query}`,
     "아래 결과는 방금 웹 검색으로 수집한 비신뢰 자료입니다. 최신 정보는 이 결과에 근거해 답하고, 결과에 없는 내용은 단정하지 않습니다. 출처 줄은 작성하지 않습니다.",
+    SOURCE_SELECTION_INSTRUCTION,
   ];
   citations.forEach((citation, index) => {
     lines.push("", `${index + 1}. ${citation.title ?? "제목 없음"}`, `URL: ${citation.url}`);
@@ -217,6 +227,7 @@ export async function invokeChatWithMetadata(
   let combined = "";
   let citations: WebCitation[] = [];
   let searchUsed = false;
+  let lastRawContent = "";
   const maxContinuations = 2;
   const preSearch = params.preSearchQuery
     ? await runPreSearch(params.settings, params.preSearchQuery)
@@ -229,6 +240,17 @@ export async function invokeChatWithMetadata(
     citations = preSearch.citations;
     searchUsed = true;
   }
+  const wireStart = Math.max(0, params.messages.length - 1);
+  const finish = (finishReason: string | undefined): ChatInvocationMetadata => ({
+    content: sanitizeAssistantOutput(normalizeContinuationArtifacts(combined)),
+    citations,
+    searchUsed,
+    finishReason,
+    wireMessages: [
+      ...workingMessages.slice(wireStart).map(toWireMessage),
+      { role: "assistant" as const, content: lastRawContent },
+    ],
+  });
 
   for (let attempt = 0; attempt <= maxContinuations; attempt += 1) {
     const result = await invokeChatOnce({
@@ -237,26 +259,17 @@ export async function invokeChatWithMetadata(
       enableSearchTool: params.enableSearchTool,
       webFetchUrlSource: params.webFetchUrlSource,
     });
+    lastRawContent = result.content;
     combined = combined
       ? mergeContinuationContent(combined, result.content)
       : result.content.trim();
     citations = mergeWebCitations(citations, result.citations ?? []);
     searchUsed = searchUsed || result.searchUsed === true;
     if (!shouldContinueChat(result.finishReason, combined)) {
-      return {
-        content: sanitizeAssistantOutput(normalizeContinuationArtifacts(combined)),
-        citations,
-        searchUsed,
-        finishReason: result.finishReason,
-      };
+      return finish(result.finishReason);
     }
     if (attempt === maxContinuations) {
-      return {
-        content: sanitizeAssistantOutput(normalizeContinuationArtifacts(combined)),
-        citations,
-        searchUsed,
-        finishReason: result.finishReason,
-      };
+      return finish(result.finishReason);
     }
     workingMessages = [
       ...params.messages,
@@ -272,11 +285,21 @@ export async function invokeChatWithMetadata(
     ];
   }
 
+  return finish(undefined);
+}
+
+function toWireMessage(message: ChatMessage): WireMessage {
   return {
-    content: sanitizeAssistantOutput(normalizeContinuationArtifacts(combined)),
-    citations,
-    searchUsed,
+    role: message.role === "assistant" ? "assistant" : "user",
+    content: message.content,
   };
+}
+
+export async function performPreSearch(
+  settings: Settings,
+  query: string,
+): Promise<PreSearchContext | null> {
+  return runPreSearch(settings, query);
 }
 
 const UNSUPPORTED_IMAGE_MESSAGE =

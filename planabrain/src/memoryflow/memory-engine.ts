@@ -28,7 +28,8 @@ import type {
   ScopeDescriptor,
   ScopeParams,
   SemanticFact,
-  Turn
+  Turn,
+  WireMessage
 } from "./types.js";
 
 interface IngestTurnResult {
@@ -244,7 +245,9 @@ export class LocalMemoryEngine {
         ownerUserId: params.userId,
         includeWorking: true,
         includeUserFacts: false,
-        includeGroupEpisodes: false
+        includeGroupEpisodes: false,
+        wireMessages: params.wireMessages,
+        epoch: params.epoch
       });
     }
 
@@ -269,6 +272,11 @@ export class LocalMemoryEngine {
       ...userResult,
       groupStored
     };
+  }
+
+  async listConversationTurns(params: { chatId: string; conversationId: string }): Promise<Turn[]> {
+    const state = await this.loadState(this.conversationScope(params.chatId, params.conversationId));
+    return state.working.turns;
   }
 
   async rememberAssistantTurn(params: RememberAssistantInput): Promise<IngestTurnResult> {
@@ -509,10 +517,21 @@ export class LocalMemoryEngine {
     includeWorking: boolean;
     includeUserFacts: boolean;
     includeGroupEpisodes: boolean;
+    wireMessages?: WireMessage[];
+    epoch?: number;
   }): Promise<RememberExchangeResult> {
     const state = await this.loadState(params.scope);
     const userTurn = buildTurn("user", params.userText, params.at, params.ownerUserId);
     const assistantTurn = buildTurn("assistant", params.assistantText, params.at + 1, undefined);
+    if (params.includeWorking) {
+      if (params.wireMessages && params.wireMessages.length > 0) {
+        assistantTurn.wireMessages = params.wireMessages;
+      }
+      if (typeof params.epoch === "number" && Number.isFinite(params.epoch)) {
+        userTurn.epoch = params.epoch;
+        assistantTurn.epoch = params.epoch;
+      }
+    }
 
     if (params.includeWorking) {
       state.working.turns.push(userTurn, assistantTurn);

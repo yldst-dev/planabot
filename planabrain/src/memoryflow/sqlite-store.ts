@@ -3,9 +3,9 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
-import { createEmptyState, normalizeState } from "./state-normalize.js";
+import { createEmptyState, normalizeState, normalizeWireMessages } from "./state-normalize.js";
 import { safeId } from "./storage.js";
-import type { MemoryState, MemoryStore, ScopeDescriptor } from "./types.js";
+import type { MemoryState, MemoryStore, ScopeDescriptor, WireMessage } from "./types.js";
 
 type SqliteModule = {
   DatabaseSync: new (path: string) => DatabaseSync;
@@ -100,6 +100,12 @@ export class SqliteMemoryStore implements MemoryStore {
       this.db.exec("ALTER TABLE semantic_facts ADD COLUMN source_turn_id TEXT NOT NULL DEFAULT ''");
     } catch {}
     try {
+      this.db.exec("ALTER TABLE turns ADD COLUMN wire_messages TEXT");
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE turns ADD COLUMN epoch INTEGER");
+    } catch {}
+    try {
       this.db.exec("ALTER TABLE semantic_facts ADD COLUMN created_by_user_id TEXT");
     } catch {}
     try {
@@ -116,7 +122,7 @@ export class SqliteMemoryStore implements MemoryStore {
 
     const turns = this.db
       .prepare(
-        "SELECT id, role, text, at, tokens, salience, owner_user_id FROM turns WHERE scope_id = ? ORDER BY at ASC"
+        "SELECT id, role, text, at, tokens, salience, owner_user_id, wire_messages, epoch FROM turns WHERE scope_id = ? ORDER BY at ASC"
       )
       .all(scope.scopeId) as Array<Record<string, unknown>>;
 
@@ -146,7 +152,9 @@ export class SqliteMemoryStore implements MemoryStore {
           at: Number(row.at ?? 0),
           tokens: Number(row.tokens ?? 0),
           salience: Number(row.salience ?? 0),
-          ownerUserId: String(row.owner_user_id ?? "").trim() || undefined
+          ownerUserId: String(row.owner_user_id ?? "").trim() || undefined,
+          wireMessages: parseWireMessages(row.wire_messages),
+          epoch: row.epoch == null ? undefined : Number(row.epoch)
         }))
       },
       semantic: {
@@ -202,8 +210,8 @@ export class SqliteMemoryStore implements MemoryStore {
       this.db.prepare("DELETE FROM summary_items WHERE scope_id = ?").run(scope.scopeId);
 
       const insertTurn = this.db.prepare(`
-        INSERT INTO turns (id, scope_id, role, text, at, tokens, salience, owner_user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO turns (id, scope_id, role, text, at, tokens, salience, owner_user_id, wire_messages, epoch)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const turn of normalized.working.turns) {
         insertTurn.run(
@@ -214,7 +222,9 @@ export class SqliteMemoryStore implements MemoryStore {
           turn.at,
           turn.tokens,
           turn.salience,
-          turn.ownerUserId ?? null
+          turn.ownerUserId ?? null,
+          turn.wireMessages ? JSON.stringify(turn.wireMessages) : null,
+          turn.epoch ?? null
         );
       }
 
@@ -377,5 +387,16 @@ function loadSqliteModule(): SqliteModule {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`SQLite runtime unavailable: ${message}`);
+  }
+}
+
+function parseWireMessages(raw: unknown): WireMessage[] | undefined {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return undefined;
+  }
+  try {
+    return normalizeWireMessages(JSON.parse(raw));
+  } catch {
+    return undefined;
   }
 }

@@ -28,6 +28,13 @@ function deps(overrides: Partial<TurnPrepareDeps> = {}): TurnPrepareDeps & { cal
       calls.push("memory");
       return "memory_context:\n- 기억";
     },
+    listRecentTurns: async () => {
+      calls.push("turns");
+      return [
+        { role: "user", text: "이전 질문", at: 1 },
+        { role: "assistant", text: "이전 답", at: 2, epoch: 0 },
+      ];
+    },
     ...overrides,
   };
 }
@@ -57,10 +64,19 @@ test("handled schedule stops before todo list and memory", async () => {
   assert.deepEqual(d.calls, ["todo"]);
 });
 
+test("recent turns are loaded only for conversations", async () => {
+  const d = deps();
+  const out = await prepareTurn({ ...input, conversationId: "conv_1" }, d);
+  assert.deepEqual(d.calls, ["todo", "schedule", "list", "memory", "turns"]);
+  assert.equal(out.recentTurns.length, 2);
+  assert.equal(out.recentTurns[1].epoch, 0);
+});
+
 test("plain questions collect todo context and memory", async () => {
   const d = deps();
   const out = await prepareTurn(input, d);
   assert.deepEqual(d.calls, ["todo", "schedule", "list", "memory"]);
+  assert.deepEqual(out.recentTurns, []);
   assert.deepEqual(out.todoList, { items: [{ id: 1 }], context: "- 할 일" });
   assert.equal(out.memoryContext, "memory_context:\n- 기억");
   assert.deepEqual(out.errors, {});

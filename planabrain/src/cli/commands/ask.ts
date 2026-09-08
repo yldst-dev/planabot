@@ -2,7 +2,12 @@ import { readFile } from "node:fs/promises";
 
 import type { Settings } from "../../config/settings.js";
 import type { InputImage } from "../../integrations/chat.js";
-import { answerWithWebSearch } from "../../chat/webSearchAnswer.js";
+import { loadConfig as loadMemoryConfig } from "../../memoryflow/config.js";
+import {
+  answerTurn,
+  type RecentTurnInput,
+  type TurnAnswer,
+} from "../../chat/webSearchAnswer.js";
 
 export type AskInput = {
   question: string;
@@ -11,9 +16,11 @@ export type AskInput = {
   memoryContext?: string;
   image?: { path: string; mimeType?: string };
   memoryEnabled?: boolean;
+  recentTurns?: RecentTurnInput[];
+  continuousChat?: boolean;
 };
 
-export async function runAsk(input: AskInput, settings: Settings): Promise<string> {
+export async function runAsk(input: AskInput, settings: Settings): Promise<TurnAnswer> {
   const question = input.question.trim();
   if (!question) {
     throw new Error("질문이 비어 있습니다");
@@ -23,7 +30,7 @@ export async function runAsk(input: AskInput, settings: Settings): Promise<strin
   const images = await resolveImages(input.image);
   const effectiveSettings =
     input.memoryEnabled === false ? { ...settings, memoryEnabled: false } : settings;
-  return answerWithWebSearch({
+  return answerTurn({
     question,
     currentTurnText: linkSourceText,
     settings: effectiveSettings,
@@ -31,6 +38,9 @@ export async function runAsk(input: AskInput, settings: Settings): Promise<strin
     images,
     linkSourceText,
     memoryContext,
+    recentTurns: input.recentTurns,
+    continuousChat: input.continuousChat,
+    workingTurnLimit: loadMemoryConfig().maxWorkingTurns,
   });
 }
 
@@ -52,7 +62,7 @@ export async function runAskCommand(args: string[], settings: Settings): Promise
   }
 
   const imageFile = process.env.PLANABRAIN_IMAGE_FILE?.trim();
-  const answer = await runAsk(
+  const result = await runAsk(
     {
       question,
       userId: process.env.PLANABRAIN_USER_ID ?? "cli",
@@ -61,10 +71,24 @@ export async function runAskCommand(args: string[], settings: Settings): Promise
       image: imageFile
         ? { path: imageFile, mimeType: process.env.PLANABRAIN_IMAGE_MIME_TYPE?.trim() }
         : undefined,
+      recentTurns: await readRecentTurnsFile(process.env.PLANABRAIN_RECENT_TURNS_FILE),
     },
     settings,
   );
-  process.stdout.write(`${answer}\n`);
+  process.stdout.write(`${result.answer}\n`);
+}
+
+async function readRecentTurnsFile(path: string | undefined): Promise<RecentTurnInput[] | undefined> {
+  const trimmed = path?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(await readFile(trimmed, "utf8")) as unknown;
+    return Array.isArray(parsed) ? (parsed as RecentTurnInput[]) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function resolveImages(

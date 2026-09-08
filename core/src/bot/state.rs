@@ -209,7 +209,11 @@ impl AppState {
 
     pub(crate) fn planabrain_conversation_scope_id(&self, msg: &Message) -> String {
         let Some(reply) = msg.reply_to_message() else {
-            return format!("msg_{}", msg.id.0);
+            return default_conversation_scope_id(
+                msg.chat.id.0,
+                msg.chat.is_private(),
+                msg.from.as_ref().map(|user| user.id.0),
+            );
         };
         let tracker = self.planabrain_replies.read().ok();
         if let Some(record) = tracker
@@ -354,6 +358,16 @@ impl ImageRateLimiter {
     }
 }
 
+fn default_conversation_scope_id(chat_id: i64, is_private: bool, user_id: Option<u64>) -> String {
+    if is_private {
+        return format!("chat_{chat_id}");
+    }
+    match user_id {
+        Some(user_id) => format!("chat_{chat_id}_user_{user_id}"),
+        None => format!("chat_{chat_id}"),
+    }
+}
+
 fn is_group_chat(msg: &Message) -> bool {
     match &msg.chat.kind {
         ChatKind::Public(public) => matches!(
@@ -452,6 +466,22 @@ mod tests {
         is_share_claim_live, load_share_claims,
     };
     use crate::hiromi_share::ShareClaim;
+
+    #[test]
+    fn default_conversation_scope_is_per_chat_privately_and_per_user_in_groups() {
+        assert_eq!(
+            super::default_conversation_scope_id(7, true, Some(1)),
+            "chat_7"
+        );
+        assert_eq!(
+            super::default_conversation_scope_id(-100, false, Some(42)),
+            "chat_-100_user_42"
+        );
+        assert_eq!(
+            super::default_conversation_scope_id(-100, false, None),
+            "chat_-100"
+        );
+    }
 
     #[test]
     fn share_claims_expire_after_ttl() {

@@ -12,6 +12,7 @@ import type {
   ScopeKind,
   SummaryStore,
   Turn,
+  WireMessage,
   WorkingStore
 } from "./types.js";
 
@@ -70,6 +71,14 @@ function normalizeWorking(input: unknown): WorkingStore {
         salience: toNumber(turn.salience, scoreSalience(text)),
         ownerUserId: normalizeOwnerUserId(turn.ownerUserId)
       };
+      const wireMessages = normalizeWireMessages(turn.wireMessages);
+      if (wireMessages) {
+        normalizedTurn.wireMessages = wireMessages;
+      }
+      const epoch = toNumber(turn.epoch, Number.NaN);
+      if (Number.isFinite(epoch) && epoch >= 0) {
+        normalizedTurn.epoch = epoch;
+      }
       return normalizedTurn;
     })
     .filter(isTurn);
@@ -78,6 +87,23 @@ function normalizeWorking(input: unknown): WorkingStore {
     version: 1,
     turns
   };
+}
+
+export function normalizeWireMessages(input: unknown): WireMessage[] | undefined {
+  if (!Array.isArray(input)) {
+    return undefined;
+  }
+  const messages: WireMessage[] = [];
+  for (const raw of input) {
+    const item = asObject(raw);
+    const role = item.role === "assistant" ? "assistant" : item.role === "user" ? "user" : null;
+    const content = typeof item.content === "string" ? item.content : null;
+    if (!role || content === null) {
+      continue;
+    }
+    messages.push({ role, content });
+  }
+  return messages.length > 0 ? messages : undefined;
 }
 
 function normalizeEpisodic(input: unknown): EpisodicStore {

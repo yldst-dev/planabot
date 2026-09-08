@@ -45,6 +45,8 @@ function createSettings(
     systemPrompt: "테스트 시스템",
     personaProfile: "live",
     intimacyEnabled: true,
+    continuousChat: false,
+    searchQueryRewriteEnabled: false,
     memoryEnabled: false,
     memoryMaxMessages: 0,
     memoryDir: ".planabrain/memory",
@@ -622,7 +624,7 @@ test("source labels fall back to hostname without www", async () => {
   assert.match(answer, /\[c\.example\]\(https:\/\/c\.example\/three\)/u);
 });
 
-test("source labels are truncated to 60 characters", async () => {
+test("source labels are truncated to 40 characters", async () => {
   const longTitle = "가".repeat(120);
   const answer = await finalizeAnswerForDelivery({
     question: "질문",
@@ -632,7 +634,7 @@ test("source labels are truncated to 60 characters", async () => {
   });
 
   const label = answer.match(/\[([^\]]+)\]\(https:\/\/long\.example\/a\)/u)?.[1];
-  assert.equal(label, "가".repeat(60));
+  assert.equal(label, "가".repeat(40));
 });
 
 test("citation URLs containing a closing parenthesis are skipped", async () => {
