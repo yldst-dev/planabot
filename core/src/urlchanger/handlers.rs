@@ -1,8 +1,5 @@
-use crate::bot::{
-    AppState, HandlerResult, SendOptions, send_in_thread, send_photo_in_thread,
-    send_photo_reply_with_fallback, send_reply_with_fallback, send_video_in_thread,
-    send_video_reply_with_fallback,
-};
+use crate::bot::{AppState, HandlerResult};
+use crate::urlchanger::delivery::{LinkPlan, LinkReply, deliver_link_plan};
 use crate::urlchanger::google_share::resolve_google_share_link;
 use crate::urlchanger::instagram::{InstagramMedia, InstagramMediaKind, fetch_instagram_media};
 use crate::urlchanger::link_utils::{
@@ -15,7 +12,6 @@ use chrono::Utc;
 use log::{error, warn};
 use teloxide::dispatching::DpHandlerDescription;
 use teloxide::prelude::*;
-use teloxide::sugar::request::RequestLinkPreviewExt;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, InputFile, ParseMode};
 use teloxide::utils::html;
 
@@ -78,6 +74,21 @@ where
     )
 }
 
+async fn is_privileged<B>(bot: &B, msg: &Message, state: &AppState, label: &str) -> bool
+where
+    B: Requester + ?Sized,
+    B::Err: std::error::Error + Send + Sync + 'static,
+    <B as Requester>::GetChatMember: Send,
+{
+    match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
+        Ok(member) => member.kind.is_privileged(),
+        Err(e) => {
+            error!("관리자 권한 확인 중 오류 발생({}): {:?}", label, e);
+            false
+        }
+    }
+}
+
 pub async fn handle_music_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
 where
     B: Requester + Clone + Send + Sync + 'static,
@@ -86,6 +97,7 @@ where
     <B as Requester>::DeleteMessage: Send,
     <B as Requester>::SendMessage: Send,
     <B as Requester>::SendPhoto: Send,
+    <B as Requester>::SendVideo: Send,
 {
     state.record_group_chat(&msg).await;
 
@@ -103,171 +115,264 @@ where
         return Ok(());
     }
 
-    let privileged = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
-        Ok(member) => member.kind.is_privileged(),
-        Err(e) => {
-            error!("관리자 권한 확인 중 오류 발생: {:?}", e);
-            false
-        }
-    };
-
-    if youtube_only {
-        return if privileged {
-            handle_youtube_with_admin_rights(&bot, &msg, &links).await
-        } else {
-            handle_youtube_without_admin_rights(&bot, &msg, &links, any_tracking).await
-        };
-    }
-
-    let card = build_music_card(&links).await;
-
-    if privileged {
-        handle_with_admin_rights(&bot, &msg, &links, card).await
+    let privileged = is_privileged(&bot, &msg, &state, "음악").await;
+    let username = display_name(&msg);
+    let plan = if youtube_only {
+        youtube_plan(&username, &links, any_tracking)
     } else {
-        handle_without_admin_rights(&bot, &msg, &links, card).await
-    }
-}
-
-async fn handle_with_admin_rights<B>(
-    bot: &B,
-    msg: &Message,
-    links: &[MusicLink],
-    card: Option<Vec<u8>>,
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::DeleteMessage: Send,
-    <B as Requester>::SendMessage: Send,
-    <B as Requester>::SendPhoto: Send,
-{
-    if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
-        warn!("메시지 삭제 실패: {:?}", e);
-        return handle_without_admin_rights(bot, msg, links, card).await;
-    }
-
-    let username = display_name(msg);
-    let cleaned_text = build_cleaned_message_text(msg.text().unwrap_or(""), links);
-    let message = format!("정리 완료.\n선생님.\n{}: {}", username, cleaned_text);
-    let caption = music_card_caption(&username);
-    let reply_markup = build_links_keyboard(links);
-
-    if let Some(png) = card.filter(|_| fits_caption(&caption)) {
-        let mut request = send_photo_in_thread(bot, msg, music_card_file(png)).caption(caption);
-        if let Some(markup) = reply_markup.clone() {
-            request = request.reply_markup(markup);
-        }
-        match request.await {
-            Ok(_) => return Ok(()),
-            Err(e) => warn!("음악 카드 전송 실패, 텍스트로 대체합니다: {:?}", e),
-        }
-    }
-
-    let mut request = send_in_thread(bot, msg, message);
-    if let Some(markup) = reply_markup {
-        request = request.reply_markup(markup);
-    }
-    request.await?;
-
-    Ok(())
-}
-
-async fn handle_without_admin_rights<B>(
-    bot: &B,
-    msg: &Message,
-    links: &[MusicLink],
-    card: Option<Vec<u8>>,
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::SendMessage: Send,
-    <B as Requester>::SendPhoto: Send,
-{
-    let text = build_cleaned_links_text(links);
-    let opts = SendOptions {
-        reply_markup: build_links_keyboard(links),
-        ..SendOptions::default()
+        let card = build_music_card(&links).await;
+        music_plan(&username, text, &links, card)
     };
 
-    let caption = music_card_caption(&display_name(msg));
-
-    if let Some(png) = card.filter(|_| fits_caption(&caption)) {
-        match send_photo_reply_with_fallback(bot, msg, music_card_file(png), caption, opts.clone())
-            .await
-        {
-            Ok(_) => return Ok(()),
-            Err(e) => warn!("음악 카드 답장 실패, 텍스트로 대체합니다: {:?}", e),
-        }
-    }
-
-    send_reply_with_fallback(bot, msg, text, opts).await?;
-
-    Ok(())
+    deliver_link_plan(&bot, &msg, privileged, "음악", plan).await
 }
 
-async fn handle_youtube_with_admin_rights<B>(
-    bot: &B,
-    msg: &Message,
+fn music_plan(
+    username: &str,
+    original_text: &str,
     links: &[MusicLink],
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::DeleteMessage: Send,
-    <B as Requester>::SendMessage: Send,
-{
-    if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
-        warn!("메시지 삭제 실패(유튜브): {:?}", e);
-        let had_tracking = links.iter().any(|link| link.had_tracking);
-        return handle_youtube_without_admin_rights(bot, msg, links, had_tracking).await;
-    }
+    card: Option<Vec<u8>>,
+) -> LinkPlan {
+    let message = format!(
+        "정리 완료.\n선생님.\n{}: {}",
+        username,
+        build_cleaned_message_text(original_text, links)
+    );
+    let reply_text = build_cleaned_links_text(links);
+    let caption = music_card_caption(username);
+    let markup = build_links_keyboard(links);
 
-    let username = display_name(msg);
+    let card = card.filter(|_| fits_caption(&caption)).map(music_card_file);
+    let admin = match card.clone() {
+        Some(file) => LinkReply::photo(file, caption.clone()).with_text_fallback(message),
+        None => LinkReply::text(message),
+    };
+    let reply = match card {
+        Some(file) => LinkReply::photo(file, caption).with_text_fallback(reply_text),
+        None => LinkReply::text(reply_text),
+    };
+
+    LinkPlan {
+        admin: vec![admin.with_markup(markup.clone())],
+        reply: vec![reply.with_markup(markup)],
+    }
+}
+
+fn youtube_plan(username: &str, links: &[MusicLink], had_tracking: bool) -> LinkPlan {
     let cleaned_text = youtube_cleaned_text(links);
     let message = if cleaned_text.contains('\n') {
         format!("정리 완료.\n선생님.\n{}:\n{}", username, cleaned_text)
     } else {
         format!("정리 완료.\n선생님.\n{}: {}", username, cleaned_text)
     };
-    let reply_markup = build_links_keyboard(links);
-    let mut request = send_in_thread(bot, msg, message);
-    if let Some(markup) = reply_markup {
-        request = request.reply_markup(markup);
-    }
-    request.await?;
-    Ok(())
-}
-
-async fn handle_youtube_without_admin_rights<B>(
-    bot: &B,
-    msg: &Message,
-    links: &[MusicLink],
-    had_tracking: bool,
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::SendMessage: Send,
-{
-    let markup = build_links_keyboard(links);
-    let text = if had_tracking {
+    let reply_text = if had_tracking {
         "정리 완료.\n선생님.\n추적 파라미터를 제거했습니다.\n확인 바랍니다."
     } else {
         "확인 완료.\n선생님.\n유튜브 링크입니다.\n원본 링크 버튼을 제공합니다."
     };
-    send_reply_with_fallback(
-        bot,
-        msg,
-        text,
-        SendOptions {
-            reply_markup: markup,
-            ..SendOptions::default()
-        },
-    )
-    .await?;
+    let markup = build_links_keyboard(links);
 
-    Ok(())
+    LinkPlan {
+        admin: vec![LinkReply::text(message).with_markup(markup.clone())],
+        reply: vec![LinkReply::text(reply_text).with_markup(markup)],
+    }
+}
+
+pub async fn handle_x_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
+where
+    B: Requester + Clone + Send + Sync + 'static,
+    B::Err: std::error::Error + Send + Sync + 'static,
+    <B as Requester>::GetChatMember: Send,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
+    <B as Requester>::SendPhoto: Send,
+    <B as Requester>::SendVideo: Send,
+{
+    state.record_group_chat(&msg).await;
+
+    let text = msg.text().unwrap_or("");
+    let links = convert_x_links(text);
+
+    if links.is_empty() {
+        return Ok(());
+    }
+
+    let privileged = is_privileged(&bot, &msg, &state, "X").await;
+    let plan = x_plan(&display_name(&msg), text, &links);
+    deliver_link_plan(&bot, &msg, privileged, "X", plan).await
+}
+
+fn x_plan(username: &str, original_text: &str, links: &[LinkConversion]) -> LinkPlan {
+    let converted_text = replace_converted_links(original_text, links);
+    let disable_preview = links.iter().any(|l| l.disable_preview);
+    let markup = build_social_keyboard(links);
+
+    LinkPlan {
+        admin: vec![
+            LinkReply::text(format!(
+                "정리 완료.\n선생님.\n{}: {}",
+                username, converted_text
+            ))
+            .with_markup(markup.clone())
+            .with_disable_preview(disable_preview),
+        ],
+        reply: vec![
+            LinkReply::text(format!(
+                "정리 완료.\n선생님.\n임베드 링크입니다.\n{}",
+                converted_text
+            ))
+            .with_markup(markup)
+            .with_disable_preview(disable_preview),
+        ],
+    }
+}
+
+pub async fn handle_instagram_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
+where
+    B: Requester + Clone + Send + Sync + 'static,
+    B::Err: std::error::Error + Send + Sync + 'static,
+    <B as Requester>::GetChatMember: Send,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
+    <B as Requester>::SendPhoto: Send,
+    <B as Requester>::SendVideo: Send,
+{
+    state.record_group_chat(&msg).await;
+
+    let text = msg.text().unwrap_or("");
+    let links = convert_instagram_links(text);
+
+    if links.is_empty() {
+        return Ok(());
+    }
+
+    let previews = load_instagram_previews(&links).await;
+    let privileged = is_privileged(&bot, &msg, &state, "Instagram").await;
+    let plan = instagram_plan(&display_name(&msg), text, &links, previews);
+    deliver_link_plan(&bot, &msg, privileged, "Instagram", plan).await
+}
+
+fn instagram_plan(
+    username: &str,
+    original_text: &str,
+    links: &[LinkConversion],
+    previews: Vec<(LinkConversion, InstagramMedia)>,
+) -> LinkPlan {
+    if previews.is_empty() {
+        let converted_text = replace_converted_links(original_text, links);
+        let markup = build_social_keyboard(links);
+        return LinkPlan {
+            admin: vec![
+                LinkReply::text(format!(
+                    "정리 완료.\n선생님.\n{}: {}",
+                    username, converted_text
+                ))
+                .with_markup(markup.clone()),
+            ],
+            reply: vec![
+                LinkReply::text(format!(
+                    "정리 완료.\n선생님.\n임베드 링크입니다.\n{}",
+                    converted_text
+                ))
+                .with_markup(markup),
+            ],
+        };
+    }
+
+    let mut admin = Vec::with_capacity(previews.len());
+    let mut reply = Vec::with_capacity(previews.len());
+    for (link, media) in previews {
+        let caption = instagram_caption(media.kind);
+        let markup = build_instagram_original_keyboard(&link);
+        let kind = media.kind;
+        let file = instagram_file(media);
+        let build = |file: InputFile| match kind {
+            InstagramMediaKind::Video => LinkReply::video(file, caption.clone()),
+            InstagramMediaKind::Photo => LinkReply::photo(file, caption.clone()),
+        };
+        admin.push(build(file.clone()).with_markup(markup.clone()));
+        reply.push(build(file).with_markup(markup));
+    }
+
+    LinkPlan { admin, reply }
+}
+
+pub async fn handle_threads_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
+where
+    B: Requester + Clone + Send + Sync + 'static,
+    B::Err: std::error::Error + Send + Sync + 'static,
+    <B as Requester>::GetChatMember: Send,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
+    <B as Requester>::SendPhoto: Send,
+    <B as Requester>::SendVideo: Send,
+{
+    state.record_group_chat(&msg).await;
+
+    let text = msg.text().unwrap_or("");
+    let links = convert_threads_links(text);
+
+    if links.is_empty() {
+        return Ok(());
+    }
+
+    let privileged = is_privileged(&bot, &msg, &state, "Threads").await;
+    let plan = threads_plan(&display_name(&msg), text, &links);
+    deliver_link_plan(&bot, &msg, privileged, "Threads", plan).await
+}
+
+fn threads_plan(username: &str, original_text: &str, links: &[LinkConversion]) -> LinkPlan {
+    let converted_text = replace_converted_links(original_text, links);
+    LinkPlan {
+        admin: vec![LinkReply::text(format!(
+            "정리 완료.\n선생님.\n{}: {}",
+            username, converted_text
+        ))],
+        reply: vec![LinkReply::text(format!(
+            "정리 완료.\n선생님.\n추적 파라미터를 제거했습니다.\n{}",
+            converted_text
+        ))],
+    }
+}
+
+pub async fn handle_google_share_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
+where
+    B: Requester + Clone + Send + Sync + 'static,
+    B::Err: std::error::Error + Send + Sync + 'static,
+    <B as Requester>::GetChatMember: Send,
+    <B as Requester>::DeleteMessage: Send,
+    <B as Requester>::SendMessage: Send,
+    <B as Requester>::SendPhoto: Send,
+    <B as Requester>::SendVideo: Send,
+{
+    state.record_group_chat(&msg).await;
+
+    let text = msg.text().unwrap_or("");
+    let links = resolve_google_share_links(text).await;
+
+    if links.is_empty() {
+        return Ok(());
+    }
+
+    let privileged = is_privileged(&bot, &msg, &state, "구글 공유").await;
+    let plan = google_share_plan(&display_name(&msg), &links);
+    deliver_link_plan(&bot, &msg, privileged, "구글 공유", plan).await
+}
+
+fn google_share_plan(username: &str, links: &[LinkConversion]) -> LinkPlan {
+    let message = google_share_message(username, links);
+    LinkPlan {
+        admin: vec![LinkReply::text(message.clone()).with_parse_mode(ParseMode::Html)],
+        reply: vec![LinkReply::text(message).with_parse_mode(ParseMode::Html)],
+    }
+}
+
+fn replace_converted_links(original_text: &str, links: &[LinkConversion]) -> String {
+    let mut text = original_text.to_string();
+    for link in links {
+        text = text.replace(&link.original, &link.converted);
+    }
+    text
 }
 
 fn music_card_file(png: Vec<u8>) -> InputFile {
@@ -378,145 +483,6 @@ fn is_youtube_only(links: &[MusicLink]) -> bool {
             .all(|link| link.platform == MusicPlatform::YouTube)
 }
 
-pub async fn handle_x_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
-where
-    B: Requester + Clone + Send + Sync + 'static,
-    B::Err: std::error::Error + Send + Sync + 'static,
-    <B as Requester>::GetChatMember: Send,
-    <B as Requester>::DeleteMessage: Send,
-    <B as Requester>::SendMessage: Send,
-{
-    state.record_group_chat(&msg).await;
-
-    let text = msg.text().unwrap_or("");
-    let links = convert_x_links(text);
-
-    if links.is_empty() {
-        return Ok(());
-    }
-
-    let chat_member = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
-        Ok(member) => member,
-        Err(e) => {
-            error!("관리자 권한 확인 중 오류 발생(X): {:?}", e);
-            return handle_x_without_admin(&bot, &msg, &links).await;
-        }
-    };
-
-    if chat_member.kind.is_privileged() {
-        handle_x_with_admin(&bot, &msg, &links).await
-    } else {
-        handle_x_without_admin(&bot, &msg, &links).await
-    }
-}
-
-async fn handle_x_with_admin<B>(bot: &B, msg: &Message, links: &[LinkConversion]) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::DeleteMessage: Send,
-    <B as Requester>::SendMessage: Send,
-{
-    if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
-        warn!("X 메시지 삭제 실패: {:?}", e);
-        return handle_x_without_admin(bot, msg, links).await;
-    }
-
-    let username = display_name(msg);
-    let mut converted_text = msg.text().unwrap_or("").to_string();
-    for link in links {
-        converted_text = converted_text.replace(&link.original, &link.converted);
-    }
-
-    let disable_preview = links.iter().any(|l| l.disable_preview);
-    let markup = build_social_keyboard(links);
-
-    let mut request = send_in_thread(
-        bot,
-        msg,
-        format!("정리 완료.\n선생님.\n{}: {}", username, converted_text),
-    )
-    .disable_link_preview(disable_preview);
-    if let Some(markup) = markup {
-        request = request.reply_markup(markup);
-    }
-    request.await?;
-
-    Ok(())
-}
-
-async fn handle_x_without_admin<B>(
-    bot: &B,
-    msg: &Message,
-    links: &[LinkConversion],
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::SendMessage: Send,
-{
-    let mut converted_text = msg.text().unwrap_or("").to_string();
-    for link in links {
-        converted_text = converted_text.replace(&link.original, &link.converted);
-    }
-
-    let disable_preview = links.iter().any(|l| l.disable_preview);
-    let markup = build_social_keyboard(links);
-
-    send_reply_with_fallback(
-        bot,
-        msg,
-        format!(
-            "정리 완료.\n선생님.\n임베드 링크입니다.\n{}",
-            converted_text
-        ),
-        SendOptions {
-            reply_markup: markup,
-            disable_preview: Some(disable_preview),
-            ..SendOptions::default()
-        },
-    )
-    .await?;
-
-    Ok(())
-}
-
-pub async fn handle_instagram_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
-where
-    B: Requester + Clone + Send + Sync + 'static,
-    B::Err: std::error::Error + Send + Sync + 'static,
-    <B as Requester>::GetChatMember: Send,
-    <B as Requester>::DeleteMessage: Send,
-    <B as Requester>::SendMessage: Send,
-    <B as Requester>::SendPhoto: Send,
-    <B as Requester>::SendVideo: Send,
-{
-    state.record_group_chat(&msg).await;
-
-    let text = msg.text().unwrap_or("");
-    let links = convert_instagram_links(text);
-
-    if links.is_empty() {
-        return Ok(());
-    }
-
-    let previews = load_instagram_previews(&links).await;
-
-    let chat_member = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
-        Ok(member) => member,
-        Err(e) => {
-            error!("관리자 권한 확인 중 오류 발생(Instagram): {:?}", e);
-            return handle_instagram_without_admin(&bot, &msg, &links, previews).await;
-        }
-    };
-
-    if chat_member.kind.is_privileged() {
-        handle_instagram_with_admin(&bot, &msg, &links, previews).await
-    } else {
-        handle_instagram_without_admin(&bot, &msg, &links, previews).await
-    }
-}
-
 async fn load_instagram_previews(
     links: &[LinkConversion],
 ) -> Vec<(LinkConversion, InstagramMedia)> {
@@ -528,70 +494,6 @@ async fn load_instagram_previews(
         }
     }
     previews
-}
-
-async fn handle_instagram_with_admin<B>(
-    bot: &B,
-    msg: &Message,
-    links: &[LinkConversion],
-    previews: Vec<(LinkConversion, InstagramMedia)>,
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: std::error::Error + Send + Sync + 'static,
-    <B as Requester>::DeleteMessage: Send,
-    <B as Requester>::SendMessage: Send,
-    <B as Requester>::SendPhoto: Send,
-    <B as Requester>::SendVideo: Send,
-{
-    if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
-        warn!("Instagram 메시지 삭제 실패: {:?}", e);
-        return handle_instagram_without_admin(bot, msg, links, previews).await;
-    }
-
-    if previews.is_empty() {
-        return send_instagram_link_fallback(bot, msg, links, true).await;
-    }
-
-    for (link, media) in previews {
-        let caption = instagram_caption(media.kind);
-        let opts = SendOptions {
-            reply_markup: build_instagram_original_keyboard(&link),
-            ..SendOptions::default()
-        };
-        send_instagram_preview_in_thread(bot, msg, media, caption, opts).await?;
-    }
-
-    Ok(())
-}
-
-async fn handle_instagram_without_admin<B>(
-    bot: &B,
-    msg: &Message,
-    links: &[LinkConversion],
-    previews: Vec<(LinkConversion, InstagramMedia)>,
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: std::error::Error + Send + Sync + 'static,
-    <B as Requester>::SendMessage: Send,
-    <B as Requester>::SendPhoto: Send,
-    <B as Requester>::SendVideo: Send,
-{
-    if previews.is_empty() {
-        return send_instagram_link_fallback(bot, msg, links, false).await;
-    }
-
-    for (link, media) in previews {
-        let caption = instagram_caption(media.kind);
-        let opts = SendOptions {
-            reply_markup: build_instagram_original_keyboard(&link),
-            ..SendOptions::default()
-        };
-        send_instagram_preview_reply(bot, msg, media, caption, opts).await?;
-    }
-
-    Ok(())
 }
 
 fn instagram_caption(kind: InstagramMediaKind) -> String {
@@ -618,243 +520,6 @@ fn instagram_file(media: InstagramMedia) -> InputFile {
     InputFile::memory(media.bytes).file_name(media.file_name)
 }
 
-async fn send_instagram_preview_in_thread<B>(
-    bot: &B,
-    msg: &Message,
-    media: InstagramMedia,
-    caption: String,
-    opts: SendOptions,
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::SendPhoto: Send,
-    <B as Requester>::SendVideo: Send,
-{
-    match media.kind {
-        InstagramMediaKind::Video => {
-            let mut request =
-                send_video_in_thread(bot, msg, instagram_file(media)).supports_streaming(true);
-            if !caption.is_empty() {
-                request = request.caption(caption);
-            }
-            if let Some(markup) = opts.reply_markup {
-                request = request.reply_markup(markup);
-            }
-            request.await?;
-        }
-        InstagramMediaKind::Photo => {
-            let mut request = send_photo_in_thread(bot, msg, instagram_file(media));
-            if !caption.is_empty() {
-                request = request.caption(caption);
-            }
-            if let Some(markup) = opts.reply_markup {
-                request = request.reply_markup(markup);
-            }
-            request.await?;
-        }
-    }
-    Ok(())
-}
-
-async fn send_instagram_preview_reply<B>(
-    bot: &B,
-    msg: &Message,
-    media: InstagramMedia,
-    caption: String,
-    opts: SendOptions,
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: std::error::Error + Send + Sync + 'static,
-    <B as Requester>::SendPhoto: Send,
-    <B as Requester>::SendVideo: Send,
-{
-    match media.kind {
-        InstagramMediaKind::Video => {
-            send_video_reply_with_fallback(bot, msg, instagram_file(media), caption, opts).await?;
-        }
-        InstagramMediaKind::Photo => {
-            send_photo_reply_with_fallback(bot, msg, instagram_file(media), caption, opts).await?;
-        }
-    }
-    Ok(())
-}
-
-async fn send_instagram_link_fallback<B>(
-    bot: &B,
-    msg: &Message,
-    links: &[LinkConversion],
-    in_thread: bool,
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::SendMessage: Send,
-{
-    let username = display_name(msg);
-    let mut converted_text = msg.text().unwrap_or("").to_string();
-    for link in links {
-        converted_text = converted_text.replace(&link.original, &link.converted);
-    }
-    let markup = build_social_keyboard(links);
-
-    if in_thread {
-        let mut request = send_in_thread(
-            bot,
-            msg,
-            format!("정리 완료.\n선생님.\n{}: {}", username, converted_text),
-        );
-        if let Some(markup) = markup {
-            request = request.reply_markup(markup);
-        }
-        request.await?;
-        Ok(())
-    } else {
-        send_reply_with_fallback(
-            bot,
-            msg,
-            format!(
-                "정리 완료.\n선생님.\n임베드 링크입니다.\n{}",
-                converted_text
-            ),
-            SendOptions {
-                reply_markup: markup,
-                ..SendOptions::default()
-            },
-        )
-        .await?;
-        Ok(())
-    }
-}
-
-pub async fn handle_threads_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
-where
-    B: Requester + Clone + Send + Sync + 'static,
-    B::Err: std::error::Error + Send + Sync + 'static,
-    <B as Requester>::GetChatMember: Send,
-    <B as Requester>::DeleteMessage: Send,
-    <B as Requester>::SendMessage: Send,
-{
-    state.record_group_chat(&msg).await;
-
-    let text = msg.text().unwrap_or("");
-    let links = convert_threads_links(text);
-
-    if links.is_empty() {
-        return Ok(());
-    }
-
-    let chat_member = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
-        Ok(member) => member,
-        Err(e) => {
-            error!("관리자 권한 확인 중 오류 발생(Threads): {:?}", e);
-            return handle_threads_without_admin(&bot, &msg, &links).await;
-        }
-    };
-
-    if chat_member.kind.is_privileged() {
-        handle_threads_with_admin(&bot, &msg, &links).await
-    } else {
-        handle_threads_without_admin(&bot, &msg, &links).await
-    }
-}
-
-async fn handle_threads_with_admin<B>(
-    bot: &B,
-    msg: &Message,
-    links: &[LinkConversion],
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::DeleteMessage: Send,
-    <B as Requester>::SendMessage: Send,
-{
-    if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
-        warn!("Threads 메시지 삭제 실패: {:?}", e);
-        return handle_threads_without_admin(bot, msg, links).await;
-    }
-
-    let username = display_name(msg);
-    let mut converted_text = msg.text().unwrap_or("").to_string();
-    for link in links {
-        converted_text = converted_text.replace(&link.original, &link.converted);
-    }
-
-    let request = send_in_thread(
-        bot,
-        msg,
-        format!("정리 완료.\n선생님.\n{}: {}", username, converted_text),
-    );
-    request.await?;
-
-    Ok(())
-}
-
-async fn handle_threads_without_admin<B>(
-    bot: &B,
-    msg: &Message,
-    links: &[LinkConversion],
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::SendMessage: Send,
-{
-    let mut converted_text = msg.text().unwrap_or("").to_string();
-    for link in links {
-        converted_text = converted_text.replace(&link.original, &link.converted);
-    }
-
-    send_reply_with_fallback(
-        bot,
-        msg,
-        format!(
-            "정리 완료.\n선생님.\n추적 파라미터를 제거했습니다.\n{}",
-            converted_text
-        ),
-        SendOptions {
-            ..SendOptions::default()
-        },
-    )
-    .await?;
-
-    Ok(())
-}
-
-pub async fn handle_google_share_links<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
-where
-    B: Requester + Clone + Send + Sync + 'static,
-    B::Err: std::error::Error + Send + Sync + 'static,
-    <B as Requester>::GetChatMember: Send,
-    <B as Requester>::DeleteMessage: Send,
-    <B as Requester>::SendMessage: Send,
-{
-    state.record_group_chat(&msg).await;
-
-    let text = msg.text().unwrap_or("");
-    let links = resolve_google_share_links(text).await;
-
-    if links.is_empty() {
-        return Ok(());
-    }
-
-    let chat_member = match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
-        Ok(member) => member,
-        Err(e) => {
-            error!("관리자 권한 확인 중 오류 발생(구글 공유): {:?}", e);
-            return handle_google_share_without_admin(&bot, &msg, &links).await;
-        }
-    };
-
-    if chat_member.kind.is_privileged() {
-        handle_google_share_with_admin(&bot, &msg, &links).await
-    } else {
-        handle_google_share_without_admin(&bot, &msg, &links).await
-    }
-}
-
 async fn resolve_google_share_links(text: &str) -> Vec<LinkConversion> {
     let mut links = Vec::new();
     for original in extract_google_share_links(text)
@@ -872,53 +537,6 @@ async fn resolve_google_share_links(text: &str) -> Vec<LinkConversion> {
         }
     }
     links
-}
-
-async fn handle_google_share_with_admin<B>(
-    bot: &B,
-    msg: &Message,
-    links: &[LinkConversion],
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::DeleteMessage: Send,
-    <B as Requester>::SendMessage: Send,
-{
-    if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
-        warn!("구글 공유 메시지 삭제 실패: {:?}", e);
-        return handle_google_share_without_admin(bot, msg, links).await;
-    }
-
-    send_in_thread(bot, msg, google_share_message(&display_name(msg), links))
-        .parse_mode(ParseMode::Html)
-        .await?;
-
-    Ok(())
-}
-
-async fn handle_google_share_without_admin<B>(
-    bot: &B,
-    msg: &Message,
-    links: &[LinkConversion],
-) -> HandlerResult
-where
-    B: Requester + ?Sized,
-    B::Err: Send + Sync + 'static,
-    <B as Requester>::SendMessage: Send,
-{
-    send_reply_with_fallback(
-        bot,
-        msg,
-        google_share_message(&display_name(msg), links),
-        SendOptions {
-            parse_mode: Some(ParseMode::Html),
-            ..SendOptions::default()
-        },
-    )
-    .await?;
-
-    Ok(())
 }
 
 fn google_share_message(username: &str, links: &[LinkConversion]) -> String {
@@ -988,5 +606,110 @@ fn display_name(msg: &Message) -> String {
         }
     } else {
         "Unknown".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::urlchanger::link_utils::{convert_x_links, extract_music_links};
+
+    fn text_of(reply: &LinkReply) -> &str {
+        reply.content.text().expect("text reply")
+    }
+
+    #[test]
+    fn youtube_plan_texts_depend_on_tracking() {
+        let links = extract_music_links("https://youtu.be/Vc-ByDGOuQE?si=abc");
+        let tracked = youtube_plan("sensei", &links, true);
+        assert_eq!(
+            text_of(&tracked.admin[0]),
+            "정리 완료.\n선생님.\nsensei: https://youtu.be/Vc-ByDGOuQE"
+        );
+        assert!(text_of(&tracked.reply[0]).contains("추적 파라미터를 제거했습니다."));
+        let plain = youtube_plan("sensei", &links, false);
+        assert!(text_of(&plain.reply[0]).contains("유튜브 링크입니다."));
+        assert!(plain.admin[0].markup.is_some());
+    }
+
+    #[test]
+    fn music_plan_uses_card_only_when_caption_fits() {
+        let links =
+            extract_music_links("https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT?si=x");
+        let with_card = music_plan(
+            "sensei",
+            "링크 https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT?si=x",
+            &links,
+            Some(vec![1, 2, 3]),
+        );
+        assert!(with_card.admin[0].content.text().is_none());
+        assert_eq!(
+            with_card.admin[0].content.text_fallback(),
+            Some(
+                "정리 완료.\n선생님.\nsensei: 링크 https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT"
+            )
+        );
+        assert!(
+            with_card.reply[0]
+                .content
+                .text_fallback()
+                .unwrap()
+                .contains("추적 파라미터를 제거했습니다.")
+        );
+
+        let long_name = "x".repeat(CAPTION_LIMIT);
+        let too_long = music_plan(&long_name, "q", &links, Some(vec![1]));
+        assert!(too_long.admin[0].content.text().is_some());
+
+        let without_card = music_plan("sensei", "q", &links, None);
+        assert!(
+            without_card.reply[0]
+                .content
+                .text()
+                .unwrap()
+                .contains("open.spotify.com")
+        );
+    }
+
+    #[test]
+    fn x_plan_disables_preview_for_dot_prefixed_links() {
+        let links = convert_x_links(".https://x.com/user/status/1?s=1");
+        let plan = x_plan("sensei", ".https://x.com/user/status/1?s=1", &links);
+        assert_eq!(plan.admin[0].disable_preview, Some(true));
+        assert_eq!(plan.reply[0].disable_preview, Some(true));
+        assert!(text_of(&plan.admin[0]).contains("fxtwitter.com/user/status/1"));
+        assert!(text_of(&plan.reply[0]).starts_with("정리 완료.\n선생님.\n임베드 링크입니다."));
+    }
+
+    #[test]
+    fn google_share_plan_sends_html_links_in_both_modes() {
+        let links = vec![LinkConversion {
+            original: "https://share.google/abc".into(),
+            converted: "https://www.yna.co.kr/view/AKR1".into(),
+            cleaned_original: "https://www.yna.co.kr/view/AKR1".into(),
+            disable_preview: false,
+        }];
+        let plan = google_share_plan("sensei", &links);
+        for reply in plan.admin.iter().chain(plan.reply.iter()) {
+            assert_eq!(reply.parse_mode, Some(ParseMode::Html));
+            assert!(
+                text_of(reply).contains("<a href=\"https://www.yna.co.kr/view/AKR1\">Link</a>")
+            );
+        }
+    }
+
+    #[test]
+    fn instagram_plan_falls_back_to_text_without_previews() {
+        let links = convert_instagram_links("https://www.instagram.com/p/abc/?igsh=1");
+        let plan = instagram_plan(
+            "sensei",
+            "https://www.instagram.com/p/abc/?igsh=1",
+            &links,
+            Vec::new(),
+        );
+        assert_eq!(plan.admin.len(), 1);
+        assert!(text_of(&plan.admin[0]).contains(&links[0].converted));
+        assert!(!text_of(&plan.admin[0]).contains("igsh=1"));
+        assert!(text_of(&plan.reply[0]).contains("임베드 링크입니다."));
     }
 }

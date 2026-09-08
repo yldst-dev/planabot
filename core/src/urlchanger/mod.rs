@@ -1,3 +1,4 @@
+mod delivery;
 mod google_share;
 mod handlers;
 mod instagram;
