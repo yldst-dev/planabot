@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { resolveDataPath } from "../config/paths.js";
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_TODO_ITEMS = 100;
 
@@ -272,13 +274,12 @@ function todoFilePath(userId: string): string {
 function resolveTodoDir(): string {
   const explicit = process.env.PLANABRAIN_TODO_DIR?.trim();
   if (explicit) {
-    return path.isAbsolute(explicit) ? explicit : path.resolve(process.cwd(), explicit);
+    return resolveDataPath(explicit);
   }
-  const indexPath = process.env.PLANABRAIN_INDEX_PATH ?? ".planabrain/index.json";
-  const base = path.isAbsolute(indexPath)
-    ? path.dirname(indexPath)
-    : path.resolve(process.cwd(), path.dirname(indexPath));
-  return path.join(base, "todos");
+  const indexPath = resolveDataPath(
+    process.env.PLANABRAIN_INDEX_PATH ?? ".planabrain/index.json",
+  );
+  return path.join(path.dirname(indexPath), "todos");
 }
 
 function safeUserId(userId: string): string {

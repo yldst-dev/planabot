@@ -1,14 +1,16 @@
 import path from "node:path";
 
+import { resolveDataPath } from "../config/paths.js";
+
 import type { EngineConfig } from "./types.js";
 
 export function loadConfig(): EngineConfig {
-  const rootDir = path.resolve(
+  const rootDir = resolveDataPath(
     process.env.PLANABRAIN_LOCAL_MEMORY_DIR ??
       process.env.MEMORY_FLOW_ROOT ??
       ".planabrain/local-memory"
   );
-  const sqlitePath = path.resolve(
+  const sqlitePath = resolveDataPath(
     process.env.PLANABRAIN_LOCAL_MEMORY_SQLITE_PATH ?? path.join(rootDir, "memory.sqlite")
   );
   const storeKind = parseStoreKind(

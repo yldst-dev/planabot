@@ -360,18 +360,37 @@ fn planabrain_memory_file(planabrain_root: &Path, user_id: &str) -> Result<PathB
 }
 
 fn resolve_planabrain_memory_dir(planabrain_root: &Path) -> Result<PathBuf> {
+    let data_root = planabrain_data_root(planabrain_root);
     if let Ok(raw) = std::env::var("PLANABRAIN_MEMORY_DIR") {
-        return Ok(resolve_relative(planabrain_root, &raw));
+        if !raw.trim().is_empty() {
+            return Ok(resolve_relative(&data_root, raw.trim()));
+        }
     }
 
     let index_path = std::env::var("PLANABRAIN_INDEX_PATH")
         .unwrap_or_else(|_| ".planabrain/index.json".to_string());
-    let index_path = resolve_relative(planabrain_root, &index_path);
+    let index_path = resolve_relative(&data_root, &index_path);
     let base = index_path
         .parent()
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| planabrain_root.to_path_buf());
+        .unwrap_or_else(|| data_root.clone());
     Ok(base.join("memory"))
+}
+
+fn planabrain_data_root(planabrain_root: &Path) -> PathBuf {
+    let explicit = std::env::var("PLANABRAIN_DATA_DIR").ok();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    data_root_from(explicit.as_deref(), &cwd, planabrain_root)
+}
+
+fn data_root_from(explicit: Option<&str>, cwd: &Path, planabrain_root: &Path) -> PathBuf {
+    match explicit.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => resolve_relative(cwd, value),
+        None => planabrain_root
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| planabrain_root.to_path_buf()),
+    }
 }
 
 fn resolve_relative(base: &Path, raw: &str) -> PathBuf {
@@ -560,21 +579,22 @@ fn prepare_planabrain_ask(
 fn build_planabrain_command(root: &Path) -> Result<ProcessCommand> {
     let dist_entry = root.join("dist/cli/index.js");
     let src_entry = root.join("src/cli/index.ts");
-    if dist_entry.exists() {
+    let mut cmd = if dist_entry.exists() {
         let mut cmd = ProcessCommand::new("node");
         cmd.arg(dist_entry);
-        return Ok(cmd);
-    }
-
-    let tsx_path = root.join("node_modules/.bin/tsx");
-    if !tsx_path.exists() {
-        return Err(anyhow!(
-            "planabrain 실행 파일이 없습니다. dist 빌드 또는 tsx 설치가 필요합니다."
-        ));
-    }
-
-    let mut cmd = ProcessCommand::new(tsx_path);
-    cmd.arg(src_entry);
+        cmd
+    } else {
+        let tsx_path = root.join("node_modules/.bin/tsx");
+        if !tsx_path.exists() {
+            return Err(anyhow!(
+                "planabrain 실행 파일이 없습니다. dist 빌드 또는 tsx 설치가 필요합니다."
+            ));
+        }
+        let mut cmd = ProcessCommand::new(tsx_path);
+        cmd.arg(src_entry);
+        cmd
+    };
+    cmd.env("PLANABRAIN_DATA_DIR", planabrain_data_root(root));
     Ok(cmd)
 }
 
@@ -868,7 +888,30 @@ fn resolve_local_memory_token_budget() -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::truncate_message;
+    use super::{data_root_from, truncate_message};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn data_root_defaults_to_parent_of_planabrain_root() {
+        let root = Path::new("/app/planabrain");
+        let cwd = Path::new("/somewhere");
+        assert_eq!(data_root_from(None, cwd, root), PathBuf::from("/app"));
+        assert_eq!(data_root_from(Some("  "), cwd, root), PathBuf::from("/app"));
+    }
+
+    #[test]
+    fn data_root_honors_explicit_absolute_or_cwd_relative_value() {
+        let root = Path::new("/app/planabrain");
+        let cwd = Path::new("/srv");
+        assert_eq!(
+            data_root_from(Some("/var/planabot"), cwd, root),
+            PathBuf::from("/var/planabot")
+        );
+        assert_eq!(
+            data_root_from(Some("state"), cwd, root),
+            PathBuf::from("/srv/state")
+        );
+    }
 
     #[test]
     fn truncate_message_keeps_text_within_limit() {

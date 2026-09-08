@@ -1,4 +1,6 @@
 import path from "node:path";
+
+import { resolveDataPath } from "./paths.js";
 import { execFileSync } from "node:child_process";
 
 import { resolveDefaultSystemPrompt } from "./persona/index.js";
@@ -109,8 +111,9 @@ export function loadSettings(): Settings {
     );
   }
 
-  const indexPath =
-    process.env.PLANABRAIN_INDEX_PATH ?? ".planabrain/index.json";
+  const indexPath = resolveDataPath(
+    process.env.PLANABRAIN_INDEX_PATH ?? ".planabrain/index.json",
+  );
   const memoryEnabledRaw = process.env.PLANABRAIN_MEMORY_ENABLED;
   const memoryEnabled =
     memoryEnabledRaw == null
@@ -126,9 +129,9 @@ export function loadSettings(): Settings {
     Number.parseInt(memoryMaxMessagesRaw, 10) || 0,
   );
 
-  const memoryDir =
-    process.env.PLANABRAIN_MEMORY_DIR ??
-    path.join(path.dirname(indexPath), "memory");
+  const memoryDir = process.env.PLANABRAIN_MEMORY_DIR?.trim()
+    ? resolveDataPath(process.env.PLANABRAIN_MEMORY_DIR)
+    : path.join(path.dirname(indexPath), "memory");
 
   const chatMaxOutputTokens = parseOptionalPositiveIntEnv(
     [

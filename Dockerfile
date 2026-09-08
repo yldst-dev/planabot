@@ -42,7 +42,8 @@ ENV RUST_LOG=info \
     GEMINI_CLI_API_PORT=43173 \
     HIROMI_BIN=/usr/local/bin/hiromi \
     HIROMI_DOWNLOAD_DIR=/tmp/hiromi-downloads \
-    PLANABOT_MUSIC_CARD_FONT_DIR=/usr/share/fonts/opentype/noto
+    PLANABOT_MUSIC_CARD_FONT_DIR=/usr/share/fonts/opentype/noto \
+    PLANABRAIN_DATA_DIR=/app
 
 RUN if grep -q "VERSION_CODENAME=buster" /etc/os-release; then \
         sed -i 's|deb.debian.org/debian|archive.debian.org/debian|g' /etc/apt/sources.list && \

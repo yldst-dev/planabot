@@ -19,6 +19,7 @@ services:
     volumes:
       - ./.env:/app/.env:ro
       - ./.planabot:/app/.planabot
+      - ./.planabrain:/app/.planabrain
     logging:
       driver: json-file
       options:
