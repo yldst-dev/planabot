@@ -199,6 +199,7 @@ OLLAMA_API_KEY=YOUR_OLLAMA_API_KEY_HERE
 - `PLANABRAIN_INTIMACY_FALLBACK_MODEL`
 - `PLANABRAIN_CONTINUOUS_CHAT` (기본 0, 1이면 시스템 프롬프트를 고정하고 이전 턴 원문을 재전송해 Gemini 웹 게이트웨이의 대화 이어가기에 맞춤)
 - `PLANABRAIN_SEARCH_QUERY_REWRITE` (기본 1, 시의성 질문의 검색어를 모델이 다시 작성)
+- `PLANABRAIN_AUX_PROVIDER`, `PLANABRAIN_AUX_MODEL` (검색어 재작성과 전달문 재작성 같은 보조 호출에 쓸 제공자와 모델, 비우면 주 제공자와 모델을 사용하며 자격 증명이 없으면 주 제공자로 복귀)
 - `PLANABRAIN_DATA_DIR` (planabrain 데이터 루트, 기본값은 저장소 루트이며 `.planabrain/*` 상대 경로의 기준)
 - `PLANABOT_PLANABRAIN_SERVER` (기본 1, planabrain 상주 서버 사용 여부)
 - `PLANABRAIN_SERVER_PORT` (기본 0, 상주 서버가 쓸 루프백 포트이며 0이면 자동 선택)

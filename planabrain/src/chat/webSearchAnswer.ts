@@ -30,6 +30,7 @@ import {
   buildDeliveryGenerationRules,
   finalizeAnswerForDelivery,
 } from "./deliveryRewrite.js";
+import { resolveAuxSettings } from "./auxSettings.js";
 import { buildLongRangeWeatherReply } from "./weatherPolicy.js";
 import { appendUserMemory, loadUserMemory } from "../memory/userMemoryStore.js";
 
@@ -69,6 +70,11 @@ export type AnswerTurnParams = {
   recentTurns?: RecentTurnInput[];
   continuousChat?: boolean;
   workingTurnLimit?: number;
+};
+
+type PreparedSearch = {
+  query: string | undefined;
+  context: PreSearchContext | null;
 };
 
 const MAX_REPLAY_CHARS = 100_000;
@@ -127,11 +133,15 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   const preSearchMode = searchToolEnabled && usesPreSearchContext(params.settings);
   const wantsPreSearch =
     preSearchMode && (currentInfoRequired || explicitSearch || searchFollowUp);
-  const preSearchQuery = wantsPreSearch
-    ? await resolveSearchQuery(params.settings, priorUserTexts, currentTurnText, {
+  const startedAt = Date.now();
+  const searchTask: Promise<PreparedSearch> = wantsPreSearch
+    ? resolveSearchQuery(params.settings, priorUserTexts, currentTurnText, {
         forceQuery: currentInfoRequired || explicitSearch,
-      })
-    : undefined;
+      }).then(async (query) => ({
+        query,
+        context: continuous && query ? await performPreSearch(params.settings, query) : null,
+      }))
+    : Promise.resolve({ query: undefined, context: null });
   const deliveryEnabled =
     params.settings.deliveryRewriteEnabled && !intimacyActive;
   const deliveryLimit =
@@ -147,10 +157,21 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
         }
       : params.settings;
 
-  const linkContext = await buildLinkContext(
-    params.settings,
-    currentTurnText,
-  );
+  let search: PreparedSearch;
+  let linkContext: Awaited<ReturnType<typeof buildLinkContext>>;
+  try {
+    [search, linkContext] = await Promise.all([
+      searchTask,
+      buildLinkContext(params.settings, currentTurnText),
+    ]);
+  } catch (error) {
+    if (error instanceof ProviderRateLimitError) {
+      return { answer: error.message };
+    }
+    throw error;
+  }
+  const preSearchQuery = search.query;
+  const preparedAt = Date.now();
   const referenceContext = buildCurrentTurnReference(
     params.question,
     currentTurnText,
@@ -162,9 +183,7 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   let epoch = 0;
   try {
     if (continuous) {
-      preSearch = preSearchQuery
-        ? await performPreSearch(params.settings, preSearchQuery)
-        : null;
+      preSearch = search.context;
       const replay = buildReplay(recentTurns);
       epoch = replay.epoch;
       const systemContent = buildContinuousSystemPrompt(params.settings);
@@ -247,6 +266,7 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
     throw error;
   }
 
+  const answeredAt = Date.now();
   const selected = applySourceSelection(invocation.content, invocation.citations);
   const transcript: TurnTranscript | undefined =
     continuous && invocation.wireMessages.length > 0
@@ -271,6 +291,7 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
       ...(citation.title ? { title: citation.title } : {}),
     })),
   });
+  logTurnTiming(startedAt, preparedAt, answeredAt, Date.now());
   const memoryQuestion = currentTurnText;
 
   if (!continuous && params.settings.memoryEnabled && params.settings.memoryMaxMessages > 0) {
@@ -286,6 +307,17 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   }
 
   return { answer, transcript };
+}
+
+function logTurnTiming(
+  startedAt: number,
+  preparedAt: number,
+  answeredAt: number,
+  deliveredAt: number,
+): void {
+  console.error(
+    `[planabrain] 턴 처리 시간(ms) 준비=${preparedAt - startedAt} 답변=${answeredAt - preparedAt} 전달=${deliveredAt - answeredAt} 합계=${deliveredAt - startedAt}`,
+  );
 }
 
 export function buildContinuousSystemPrompt(settings: Settings): string {
@@ -473,7 +505,7 @@ async function rewriteSearchQuery(
   ].join("\n\n");
   try {
     const result = await invokeChatWithMetadata({
-      settings: { ...settings, chatMaxOutputTokens: 120, chatThinkingMode: "off" },
+      settings: { ...resolveAuxSettings(settings), chatMaxOutputTokens: 120 },
       enableSearchTool: false,
       messages: [
         { role: "system", content: QUERY_REWRITE_SYSTEM },

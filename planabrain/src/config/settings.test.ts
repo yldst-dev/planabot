@@ -153,6 +153,24 @@ test("system prompt env override still wins over persona profile", () => {
   assert.equal(settings.systemPrompt, "커스텀 페르소나");
 });
 
+test("aux provider and model are optional and resolve the provider host", () => {
+  const settings = withEnv(
+    {
+      ...MODEL_STUDIO_ENV,
+      OLLAMA_API_KEY: "ollama-key",
+      PLANABRAIN_AUX_PROVIDER: "ollama",
+      PLANABRAIN_AUX_MODEL: "gemma4:31b",
+    },
+    loadSettings,
+  );
+  assert.equal(settings.auxProvider, "ollama");
+  assert.equal(settings.auxModel, "gemma4:31b");
+  assert.equal(settings.ollamaHost, "https://ollama.com");
+  const plain = withEnv(MODEL_STUDIO_ENV, loadSettings);
+  assert.equal(plain.auxProvider, undefined);
+  assert.equal(plain.auxModel, undefined);
+});
+
 test("intimacy fallback provider and model are optional", () => {
   const settings = withEnv(
     {

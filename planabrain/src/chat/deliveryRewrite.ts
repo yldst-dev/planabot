@@ -1,6 +1,7 @@
 import { buildSystemPrompt } from "../config/systemPrompt.js";
 import type { Settings } from "../config/settings.js";
 import { invokeChat } from "../integrations/chat.js";
+import { resolveAuxSettings } from "./auxSettings.js";
 
 export type VerifiedCitation = {
   url: string;
@@ -54,9 +55,8 @@ export async function finalizeAnswerForDelivery(params: Params): Promise<string>
   const deliveryTokenLimit =
     params.settings.deliveryMaxOutputTokens ?? DEFAULT_DELIVERY_MAX_TOKENS;
   const rewriteSettings: Settings = {
-    ...params.settings,
+    ...resolveAuxSettings(params.settings),
     chatMaxOutputTokens: deliveryTokenLimit,
-    chatThinkingMode: "off",
   };
   const rewritePrompt = [
     buildSystemPrompt(params.settings),

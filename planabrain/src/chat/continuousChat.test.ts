@@ -146,7 +146,7 @@ test("continuous mode replays wire messages with a fixed system prompt and recor
 });
 
 test("continuous mode rewrites the search query and keeps only the selected sources", async () => {
-  const settings = createSettings();
+  const settings = createSettings({ auxModel: "fast-model" });
   const mock = installFetch({
     rewrite: "{\"query\": \"TETRAPOD 2026 취소\"}",
     search: searchResults,
@@ -164,6 +164,8 @@ test("continuous mode rewrites the search query and keeps only the selected sour
     assert.equal(search?.body.query, "TETRAPOD 2026 취소");
     const chats = mock.requests.filter((r) => r.url.endsWith("/chat/completions"));
     assert.equal(chats.length, 2);
+    assert.equal(chats[0].body.model, "fast-model");
+    assert.equal(chats[1].body.model, settings.chatModel);
     const finalMessages = chats[1].body.messages as Array<{ role: string; content: string }>;
     assert.match(finalMessages.at(-1)?.content ?? "", /\[웹 검색 결과\]/u);
     assert.doesNotMatch(result.answer, /출처번호/u);

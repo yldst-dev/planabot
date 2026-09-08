@@ -58,6 +58,8 @@ export type Settings = {
   searchQueryRewriteEnabled: boolean;
   intimacyFallbackProvider?: Settings["aiProvider"];
   intimacyFallbackModel?: string;
+  auxProvider?: Settings["aiProvider"];
+  auxModel?: string;
   memoryEnabled: boolean;
   memoryMaxMessages: number;
   memoryDir: string;
@@ -159,6 +161,12 @@ export function loadSettings(): Settings {
   const intimacyFallbackModel = readOptionalEnv(
     "PLANABRAIN_INTIMACY_FALLBACK_MODEL",
   );
+  const auxProvider = resolveOptionalAiProvider("PLANABRAIN_AUX_PROVIDER");
+  const auxModel = readOptionalEnv("PLANABRAIN_AUX_MODEL");
+  const usesProvider = (provider: Settings["aiProvider"]): boolean =>
+    aiProvider === provider ||
+    intimacyFallbackProvider === provider ||
+    auxProvider === provider;
   const openRouterWebSearchEnabled = parseBooleanEnv(
     "PLANABRAIN_OPENROUTER_ENABLE_WEB_SEARCH",
     true,
@@ -237,23 +245,23 @@ export function loadSettings(): Settings {
     openRouterApiKey,
     cerebrasApiKey,
     cerebrasBaseUrl:
-      aiProvider === "cerebras" || intimacyFallbackProvider === "cerebras"
+      usesProvider("cerebras")
         ? resolveCerebrasBaseUrl()
         : undefined,
     cerebrasWebSearchEnabled,
     modelStudioApiKey,
     modelStudioBaseUrl:
-      aiProvider === "modelstudio" || intimacyFallbackProvider === "modelstudio"
+      usesProvider("modelstudio")
         ? resolveModelStudioBaseUrl()
         : undefined,
     modelStudioWebSearchEnabled,
     ollamaApiKeys,
     geminiMockBaseUrl:
-      aiProvider === "geminimock" || intimacyFallbackProvider === "geminimock"
+      usesProvider("geminimock")
         ? resolveGeminiMockBaseUrl()
         : undefined,
     openRouterBaseUrl:
-      aiProvider === "openrouter" || intimacyFallbackProvider === "openrouter"
+      usesProvider("openrouter")
         ? resolveOpenRouterBaseUrl()
         : undefined,
     openRouterSiteUrl:
@@ -270,7 +278,7 @@ export function loadSettings(): Settings {
     openRouterWebSearchMaxTotalResults,
     openRouterWebSearchContextSize,
     ollamaHost:
-      aiProvider === "ollama" || intimacyFallbackProvider === "ollama"
+      usesProvider("ollama")
         ? resolveOllamaHost()
         : undefined,
     ollamaSearchHost:
@@ -300,19 +308,7 @@ export function loadSettings(): Settings {
                 : undefined) ??
       process.env.PLANABRAIN_CHAT_MODEL ??
       process.env.PLANABRAIN_GEMINI_MODEL ??
-      (aiProvider === "geminimock"
-        ? (process.env.GEMINI_CLI_MODEL ?? "gemini-2.5-pro")
-        : aiProvider === "openrouter"
-          ? "openai/gpt-4o-mini"
-          : aiProvider === "vertexexpress"
-            ? "gemini-2.5-flash"
-            : aiProvider === "ollama"
-              ? "gemma4:31b-cloud"
-              : aiProvider === "cerebras"
-                ? "gemma-4-31b"
-                : aiProvider === "modelstudio"
-                  ? "qwen-plus"
-                  : "gemini-3-flash-preview"),
+      defaultChatModel(aiProvider),
     chatMaxOutputTokens,
     deliveryMaxOutputTokens,
     deliveryRewriteEnabled,
@@ -326,6 +322,8 @@ export function loadSettings(): Settings {
     searchQueryRewriteEnabled,
     intimacyFallbackProvider,
     intimacyFallbackModel,
+    auxProvider,
+    auxModel,
     memoryEnabled,
     memoryMaxMessages,
     memoryDir,
@@ -346,6 +344,25 @@ function resolvePersonaProfile(): "live" | "original" {
     return "original";
   }
   throw new Error("PLANABRAIN_PERSONA_PROFILE must be one of: live, original");
+}
+
+export function defaultChatModel(provider: Settings["aiProvider"]): string {
+  switch (provider) {
+    case "geminimock":
+      return process.env.GEMINI_CLI_MODEL ?? "gemini-2.5-pro";
+    case "openrouter":
+      return "openai/gpt-4o-mini";
+    case "vertexexpress":
+      return "gemini-2.5-flash";
+    case "ollama":
+      return "gemma4:31b-cloud";
+    case "cerebras":
+      return "gemma-4-31b";
+    case "modelstudio":
+      return "qwen-plus";
+    default:
+      return "gemini-3-flash-preview";
+  }
 }
 
 function resolveOptionalAiProvider(
