@@ -3,8 +3,10 @@ import type { InputImage } from "../integrations/gemini/chat.js";
 import { buildSystemPrompt } from "../config/systemPrompt.js";
 import {
   ProviderRateLimitError,
+  buildSearchQuery,
   isSearchToolAvailable,
   mergeWebCitations,
+  usesPreSearchContext,
   type ChatInvocationMetadata,
   type WebCitation,
 } from "../integrations/gemini/chat.js";
@@ -77,12 +79,19 @@ export async function answerWithWebSearch(params: {
       !isExplicitSearchRequest(currentTurnText) &&
       !currentInfoRequired
     );
+  const preSearchMode = searchToolEnabled && usesPreSearchContext(params.settings);
+  const preSearchQuery =
+    preSearchMode &&
+    (currentInfoRequired || isExplicitSearchRequest(currentTurnText))
+      ? buildSearchQuery(currentTurnText)
+      : undefined;
   const deliveryEnabled =
     params.settings.deliveryRewriteEnabled && !intimacyActive;
   const deliveryLimit =
     params.settings.deliveryMaxOutputTokens ?? DEFAULT_DELIVERY_MAX_TOKENS;
   const basePrompt = buildSystemPrompt(params.settings, {
     searchEnabled: searchToolEnabled,
+    searchMode: preSearchMode ? "context" : "tool",
     intimacyActive,
   });
   const systemContent = deliveryEnabled
@@ -116,6 +125,7 @@ export async function answerWithWebSearch(params: {
       settings: generationSettings,
       enableSearchTool: searchToolEnabled,
       webFetchUrlSource: currentTurnText,
+      preSearchQuery,
       intimacyActive,
       messages: [
         {

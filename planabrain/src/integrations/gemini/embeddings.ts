@@ -37,12 +37,17 @@ export function createEmbeddings(settings: Settings): EmbeddingsClient {
 }
 
 function createOpenRouterEmbeddings(settings: Settings): EmbeddingsClient {
-  if (!settings.openRouterApiKey) {
-    throw new Error("OPENROUTER_API_KEY is required for openrouter embeddings");
+  const apiKey = settings.openRouterEmbeddingApiKey ?? settings.openRouterApiKey;
+  if (!apiKey) {
+    throw new Error(
+      "OPENROUTER_API_KEY or PLANABRAIN_OPENROUTER_EMBEDDING_API_KEY is required for openrouter embeddings",
+    );
   }
-  const baseUrl = settings.openRouterBaseUrl ?? "https://openrouter.ai/api/v1";
+  const baseUrl =
+    settings.openRouterEmbeddingBaseUrl ??
+    settings.openRouterBaseUrl ??
+    "https://openrouter.ai/api/v1";
   const model = settings.openRouterEmbeddingModel ?? "google/gemini-embedding-001";
-  const apiKey = settings.openRouterApiKey;
   return {
     async embedDocuments(texts: string[]): Promise<number[][]> {
       if (texts.length === 0) {

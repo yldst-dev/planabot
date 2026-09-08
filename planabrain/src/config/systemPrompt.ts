@@ -35,6 +35,12 @@ const SEARCH_ENABLED_PROMPT = [
   "검색 결과와 유효한 인용 URL로 확인하지 못한 최신 정보는 추측하지 말고 확인 불가라고 답합니다.",
 ].join("\n");
 
+const SEARCH_CONTEXT_PROMPT = [
+  "날짜, 시세, 환율, 금리, 뉴스, 날씨, 통계처럼 시의성 있는 질문에는 함께 제공된 [웹 검색 결과] 자료를 먼저 확인하고 그 내용에 근거해 답합니다.",
+  "web_search 같은 도구 호출문이나 도구 이름, 검색 질의 목록을 답변에 출력하지 않습니다.",
+  "검색 결과에서 확인하지 못한 최신 정보는 추측하지 말고 확인 불가라고 답합니다.",
+].join("\n");
+
 const SEARCH_DISABLED_PROMPT = [
   "이번 응답에서는 웹 검색 도구를 사용할 수 없습니다.",
   "web_search 같은 도구 호출문이나 도구 이름, 검색 질의 목록을 답변에 출력하지 않습니다.",
@@ -43,6 +49,7 @@ const SEARCH_DISABLED_PROMPT = [
 
 export type SystemPromptOptions = {
   searchEnabled?: boolean;
+  searchMode?: "tool" | "context";
   intimacyActive?: boolean;
   presenceRecovery?: boolean;
 };
@@ -52,7 +59,9 @@ export function buildSystemPrompt(
   options: SystemPromptOptions = {},
 ): string {
   const searchRules = options.searchEnabled
-    ? SEARCH_ENABLED_PROMPT
+    ? options.searchMode === "context"
+      ? SEARCH_CONTEXT_PROMPT
+      : SEARCH_ENABLED_PROMPT
     : SEARCH_DISABLED_PROMPT;
   const extra: string[] = [];
   if (settings.intimacyEnabled && options.intimacyActive) {

@@ -24,6 +24,7 @@ function createSettings(
     cerebrasWebSearchEnabled: false,
     modelStudioWebSearchEnabled: false,
     openRouterWebSearchEnabled: true,
+    openRouterWebSearchBackend: "plugin",
     openRouterWebSearchMaxResults: 5,
     openRouterWebSearchMaxTotalResults: 15,
     openRouterWebSearchContextSize: "medium",

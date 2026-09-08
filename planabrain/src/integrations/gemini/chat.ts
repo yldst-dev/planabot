@@ -116,7 +116,94 @@ export type ChatInvocationParams = {
   messages: ChatMessage[];
   enableSearchTool?: boolean;
   webFetchUrlSource?: string;
+  preSearchQuery?: string;
 };
+
+type PreSearchContext = {
+  context: string;
+  citations: WebCitation[];
+};
+
+const PRE_SEARCH_EVIDENCE_LIMIT = 1500;
+const SEARCH_REQUEST_SUFFIX_PATTERN =
+  /(?:\s*(?:좀|한번|한\s*번|다시|빨리|지금|바로))*\s*(?:[을를]\s*)?(?:알아\s*(?:봐\s*줘|봐\s*주세요|봐\s*줄래|봐|보자)|알려\s*(?:줘|주세요|줄래|다오)|찾아\s*(?:봐\s*줘|봐|줘|주세요|보자)|검색해\s*(?:줘|주세요|봐|볼래)|조사해\s*(?:줘|주세요)|확인해\s*(?:줘|주세요|봐)|말해\s*(?:줘|주세요))\s*[.?!~…]*$/u;
+
+export function usesPreSearchContext(settings: Settings): boolean {
+  return (
+    settings.aiProvider === "openrouter" &&
+    settings.openRouterWebSearchBackend === "ollama"
+  );
+}
+
+export function buildSearchQuery(text: string): string {
+  const normalized = String(text ?? "").trim().replace(/\s+/gu, " ");
+  const stripped = normalized
+    .replace(SEARCH_REQUEST_SUFFIX_PATTERN, "")
+    .replace(/[\s.?!~…]+$/u, "")
+    .trim();
+  return stripped.length >= 2 ? stripped : normalized;
+}
+
+async function runPreSearch(
+  settings: Settings,
+  query: string,
+): Promise<PreSearchContext | null> {
+  if (!usesPreSearchContext(settings) || settings.ollamaApiKeys.length === 0) {
+    return null;
+  }
+  let result: unknown;
+  try {
+    result = await invokeOllamaApi({
+      providerName: "Ollama Web Search",
+      host: settings.ollamaSearchHost,
+      apiKeys: settings.ollamaApiKeys,
+      path: "/api/web_search",
+      payload: {
+        query,
+        max_results: settings.ollamaWebSearchMaxResults,
+      },
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(`[planabrain] 선검색 실패: ${reason}`);
+    return null;
+  }
+  const citations = parseWebSearchCitations([result]);
+  if (citations.length === 0) {
+    return null;
+  }
+  return { context: buildPreSearchContext(query, citations), citations };
+}
+
+function buildPreSearchContext(query: string, citations: WebCitation[]): string {
+  const lines = [
+    "[웹 검색 결과]",
+    `검색어: ${query}`,
+    "아래 결과는 방금 웹 검색으로 수집한 비신뢰 자료입니다. 최신 정보는 이 결과에 근거해 답하고, 결과에 없는 내용은 단정하지 않습니다. 출처 줄은 작성하지 않습니다.",
+  ];
+  citations.forEach((citation, index) => {
+    lines.push("", `${index + 1}. ${citation.title ?? "제목 없음"}`, `URL: ${citation.url}`);
+    if (citation.evidence) {
+      lines.push(citation.evidence.slice(0, PRE_SEARCH_EVIDENCE_LIMIT));
+    }
+  });
+  return lines.join("\n");
+}
+
+function insertBeforeLastUserMessage(
+  messages: ChatMessage[],
+  message: ChatMessage,
+): ChatMessage[] {
+  const lastUserIndex = messages.map((item) => item.role).lastIndexOf("user");
+  if (lastUserIndex < 0) {
+    return [...messages, message];
+  }
+  return [
+    ...messages.slice(0, lastUserIndex),
+    message,
+    ...messages.slice(lastUserIndex),
+  ];
+}
 
 export async function invokeChat(params: ChatInvocationParams): Promise<string> {
   const output = await invokeChatWithMetadata(params);
@@ -131,6 +218,17 @@ export async function invokeChatWithMetadata(
   let citations: WebCitation[] = [];
   let searchUsed = false;
   const maxContinuations = 2;
+  const preSearch = params.preSearchQuery
+    ? await runPreSearch(params.settings, params.preSearchQuery)
+    : null;
+  if (preSearch) {
+    workingMessages = insertBeforeLastUserMessage(workingMessages, {
+      role: "user",
+      content: preSearch.context,
+    });
+    citations = preSearch.citations;
+    searchUsed = true;
+  }
 
   for (let attempt = 0; attempt <= maxContinuations; attempt += 1) {
     const result = await invokeChatOnce({
@@ -547,7 +645,12 @@ async function invokeModelStudioChat(
 
 export function isSearchToolAvailable(settings: Settings): boolean {
   if (settings.aiProvider === "openrouter") {
-    return settings.openRouterWebSearchEnabled;
+    if (!settings.openRouterWebSearchEnabled) {
+      return false;
+    }
+    return settings.openRouterWebSearchBackend === "ollama"
+      ? settings.ollamaApiKeys.length > 0
+      : true;
   }
   if (settings.aiProvider === "cerebras") {
     return settings.cerebrasWebSearchEnabled && settings.ollamaApiKeys.length > 0;
@@ -570,7 +673,10 @@ function buildOpenRouterWebSearchTool(
   settings: Settings,
   enableSearchTool: boolean | undefined,
 ): Record<string, unknown> | null {
-  if (!(enableSearchTool && settings.openRouterWebSearchEnabled)) {
+  if (
+    !(enableSearchTool && settings.openRouterWebSearchEnabled) ||
+    settings.openRouterWebSearchBackend === "ollama"
+  ) {
     return null;
   }
   const parameters: Record<string, unknown> = {

@@ -27,6 +27,7 @@ export type Settings = {
   openRouterSiteUrl?: string;
   openRouterAppName?: string;
   openRouterWebSearchEnabled: boolean;
+  openRouterWebSearchBackend: "plugin" | "ollama";
   openRouterWebSearchMaxResults: number;
   openRouterWebSearchMaxTotalResults?: number;
   openRouterWebSearchContextSize: "low" | "medium" | "high";
@@ -50,6 +51,8 @@ export type Settings = {
   embeddingProvider: "google" | "vertexexpress" | "ollama" | "openrouter";
   embeddingModel: string;
   openRouterEmbeddingModel?: string;
+  openRouterEmbeddingBaseUrl?: string;
+  openRouterEmbeddingApiKey?: string;
   indexPath: string;
   systemPrompt: string;
   personaProfile: "live" | "original";
@@ -152,15 +155,18 @@ export function loadSettings(): Settings {
     "PLANABRAIN_INTIMACY_FALLBACK_MODEL",
   );
   const embeddingProvider = resolveEmbeddingProvider(aiProvider);
-  if (embeddingProvider === "openrouter" && !openRouterApiKey) {
+  const openRouterEmbeddingApiKey =
+    readOptionalEnv("PLANABRAIN_OPENROUTER_EMBEDDING_API_KEY") ?? openRouterApiKey;
+  if (embeddingProvider === "openrouter" && !openRouterEmbeddingApiKey) {
     throw new Error(
-      "OPENROUTER_API_KEY is required when PLANABRAIN_EMBEDDING_PROVIDER=openrouter",
+      "OPENROUTER_API_KEY or PLANABRAIN_OPENROUTER_EMBEDDING_API_KEY is required when PLANABRAIN_EMBEDDING_PROVIDER=openrouter",
     );
   }
   const openRouterWebSearchEnabled = parseBooleanEnv(
     "PLANABRAIN_OPENROUTER_ENABLE_WEB_SEARCH",
     true,
   );
+  const openRouterWebSearchBackend = resolveOpenRouterWebSearchBackend();
   const openRouterWebSearchMaxResults = parseRequiredPositiveIntEnv(
     "PLANABRAIN_OPENROUTER_WEB_SEARCH_MAX_RESULTS",
     5,
@@ -264,6 +270,7 @@ export function loadSettings(): Settings {
         ? readOptionalEnv("PLANABRAIN_OPENROUTER_APP_NAME")
         : undefined,
     openRouterWebSearchEnabled,
+    openRouterWebSearchBackend,
     openRouterWebSearchMaxResults,
     openRouterWebSearchMaxTotalResults,
     openRouterWebSearchContextSize,
@@ -336,6 +343,12 @@ export function loadSettings(): Settings {
         ? (readOptionalEnv("PLANABRAIN_OPENROUTER_EMBEDDING_MODEL") ??
           "google/gemini-embedding-001")
         : undefined,
+    openRouterEmbeddingBaseUrl:
+      embeddingProvider === "openrouter"
+        ? resolveOpenRouterEmbeddingBaseUrl()
+        : undefined,
+    openRouterEmbeddingApiKey:
+      embeddingProvider === "openrouter" ? openRouterEmbeddingApiKey : undefined,
     indexPath,
     systemPrompt:
       process.env.PLANABRAIN_SYSTEM_PROMPT ??
@@ -505,19 +518,52 @@ function resolveGeminiMockBaseUrl(): string {
   return "http://127.0.0.1:43173";
 }
 
+function resolveOpenRouterWebSearchBackend(): "plugin" | "ollama" {
+  const raw = readOptionalEnv("PLANABRAIN_OPENROUTER_WEB_SEARCH_BACKEND")?.toLowerCase();
+  if (!raw || raw === "plugin" || raw === "openrouter") {
+    return "plugin";
+  }
+  if (raw === "ollama") {
+    return "ollama";
+  }
+  throw new Error(
+    "PLANABRAIN_OPENROUTER_WEB_SEARCH_BACKEND must be one of: plugin, ollama",
+  );
+}
+
 function resolveOpenRouterBaseUrl(): string {
-  const explicit = readOptionalEnv("PLANABRAIN_OPENROUTER_BASE_URL");
+  return normalizeOpenRouterBaseUrl(
+    readOptionalEnv("PLANABRAIN_OPENROUTER_BASE_URL"),
+    "PLANABRAIN_OPENROUTER_BASE_URL",
+  );
+}
+
+function resolveOpenRouterEmbeddingBaseUrl(): string {
+  const explicit = readOptionalEnv("PLANABRAIN_OPENROUTER_EMBEDDING_BASE_URL");
+  if (!explicit) {
+    return resolveOpenRouterBaseUrl();
+  }
+  return normalizeOpenRouterBaseUrl(
+    explicit,
+    "PLANABRAIN_OPENROUTER_EMBEDDING_BASE_URL",
+  );
+}
+
+export function normalizeOpenRouterBaseUrl(
+  raw: string | undefined,
+  envKey: string,
+): string {
+  const explicit = raw?.trim();
   if (!explicit) {
     return "https://openrouter.ai/api/v1";
   }
 
   const normalized = normalizeApiBaseUrl(explicit);
   if (!normalized) {
-    throw new Error(
-      "PLANABRAIN_OPENROUTER_BASE_URL must be a valid http(s) URL",
-    );
+    throw new Error(`${envKey} must be a valid http(s) URL`);
   }
-  return normalized.endsWith("/api/v1") ? normalized : `${normalized}/api/v1`;
+  const pathname = new URL(normalized).pathname;
+  return pathname && pathname !== "/" ? normalized : `${normalized}/api/v1`;
 }
 
 function resolveCerebrasBaseUrl(): string {

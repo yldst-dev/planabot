@@ -24,6 +24,21 @@ test("openrouter exposes the search tool unless it is disabled", () => {
   );
 });
 
+test("openrouter with the ollama search backend needs an ollama key", () => {
+  const base = { openRouterWebSearchBackend: "ollama" } as Partial<Settings>;
+  assert.equal(isSearchToolAvailable(settingsFor(base)), true);
+  assert.equal(
+    isSearchToolAvailable(settingsFor({ ...base, ollamaApiKeys: [] })),
+    false,
+  );
+  assert.equal(
+    isSearchToolAvailable(
+      settingsFor({ ...base, openRouterWebSearchEnabled: false }),
+    ),
+    false,
+  );
+});
+
 test("cerebras needs both the flag and an ollama key", () => {
   const base = { aiProvider: "cerebras" } as Partial<Settings>;
   assert.equal(isSearchToolAvailable(settingsFor(base)), true);
