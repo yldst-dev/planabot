@@ -113,7 +113,7 @@ export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T>
     if (isEnoent(error)) {
       return fallback;
     }
-    return fallback;
+    throw error;
   }
 }
 

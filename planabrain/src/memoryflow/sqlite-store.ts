@@ -1,3 +1,4 @@
+import { MemoryConflictError } from "./concurrency.js";
 import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -20,11 +21,12 @@ export class SqliteMemoryStore implements MemoryStore {
     const sqlite = loadSqliteModule();
     mkdirSync(path.dirname(sqlitePath), { recursive: true });
     this.db = new sqlite.DatabaseSync(sqlitePath);
+    this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA synchronous = NORMAL");
     this.db.exec("PRAGMA foreign_keys = ON");
-    this.db.exec("PRAGMA busy_timeout = 5000");
-    this.db.exec(`
+    this.transaction(() => {
+      this.db.exec(`
       CREATE TABLE IF NOT EXISTS scopes (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
@@ -93,31 +95,33 @@ export class SqliteMemoryStore implements MemoryStore {
       CREATE INDEX IF NOT EXISTS idx_episodic_scope_at ON episodic_items(scope_id, at DESC);
       CREATE INDEX IF NOT EXISTS idx_summary_scope_at ON summary_items(scope_id, at DESC);
     `);
-    try {
-      this.db.exec("ALTER TABLE turns ADD COLUMN owner_user_id TEXT");
-    } catch {}
-    try {
-      this.db.exec("ALTER TABLE semantic_facts ADD COLUMN source_turn_id TEXT NOT NULL DEFAULT ''");
-    } catch {}
-    try {
-      this.db.exec("ALTER TABLE turns ADD COLUMN wire_messages TEXT");
-    } catch {}
-    try {
-      this.db.exec("ALTER TABLE turns ADD COLUMN epoch INTEGER");
-    } catch {}
-    try {
-      this.db.exec("ALTER TABLE semantic_facts ADD COLUMN created_by_user_id TEXT");
-    } catch {}
-    try {
-      this.db.exec("ALTER TABLE semantic_facts ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private'");
-    } catch {}
-    try {
-      this.db.exec("ALTER TABLE semantic_facts ADD COLUMN fact_scope_kind TEXT NOT NULL DEFAULT 'user'");
-    } catch {}
+      for (const [table, column, definition] of [
+        ["scopes", "revision", "INTEGER NOT NULL DEFAULT 0"],
+        ["scopes", "exchange_ids", "TEXT NOT NULL DEFAULT '[]'"],
+        ["scopes", "participant_ids", "TEXT NOT NULL DEFAULT '[]'"],
+        ["turns", "owner_user_id", "TEXT"],
+        ["turns", "wire_messages", "TEXT"],
+        ["turns", "epoch", "INTEGER"],
+        ["semantic_facts", "source_turn_id", "TEXT NOT NULL DEFAULT ''"],
+        ["semantic_facts", "created_by_user_id", "TEXT"],
+        ["semantic_facts", "visibility", "TEXT NOT NULL DEFAULT 'private'"],
+        ["semantic_facts", "fact_scope_kind", "TEXT NOT NULL DEFAULT 'user'"],
+      ]) {
+        const columns = this.db.prepare(`PRAGMA table_info(${table})`).all();
+        if (!columns.some((entry) => entry.name === column)) {
+          this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+        }
+      }
+    });
   }
 
   async loadState(scope: ScopeDescriptor): Promise<MemoryState> {
     this.upsertScope(scope);
+    return this.transaction(() => this.readState(scope));
+  }
+
+  private readState(scope: ScopeDescriptor): MemoryState {
+    const version = this.db.prepare("SELECT revision, exchange_ids, participant_ids FROM scopes WHERE id = ?").get(scope.scopeId);
     const empty = createEmptyState();
 
     const turns = this.db
@@ -143,6 +147,9 @@ export class SqliteMemoryStore implements MemoryStore {
       .all(scope.scopeId) as Array<Record<string, unknown>>;
 
     return normalizeState({
+      revision: Number(version?.revision ?? 0),
+      exchangeIds: JSON.parse(String(version?.exchange_ids ?? "[]")),
+      participantIds: JSON.parse(String(version?.participant_ids ?? "[]")),
       working: {
         version: 1,
         turns: turns.map((row) => ({
@@ -204,6 +211,9 @@ export class SqliteMemoryStore implements MemoryStore {
     const normalized = normalizeState(state);
     this.transaction(() => {
       this.upsertScope(scope);
+      const updated = this.db.prepare("UPDATE scopes SET revision = revision + 1, exchange_ids = ?, participant_ids = ? WHERE id = ? AND revision = ?")
+        .run(JSON.stringify(normalized.exchangeIds ?? []), JSON.stringify(normalized.participantIds ?? []), scope.scopeId, normalized.revision ?? 0);
+      if (Number(updated.changes) !== 1) throw new MemoryConflictError();
       this.db.prepare("DELETE FROM turns WHERE scope_id = ?").run(scope.scopeId);
       this.db.prepare("DELETE FROM semantic_facts WHERE scope_id = ?").run(scope.scopeId);
       this.db.prepare("DELETE FROM episodic_items WHERE scope_id = ?").run(scope.scopeId);
@@ -290,53 +300,46 @@ export class SqliteMemoryStore implements MemoryStore {
   }
 
   async removeScope(scope: ScopeDescriptor): Promise<void> {
-    this.db.prepare("DELETE FROM scopes WHERE id = ?").run(scope.scopeId);
+    this.transaction(() => {
+      this.upsertScope(scope);
+      this.clearScope(scope.scopeId);
+    });
+  }
+
+  private clearScope(scopeId: string): void {
+    for (const table of ["turns", "semantic_facts", "episodic_items", "summary_items"]) {
+      this.db.prepare(`DELETE FROM ${table} WHERE scope_id = ?`).run(scopeId);
+    }
+    this.db.prepare("UPDATE scopes SET revision = revision + 1, exchange_ids = '[]', participant_ids = '[]' WHERE id = ?").run(scopeId);
   }
 
   async resetUser(userId: string): Promise<boolean> {
-    const normalized = safeId(userId);
-    const row = this.db
-      .prepare("SELECT COUNT(1) AS count FROM scopes WHERE scope_kind = 'user' AND user_id = ?")
-      .get(normalized) as { count?: number } | undefined;
-    const count = Number(row?.count ?? 0);
-    if (!Number.isFinite(count) || count <= 0) {
-      return false;
-    }
-    this.db
-      .prepare("DELETE FROM scopes WHERE scope_kind = 'user' AND user_id = ?")
-      .run(normalized);
-    return true;
+    return this.transaction(() => {
+      const scopes = this.db.prepare("SELECT id FROM scopes WHERE user_id = ? OR EXISTS (SELECT 1 FROM json_each(scopes.participant_ids) WHERE value = ?) UNION SELECT scope_id AS id FROM turns WHERE owner_user_id = ? UNION SELECT scope_id AS id FROM semantic_facts WHERE created_by_user_id = ?")
+        .all(safeId(userId), safeId(userId), safeId(userId), safeId(userId));
+      for (const scope of scopes) this.clearScope(String(scope.id));
+      return scopes.length > 0;
+    });
   }
 
   async resetAll(): Promise<boolean> {
-    const row = this.db
-      .prepare("SELECT COUNT(1) AS count FROM scopes")
-      .get() as { count?: number } | undefined;
-    const count = Number(row?.count ?? 0);
-    if (!Number.isFinite(count) || count <= 0) {
-      return false;
-    }
-
-    this.transaction(() => {
-      this.db.prepare("DELETE FROM turns").run();
-      this.db.prepare("DELETE FROM semantic_facts").run();
-      this.db.prepare("DELETE FROM episodic_items").run();
-      this.db.prepare("DELETE FROM summary_items").run();
-      this.db.prepare("DELETE FROM scopes").run();
+    return this.transaction(() => {
+      const scopes = this.db.prepare("SELECT id FROM scopes").all();
+      for (const scope of scopes) this.clearScope(String(scope.id));
+      return scopes.length > 0;
     });
-
-    return true;
   }
 
   close(): void {
     this.db.close();
   }
 
-  private transaction(fn: () => void): void {
+  private transaction<T>(fn: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      fn();
+      const result = fn();
       this.db.exec("COMMIT");
+      return result;
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;

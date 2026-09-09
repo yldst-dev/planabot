@@ -1,3 +1,6 @@
+import type { Settings } from "../../config/settings.js";
+import { resetScopedUserMemory } from "../../memory/userMemoryStore.js";
+import { resolveDataPath } from "../../config/paths.js";
 import { readFile } from "node:fs/promises";
 
 import { migrateJsonMemoryToSqlite } from "../../memoryflow/migrate-json.js";
@@ -69,8 +72,12 @@ export async function runMemoryExchangeCommand(args: string[]): Promise<void> {
     "Usage: planabrain memory-exchange <userId> <chatId> <userText> <assistantText>"
   );
 
+  const transcript = process.env.PLANABRAIN_TRANSCRIPT_JSON ? JSON.parse(process.env.PLANABRAIN_TRANSCRIPT_JSON) as { wireMessages?: Array<{ role: "user" | "assistant"; content: string; }>; epoch?: number; } : undefined;
   const result = await rememberExchangeTurn({
     userId: String(userId),
+    requestId: process.env.PLANABRAIN_REQUEST_ID,
+    wireMessages: transcript?.wireMessages,
+    epoch: transcript?.epoch,
     chatId: String(chatId),
     conversationId,
     userText,
@@ -81,14 +88,15 @@ export async function runMemoryExchangeCommand(args: string[]): Promise<void> {
 
 export async function rememberExchangeTurn(params: {
   userId: string;
+  requestId?: string;
   chatId: string;
   conversationId?: string;
   userText: string;
   assistantText: string;
-  wireMessages?: Array<{ role: "user" | "assistant"; content: string }>;
+  wireMessages?: Array<{ role: "user" | "assistant"; content: string; }>;
   epoch?: number;
-}): Promise<unknown> {
-  const engine = new LocalMemoryEngine();
+}, settings?: Settings): Promise<unknown> {
+  const engine = new LocalMemoryEngine({}, settings);
   try {
     return await engine.rememberExchange(params);
   } finally {
@@ -104,6 +112,8 @@ export async function runMemoryResetUserCommand(args: string[]): Promise<void> {
   const engine = new LocalMemoryEngine();
   try {
     const result = await engine.resetUser(String(userId));
+    const scopedRemoved = await resetScopedUserMemory(String(userId), resolveDataPath(process.env.PLANABRAIN_MEMORY_DIR ?? ".planabrain/memory"));
+    result.removed = result.removed || scopedRemoved;
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } finally {
     engine.close();

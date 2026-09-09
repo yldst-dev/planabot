@@ -1,3 +1,5 @@
+import { currentExecution, consumeCall, ExecutionLimitError } from "../runtime/execution.js";
+
 export type ProviderErrorKind =
   | "credit_exhausted"
   | "auth_failed"
@@ -92,7 +94,7 @@ function errorMessage(error: unknown): string {
     return error;
   }
   if (typeof error === "object" && error !== null) {
-    const message = (error as { message?: unknown }).message;
+    const message = (error as { message?: unknown; }).message;
     if (typeof message === "string") {
       return message;
     }
@@ -104,11 +106,11 @@ function isTimeoutError(error: unknown): boolean {
   if (typeof error !== "object" || error === null) {
     return false;
   }
-  const name = (error as { name?: unknown }).name;
+  const name = (error as { name?: unknown; }).name;
   if (name === "TimeoutError" || name === "AbortError") {
     return true;
   }
-  const cause = (error as { cause?: unknown }).cause;
+  const cause = (error as { cause?: unknown; }).cause;
   if (cause && cause !== error && typeof cause === "object") {
     return isTimeoutError(cause);
   }
@@ -163,6 +165,9 @@ function readErrorBodyText(record: Record<string, unknown> | null): string {
 }
 
 export function toStructuredError(error: unknown): StructuredProviderError {
+  if (error instanceof ExecutionLimitError) {
+    return { kind: "invalid_request", provider: null, status: 422, message: error.message, retryable: false };
+  }
   if (error instanceof ProviderApiError) {
     return {
       kind: error.kind,
@@ -197,7 +202,7 @@ export function toStructuredError(error: unknown): StructuredProviderError {
     };
   }
 
-  if (error instanceof TypeError) {
+  if (error instanceof TypeError && /fetch failed|network|connection|socket|timeout/iu.test(error.message)) {
     return {
       kind: "network_timeout",
       provider: null,
@@ -238,14 +243,10 @@ export async function fetchWithTimeout(
   url: string | URL,
   init?: RequestInit,
 ): Promise<Response> {
+  consumeCall();
   const timeoutMs = readHttpTimeoutMs();
-  if (timeoutMs <= 0) {
-    return fetch(url, init);
-  }
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const existingSignal = init?.signal ?? undefined;
-  const signal = existingSignal
-    ? AbortSignal.any([existingSignal, timeoutSignal])
-    : timeoutSignal;
+  const signals = [init?.signal, currentExecution()?.signal, timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined]
+    .filter((signal): signal is AbortSignal => Boolean(signal));
+  const signal = signals.length > 0 ? AbortSignal.any(signals) : undefined;
   return fetch(url, { ...init, signal });
 }

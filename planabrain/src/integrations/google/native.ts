@@ -1,0 +1,333 @@
+import { currentExecution, consumeCall } from "../../runtime/execution.js";
+import { readGoogleGrounding, readUsage } from "../responseMetadata.js";
+import { withRateLimitRetry } from "../retry.js";
+import {
+  GoogleGenAI,
+  HarmBlockThreshold,
+  HarmCategory,
+  type SafetySetting,
+} from "@google/genai";
+
+import type { Settings } from "../../config/settings.js";
+import { createGoogleSearchTool } from "../googleSearch/retrievalTool.js";
+
+const DEFAULT_CHAT_TEMPERATURE = 1.0;
+const DEFAULT_CHAT_TOP_P = 0.7;
+
+type VertexChatMessage = {
+  role: "system" | "user" | "assistant" | "developer" | "tool";
+  content: string;
+  name?: string;
+  images?: Array<{
+    data: string;
+    mimeType: string;
+  }>;
+};
+
+export type VertexExpressChatResult = {
+  content: string;
+  finishReason?: string;
+  citations?: Array<{ url: string; title?: string; }>;
+  searchUsed?: boolean;
+};
+
+export async function invokeGoogleNativeChat(params: {
+  settings: Settings;
+  messages: VertexChatMessage[];
+  enableSearchTool?: boolean;
+}): Promise<VertexExpressChatResult> {
+  return invokeGoogleNativeChatWithOptions({
+    settings: params.settings,
+    messages: params.messages,
+    enableSearchTool: params.enableSearchTool,
+    allowRetryWithoutTools: true,
+  });
+}
+
+async function invokeGoogleNativeChatWithOptions(params: {
+  settings: Settings;
+  messages: VertexChatMessage[];
+  enableSearchTool?: boolean;
+  allowRetryWithoutTools: boolean;
+}): Promise<VertexExpressChatResult> {
+  const ai = createGoogleNativeClient(params.settings);
+  const systemInstruction = buildSystemInstruction(params.messages);
+  const contents = buildVertexContents(params.messages);
+  if (contents.length === 0) {
+    throw new Error("Vertex Express request missing user or assistant contents");
+  }
+
+  const config: Record<string, unknown> = {
+    abortSignal: currentExecution()?.signal,
+    temperature: DEFAULT_CHAT_TEMPERATURE,
+    topP: DEFAULT_CHAT_TOP_P,
+    safetySettings: buildVertexSafetySettingsOff(),
+  };
+  if (params.settings.chatMaxOutputTokens) {
+    config.maxOutputTokens = params.settings.chatMaxOutputTokens;
+  }
+  if (systemInstruction) {
+    config.systemInstruction = {
+      role: "user",
+      parts: [{ text: systemInstruction }],
+    };
+  }
+  const thinkingConfig = buildVertexThinkingConfig(
+    params.settings.chatModel,
+    params.settings.chatThinkingMode,
+  );
+  if (thinkingConfig) {
+    config.thinkingConfig = thinkingConfig;
+  }
+  if (params.enableSearchTool) {
+    config.tools = [createGoogleSearchTool()];
+  }
+
+  const response = await withRateLimitRetry(() => {
+    consumeCall();
+    return ai.models.generateContent({
+      model: params.settings.chatModel,
+      contents,
+      config,
+    });
+  });
+  readUsage(response);
+  const extractedText = extractVertexResponseText(response);
+  if (extractedText) {
+    return {
+      content: extractedText,
+      finishReason: extractVertexFinishReason(response),
+      ...readGoogleGrounding(response),
+    };
+  }
+  if (params.allowRetryWithoutTools && params.enableSearchTool) {
+    return invokeGoogleNativeChatWithOptions({
+      settings: params.settings,
+      messages: params.messages,
+      enableSearchTool: false,
+      allowRetryWithoutTools: false,
+    });
+  }
+  throw new Error(buildVertexResponseErrorMessage(response));
+}
+
+function createGoogleNativeClient(settings: Settings): GoogleGenAI {
+  if (settings.aiProvider === "google") {
+    if (!settings.googleApiKey) throw new Error("Google API 키가 필요합니다.");
+    return new GoogleGenAI({ apiKey: settings.googleApiKey, httpOptions: { timeout: 60_000, retryOptions: { attempts: 1 } } });
+  }
+  if (!settings.vertexExpressApiKey) {
+    throw new Error(
+      "GOOGLE_VERTEX_EXPRESS_API_KEY or VERTEX_EXPRESS_API_KEY is required when PLANABRAIN_AI_PROVIDER=vertexexpress",
+    );
+  }
+  const originalConsoleDebug = console.debug;
+  console.debug = (...args: unknown[]) => {
+    const first = args[0];
+    if (
+      typeof first === "string" &&
+      first.includes(
+        "The user provided Vertex AI API key will take precedence over the project/location from the environment variables.",
+      )
+    ) {
+      return;
+    }
+    originalConsoleDebug(...args);
+  };
+  try {
+    return new GoogleGenAI({
+      vertexai: true,
+      apiKey: settings.vertexExpressApiKey,
+      apiVersion: settings.vertexExpressApiVersion,
+      httpOptions: { timeout: 60_000, retryOptions: { attempts: 1 } },
+    });
+  } finally {
+    console.debug = originalConsoleDebug;
+  }
+}
+
+function buildVertexSafetySettingsOff(): SafetySetting[] {
+  return [
+    {
+      category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,
+      threshold: HarmBlockThreshold.BLOCK_NONE,
+    },
+  ];
+}
+
+function buildSystemInstruction(messages: VertexChatMessage[]): string {
+  const parts = messages
+    .filter((message) => message.role === "system" || message.role === "developer")
+    .map((message) => message.content.trim())
+    .filter((content) => content.length > 0);
+  return parts.join("\n\n");
+}
+
+function buildVertexContents(messages: VertexChatMessage[]): Array<Record<string, unknown>> {
+  const contents: Array<Record<string, unknown>> = [];
+  for (const message of messages) {
+    if (message.role === "system" || message.role === "developer") {
+      continue;
+    }
+    const parts: Array<Record<string, unknown>> = [];
+    const text = normalizeVertexMessageText(message);
+    if (text) {
+      parts.push({ text });
+    }
+    if (message.role === "user" && Array.isArray(message.images)) {
+      for (const image of message.images) {
+        parts.push({
+          inlineData: {
+            data: image.data,
+            mimeType: image.mimeType,
+          },
+        });
+      }
+    }
+    if (parts.length === 0) {
+      continue;
+    }
+    contents.push({
+      role: message.role === "assistant" ? "model" : "user",
+      parts,
+    });
+  }
+  return contents;
+}
+
+function normalizeVertexMessageText(message: VertexChatMessage): string {
+  const content = message.content.trim();
+  if (message.role === "tool") {
+    if (!content) {
+      return message.name ? `도구 결과(${message.name})` : "도구 결과";
+    }
+    return message.name
+      ? `도구 결과(${message.name}):\n${content}`
+      : `도구 결과:\n${content}`;
+  }
+  return content;
+}
+
+function buildVertexThinkingConfig(
+  model: string,
+  mode: Settings["chatThinkingMode"],
+): Record<string, unknown> | undefined {
+  if (mode === "default") {
+    return undefined;
+  }
+  if (mode === "off") {
+    if (isGemini3Model(model)) {
+      return { thinkingLevel: "MINIMAL" };
+    }
+    return { thinkingBudget: 0 };
+  }
+  if (mode === "minimal") {
+    return { thinkingLevel: "MINIMAL" };
+  }
+  return { thinkingLevel: mode };
+}
+
+function isGemini3Model(model: string): boolean {
+  return /^gemini-3[.-]/u.test(model.trim().toLowerCase());
+}
+
+function extractVertexResponseText(response: unknown): string | null {
+  const record = asRecord(response);
+  const directText = typeof record?.text === "string" ? record.text.trim() : "";
+  if (directText) {
+    return directText;
+  }
+  const candidates = Array.isArray(record?.candidates) ? record.candidates : [];
+  for (const candidateValue of candidates) {
+    const candidate = asRecord(candidateValue);
+    const content = asRecord(candidate?.content);
+    const parts = Array.isArray(content?.parts) ? content.parts : [];
+    const text = parts
+      .map((part) => asRecord(part))
+      .filter((part) => part && part.thought !== true && typeof part.text === "string")
+      .map((part) => (typeof part?.text === "string" ? part.text.trim() : ""))
+      .filter((part) => part.length > 0)
+      .join("");
+    if (text) {
+      return text;
+    }
+  }
+  return null;
+}
+
+function extractVertexFinishReason(response: unknown): string | undefined {
+  const record = asRecord(response);
+  const firstCandidate = Array.isArray(record?.candidates)
+    ? asRecord(record.candidates[0])
+    : null;
+  const finishReason =
+    typeof firstCandidate?.finishReason === "string"
+      ? firstCandidate.finishReason.trim()
+      : "";
+  return finishReason || undefined;
+}
+
+function buildVertexResponseErrorMessage(response: unknown): string {
+  const record = asRecord(response);
+  const promptFeedback = asRecord(record?.promptFeedback);
+  const blockReasonMessage =
+    typeof promptFeedback?.blockReasonMessage === "string"
+      ? promptFeedback.blockReasonMessage.trim()
+      : "";
+  if (blockReasonMessage) {
+    return `Vertex Express API blocked prompt: ${blockReasonMessage}`;
+  }
+  if (typeof promptFeedback?.blockReason === "string" && promptFeedback.blockReason) {
+    return `Vertex Express API blocked prompt: ${promptFeedback.blockReason}`;
+  }
+  const firstCandidate = Array.isArray(record?.candidates)
+    ? asRecord(record.candidates[0])
+    : null;
+  const finishMessage =
+    typeof firstCandidate?.finishMessage === "string"
+      ? firstCandidate.finishMessage.trim()
+      : "";
+  if (finishMessage) {
+    return `Vertex Express API returned no text: ${finishMessage}`;
+  }
+  const finishReason =
+    typeof firstCandidate?.finishReason === "string" ? firstCandidate.finishReason : "";
+  if (finishReason) {
+    return `Vertex Express API returned no text: finishReason=${finishReason}`;
+  }
+  const content = asRecord(firstCandidate?.content);
+  const partKinds = (Array.isArray(content?.parts) ? content.parts : [])
+    .flatMap((part) =>
+      Object.entries(asRecord(part) ?? {})
+        .filter(([, value]) => value !== undefined && value !== null)
+        .map(([key]) => key),
+    )
+    .filter((key) => key !== "thought" && key !== "thoughtSignature");
+  if (partKinds.length > 0) {
+    return `Vertex Express API returned no text parts: ${Array.from(new Set(partKinds)).join(",")}`;
+  }
+  return "Vertex Express API response missing text";
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}

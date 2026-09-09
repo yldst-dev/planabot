@@ -39,10 +39,19 @@ export function createEmptyState(): MemoryState {
 
 export function normalizeState(input: unknown): MemoryState {
   const root = asObject(input);
+  const working = normalizeWorking(root.working);
+  const semantic = normalizeSemantic(root.semantic);
   return {
-    working: normalizeWorking(root.working),
+    revision: Math.max(0, Math.trunc(toNumber(root.revision, 0))),
+    exchangeIds: getArray(root.exchangeIds).filter((id): id is string => typeof id === "string").slice(-128),
+    participantIds: [...new Set([
+      ...getArray(root.participantIds),
+      ...working.turns.map((turn) => turn.ownerUserId),
+      ...semantic.facts.map((fact) => fact.createdByUserId),
+    ].filter((id): id is string => typeof id === "string" && id.length > 0))],
+    working,
     episodic: normalizeEpisodic(root.episodic),
-    semantic: normalizeSemantic(root.semantic),
+    semantic,
     summary: normalizeSummary(root.summary)
   };
 }

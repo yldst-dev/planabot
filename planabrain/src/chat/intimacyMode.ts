@@ -58,7 +58,7 @@ export function isSafetyFinishReason(finishReason: string | undefined): boolean 
 export function isPolicyRefusal(
   content: string,
   finishReason?: string,
-  options: { intimacyActive?: boolean } = {},
+  options: { intimacyActive?: boolean; } = {},
 ): boolean {
   if (isSafetyFinishReason(finishReason)) {
     return true;
@@ -126,13 +126,13 @@ export function replaceSystemContent(
 }
 
 export async function invokeChatWithIntimacyRecovery(
-  params: ChatInvocationParams & { intimacyActive: boolean },
+  params: ChatInvocationParams & { intimacyActive: boolean; },
 ): Promise<ChatInvocationMetadata> {
   let first: ChatInvocationMetadata;
   try {
     first = await invokeChatWithMetadata(params);
   } catch (error) {
-    if (!params.settings.intimacyEnabled || !isSafetyInvocationError(error)) {
+    if (!params.settings.intimacyEnabled || !params.intimacyActive || !isSafetyInvocationError(error)) {
       throw error;
     }
     first = {
@@ -145,6 +145,7 @@ export async function invokeChatWithIntimacyRecovery(
   }
   if (
     !params.settings.intimacyEnabled ||
+    !params.intimacyActive ||
     !isPolicyRefusal(first.content, first.finishReason, {
       intimacyActive: params.intimacyActive,
     })

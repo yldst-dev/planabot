@@ -68,7 +68,9 @@ export async function migrateJsonMemoryToSqlite(args?: {
     }
 
     const state = normalizeState(await jsonStore.loadState(scope));
-    await sqliteStore.saveState(scope, state);
+    const current = await sqliteStore.loadState(scope);
+    if ((current.revision ?? 0) > 0) { skippedScopes += 1; continue; }
+    await sqliteStore.saveState(scope, { ...state, revision: current.revision ?? 0 });
     migratedScopes += 1;
     turns += state.working.turns.length;
     semanticFacts += state.semantic.facts.length;

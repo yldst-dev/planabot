@@ -13,7 +13,8 @@ export type Settings = {
     | "openrouter"
     | "ollama"
     | "cerebras"
-    | "modelstudio";
+    | "modelstudio"
+    | "geminiweb";
   googleApiKey?: string;
   vertexExpressApiKey?: string;
   vertexExpressApiVersion?: string;
@@ -26,6 +27,8 @@ export type Settings = {
   modelStudioApiKey?: string;
   modelStudioBaseUrl?: string;
   modelStudioWebSearchEnabled: boolean;
+  geminiWebApiKey?: string;
+  geminiWebBaseUrl?: string;
   openRouterSiteUrl?: string;
   openRouterAppName?: string;
   openRouterWebSearchEnabled: boolean;
@@ -78,6 +81,9 @@ export function loadSettings(): Settings {
   const openRouterApiKey = process.env.OPENROUTER_API_KEY?.trim();
   const cerebrasApiKey = process.env.CEREBRAS_API_KEY?.trim();
   const modelStudioApiKey = process.env.MODEL_STUDIO_API_KEY?.trim();
+  const geminiWebApiKey =
+    readOptionalEnv("PLANABRAIN_GEMINIWEB_API_KEY") ??
+    readOptionalEnv("GEMINIWEB_API_KEY");
   const ollamaApiKeys = resolveOllamaApiKeys();
   if (aiProvider === "google" && !googleApiKey) {
     throw new Error(
@@ -107,6 +113,11 @@ export function loadSettings(): Settings {
   if (aiProvider === "modelstudio" && !modelStudioApiKey) {
     throw new Error(
       "MODEL_STUDIO_API_KEY is required when PLANABRAIN_AI_PROVIDER=modelstudio",
+    );
+  }
+  if (aiProvider === "geminiweb" && !geminiWebApiKey) {
+    throw new Error(
+      "PLANABRAIN_GEMINIWEB_API_KEY is required when PLANABRAIN_AI_PROVIDER=geminiweb",
     );
   }
 
@@ -255,6 +266,10 @@ export function loadSettings(): Settings {
         ? resolveModelStudioBaseUrl()
         : undefined,
     modelStudioWebSearchEnabled,
+    geminiWebApiKey,
+    geminiWebBaseUrl: usesProvider("geminiweb")
+      ? resolveGeminiWebBaseUrl()
+      : undefined,
     ollamaApiKeys,
     geminiMockBaseUrl:
       usesProvider("geminimock")
@@ -295,17 +310,19 @@ export function loadSettings(): Settings {
     webFetchMaxChars,
     webFetchMaxTotalChars,
     chatModel:
-      (aiProvider === "openrouter"
-        ? process.env.PLANABRAIN_OPENROUTER_MODEL
-        : aiProvider === "vertexexpress"
-          ? process.env.PLANABRAIN_VERTEX_EXPRESS_MODEL
-          : aiProvider === "ollama"
-            ? process.env.PLANABRAIN_OLLAMA_MODEL
-            : aiProvider === "cerebras"
-              ? process.env.PLANABRAIN_CEREBRAS_MODEL
-              : aiProvider === "modelstudio"
-                ? process.env.PLANABRAIN_MODELSTUDIO_MODEL
-                : undefined) ??
+      (aiProvider === "geminiweb"
+        ? process.env.PLANABRAIN_GEMINIWEB_MODEL
+        : aiProvider === "openrouter"
+          ? process.env.PLANABRAIN_OPENROUTER_MODEL
+          : aiProvider === "vertexexpress"
+            ? process.env.PLANABRAIN_VERTEX_EXPRESS_MODEL
+            : aiProvider === "ollama"
+              ? process.env.PLANABRAIN_OLLAMA_MODEL
+              : aiProvider === "cerebras"
+                ? process.env.PLANABRAIN_CEREBRAS_MODEL
+                : aiProvider === "modelstudio"
+                  ? process.env.PLANABRAIN_MODELSTUDIO_MODEL
+                  : undefined) ??
       process.env.PLANABRAIN_CHAT_MODEL ??
       process.env.PLANABRAIN_GEMINI_MODEL ??
       defaultChatModel(aiProvider),
@@ -360,6 +377,8 @@ export function defaultChatModel(provider: Settings["aiProvider"]): string {
       return "gemma-4-31b";
     case "modelstudio":
       return "qwen-plus";
+    case "geminiweb":
+      return "gemini-3.8-flash";
     default:
       return "gemini-3-flash-preview";
   }
@@ -384,7 +403,8 @@ function resolveAiProvider(
   | "openrouter"
   | "ollama"
   | "cerebras"
-  | "modelstudio" {
+  | "modelstudio"
+  | "geminiweb" {
   const normalized = raw.trim().toLowerCase();
   if (!normalized) {
     return "google";
@@ -431,8 +451,16 @@ function resolveAiProvider(
   ) {
     return "modelstudio";
   }
+  if (
+    normalized === "geminiweb" ||
+    normalized === "gemini-web" ||
+    normalized === "gemini_web" ||
+    normalized === "web2api"
+  ) {
+    return "geminiweb";
+  }
   throw new Error(
-    "PLANABRAIN_AI_PROVIDER must be one of: google, google_cloud, vertexexpress, vertex_express, vertex-express, geminimock, mock, openrouter, ollama, ollama_cloud, cerebras, modelstudio, alibaba, dashscope, qwen",
+    "PLANABRAIN_AI_PROVIDER must be one of: google, google_cloud, vertexexpress, vertex_express, vertex-express, geminimock, mock, openrouter, ollama, ollama_cloud, cerebras, modelstudio, alibaba, dashscope, qwen, geminiweb, gemini-web, gemini_web, web2api",
   );
 }
 
@@ -501,6 +529,34 @@ export function normalizeOpenRouterBaseUrl(
   }
   const pathname = new URL(normalized).pathname;
   return pathname && pathname !== "/" ? normalized : `${normalized}/api/v1`;
+}
+
+function resolveGeminiWebBaseUrl(): string {
+  return normalizeGeminiWebBaseUrl(
+    readOptionalEnv("PLANABRAIN_GEMINIWEB_BASE_URL"),
+    "PLANABRAIN_GEMINIWEB_BASE_URL",
+  );
+}
+
+export function normalizeGeminiWebBaseUrl(
+  raw: string | undefined,
+  envKey: string,
+): string {
+  const explicit = raw?.trim();
+  if (!explicit) {
+    throw new Error(
+      `${envKey} is required when PLANABRAIN_AI_PROVIDER=geminiweb`,
+    );
+  }
+  const normalized = normalizeApiBaseUrl(explicit);
+  if (!normalized) {
+    throw new Error(`${envKey} must be a valid http(s) URL`);
+  }
+  const pathname = new URL(normalized).pathname;
+  if (!pathname || pathname === "/") {
+    return `${normalized}/v1`;
+  }
+  return normalized;
 }
 
 function resolveCerebrasBaseUrl(): string {

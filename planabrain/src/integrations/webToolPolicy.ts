@@ -1,3 +1,4 @@
+import { consumeTool } from "../runtime/execution.js";
 import { extractUrls, parseWebFetchUrl } from "./webFetch.js";
 
 const MAX_MODEL_WEB_TOOL_CALLS = 8;
@@ -14,7 +15,7 @@ export class WebToolPolicy {
   }
 
   tryStartToolCall(): boolean {
-    if (this.executedToolCalls >= MAX_MODEL_WEB_TOOL_CALLS) {
+    if (this.executedToolCalls >= MAX_MODEL_WEB_TOOL_CALLS || !consumeTool()) {
       return false;
     }
     this.executedToolCalls += 1;

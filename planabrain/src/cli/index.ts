@@ -1,3 +1,4 @@
+import { runExecution } from "../runtime/execution.js";
 import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
@@ -35,7 +36,15 @@ import {
 export async function main(argv: string[]): Promise<void> {
   const parsed = parseCli(argv);
   const handler = COMMANDS[parsed.command];
-  await handler(parsed.args, { loadSettings });
+  if (parsed.command === "serve") {
+    await handler(parsed.args, { loadSettings });
+  } else {
+    const deadline = Number(process.env.PLANABRAIN_DEADLINE_MS);
+    await runExecution(parsed.command, () => handler(parsed.args, { loadSettings }), {
+      requestId: process.env.PLANABRAIN_REQUEST_ID,
+      deadlineMs: Number.isFinite(deadline) && deadline > 0 ? deadline : undefined,
+    });
+  }
 }
 
 try {

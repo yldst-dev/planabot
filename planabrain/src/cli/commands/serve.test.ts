@@ -75,7 +75,7 @@ test("health responds and rejects a wrong token", async () => {
   await withServer("secret", async (base) => {
     const ok = await call(base, "/v1/health");
     assert.equal(ok.status, 200);
-    const body = (await ok.json()) as { ok: boolean; version: string };
+    const body = (await ok.json()) as { ok: boolean; version: string; };
     assert.equal(body.ok, true);
     assert.equal(typeof body.version, "string");
 
@@ -100,7 +100,7 @@ test("turn-prepare runs the pipeline over http", async () => {
       }),
     });
     assert.equal(response.status, 200);
-    const body = (await response.json()) as { schedule: { handled: boolean; dueAtMs: number } };
+    const body = (await response.json()) as { schedule: { handled: boolean; dueAtMs: number; }; };
     assert.equal(body.schedule.handled, true);
     assert.equal(body.schedule.dueAtMs, 1_788_800_600_000);
   });
@@ -128,15 +128,15 @@ test("ask answers through the configured provider and validation errors are stru
       body: JSON.stringify({ userId: "u1", question: "안녕", memoryEnabled: false }),
     });
     assert.equal(answered.status, 200);
-    const body = (await answered.json()) as { answer: string };
+    const body = (await answered.json()) as { answer: string; };
     assert.match(body.answer, /안녕하세요/u);
 
     const invalid = await call(base, "/v1/ask", {
       method: "POST",
       body: JSON.stringify({ userId: "u1" }),
     });
-    assert.equal(invalid.status, 500);
-    const error = (await invalid.json()) as { error: { message: string } };
+    assert.equal(invalid.status, 400);
+    const error = (await invalid.json()) as { error: { message: string; }; };
     assert.match(error.error.message, /question/u);
   });
 });
@@ -157,7 +157,7 @@ test("memory-exchange stores a turn in the data root", async () => {
         }),
       });
       assert.equal(response.status, 200);
-      const body = (await response.json()) as { ok: boolean };
+      const body = (await response.json()) as { ok: boolean; };
       assert.equal(body.ok, true);
     });
   } finally {
@@ -183,4 +183,55 @@ test("request parsers validate required fields", () => {
     () => parseExchangeInput(JSON.stringify({ userId: "u", chatScope: "c", userText: "a" })),
     /assistantText/u,
   );
+});
+
+test("disconnecting an ask cancels its provider request", async () => {
+  await withServer("secret", async (base) => {
+    let started: () => void = () => { };
+    let cancelled: () => void = () => { };
+    const upstreamStarted = new Promise<void>((resolve) => { started = resolve; });
+    const upstreamCancelled = new Promise<void>((resolve) => { cancelled = resolve; });
+    globalThis.fetch = async (_input, init) => {
+      started();
+      return new Promise<Response>((_resolve, reject) => {
+        const abort = (): void => { cancelled(); reject(init?.signal?.reason); };
+        if (init?.signal?.aborted) abort();
+        else init?.signal?.addEventListener("abort", abort, { once: true });
+      });
+    };
+    const controller = new AbortController();
+    const request = call(base, "/v1/ask", { method: "POST", signal: controller.signal, body: JSON.stringify({ userId: "actor", question: "질문", memoryEnabled: false }) });
+    const rejected = assert.rejects(request, { name: "AbortError" });
+    await upstreamStarted;
+    controller.abort();
+    await rejected;
+    await upstreamCancelled;
+  });
+});
+
+test("repeated ask IDs reuse a response without another provider call", async () => {
+  await withServer("secret", async (base) => {
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "확인했습니다." } }] }));
+    };
+    const body = JSON.stringify({ userId: "actor", question: "질문", requestId: "request-one", memoryEnabled: false });
+    const first = await call(base, "/v1/ask", { method: "POST", body });
+    const second = await call(base, "/v1/ask", { method: "POST", body });
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.deepEqual(await first.json(), await second.json());
+    assert.equal(calls, 1);
+  });
+});
+
+test("expired deadlines reject an ask before its provider is contacted", async () => {
+  await withServer("secret", async (base) => {
+    let calls = 0;
+    globalThis.fetch = async () => { calls += 1; throw new Error("unexpected provider call"); };
+    const response = await call(base, "/v1/ask", { method: "POST", body: JSON.stringify({ userId: "actor", question: "질문", deadlineMs: Date.now() - 1 }) });
+    assert.equal(response.status, 504);
+    assert.equal(calls, 0);
+  });
 });

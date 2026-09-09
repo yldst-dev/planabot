@@ -56,7 +56,7 @@ function createSettings(
 
 function installFetchQueue(
   bodies: unknown[],
-  requests: Array<{ input: string; init?: RequestInit }> = [],
+  requests: Array<{ input: string; init?: RequestInit; }> = [],
 ): () => void {
   const original = globalThis.fetch;
   let index = 0;
@@ -228,7 +228,7 @@ function finalAnswerResponse(content: string): unknown {
 }
 
 test("modelstudio promotes tool search results to citations", async () => {
-  const requests: Array<{ input: string; init?: RequestInit }> = [];
+  const requests: Array<{ input: string; init?: RequestInit; }> = [];
   const restore = installFetchQueue(
     [
       searchToolCallResponse("오늘 아침 IT 뉴스"),
@@ -396,7 +396,7 @@ test("modelstudio still fails closed when the search returns nothing", async () 
 });
 
 test("uses only currentTurnText for the current-information gate", async () => {
-  const requests: Array<{ input: string; init?: RequestInit }> = [];
+  const requests: Array<{ input: string; init?: RequestInit; }> = [];
   const restore = installFetchQueue(
     [
       {
@@ -440,7 +440,7 @@ test("uses only currentTurnText for the current-information gate", async () => {
 });
 
 test("fails closed when a current-information request has no verified citation", async () => {
-  const requests: Array<{ input: string; init?: RequestInit }> = [];
+  const requests: Array<{ input: string; init?: RequestInit; }> = [];
   const restore = installFetchQueue(
     [
       {
@@ -477,8 +477,8 @@ test("fails closed when a current-information request has no verified citation",
   }
 });
 
-test("explicit search request attaches the search tool and keeps the answer", async () => {
-  const requests: Array<{ input: string; init?: RequestInit }> = [];
+test("explicit search request requires evidence even when the tool was attached", async () => {
+  const requests: Array<{ input: string; init?: RequestInit; }> = [];
   const restore = installFetchQueue(
     [
       {
@@ -501,8 +501,8 @@ test("explicit search request attaches the search tool and keeps the answer", as
       settings: createSettings(),
     });
 
-    assert.doesNotMatch(answer, /확인 불가/u);
-    assert.match(answer, /해당 회사를 확인했습니다/u);
+    assert.match(answer, /확인 불가/u);
+    assert.doesNotMatch(answer, /해당 회사를 확인했습니다/u);
     const payload = JSON.parse(String(requests[0]?.init?.body)) as Record<
       string,
       unknown

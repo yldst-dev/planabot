@@ -29,10 +29,35 @@ test("credentials are resolved per provider from the registry", () => {
   assert.equal(providerHasCredentials(settings, "ollama"), true);
   assert.equal(providerHasCredentials(settings, "openrouter"), false);
   assert.equal(providerHasCredentials(settings, "modelstudio"), false);
+  assert.equal(providerHasCredentials(settings, "geminiweb"), false);
+});
+
+test("geminiweb credentials require both key and base url", () => {
+  assert.equal(
+    providerHasCredentials(settingsFor({ geminiWebApiKey: "k" }), "geminiweb"),
+    false,
+  );
+  assert.equal(
+    providerHasCredentials(
+      settingsFor({ geminiWebBaseUrl: "http://10.0.0.5:8083/v1" }),
+      "geminiweb",
+    ),
+    false,
+  );
+  assert.equal(
+    providerHasCredentials(
+      settingsFor({
+        geminiWebApiKey: "k",
+        geminiWebBaseUrl: "http://10.0.0.5:8083/v1",
+      }),
+      "geminiweb",
+    ),
+    true,
+  );
 });
 
 test("providers without image support reject image messages before any request", async () => {
-  for (const aiProvider of ["google", "modelstudio", "geminimock"] as const) {
+  for (const aiProvider of ["modelstudio", "geminimock"] as const) {
     await assert.rejects(
       invokeChatWithMetadata({
         settings: settingsFor({ aiProvider, googleApiKey: "g", modelStudioApiKey: "m" }),
@@ -44,8 +69,44 @@ test("providers without image support reject image messages before any request",
           },
         ],
       }),
-      /이미지 입력은 현재 openrouter 또는 ollama provider에서만 지원합니다/u,
+      /현재 선택한 모델 연결은 이미지 입력을 지원하지 않습니다/u,
     );
+  }
+});
+
+test("geminiweb accepts image messages", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: { role: "assistant", content: "확인 완료." },
+            finish_reason: "stop",
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+  try {
+    const result = await invokeChatWithMetadata({
+      settings: settingsFor({
+        aiProvider: "geminiweb",
+        geminiWebApiKey: "k",
+        geminiWebBaseUrl: "http://10.0.0.5:8083/v1",
+        chatModel: "gemini-3.8-flash",
+      }),
+      messages: [
+        {
+          role: "user",
+          content: "이 사진 봐줘",
+          images: [{ mimeType: "image/png", data: "AAAA" }],
+        },
+      ],
+    });
+    assert.equal(result.content, "확인 완료.");
+  } finally {
+    globalThis.fetch = original;
   }
 });
 

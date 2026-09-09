@@ -129,8 +129,16 @@ where
             .await;
         return Ok(());
     };
+    let conversation_lock =
+        state.planabrain_conversation_lock(&format!("{}_{}", msg.chat.id.0, conversation_scope_id));
+    let _conversation_guard = conversation_lock.lock_owned().await;
+    let request_id = format!("telegram_{}_{}", msg.chat.id.0, msg.id.0);
+    let deadline_ms = crate::schedule::now_ms() + 175_000;
+    let chat_scope = format!("chat_{}", msg.chat.id.0);
     let local_memory_enabled = planabrain::is_local_memory_enabled();
     let mut prepared = match planabrain::prepare_turn(&planabrain::TurnPrepareInput {
+        request_id: request_id.clone(),
+        deadline_ms,
         user_id: user_id.clone(),
         chat_scope: format!("chat_{}", msg.chat.id.0),
         conversation_id: Some(conversation_scope_id.clone()),
@@ -200,16 +208,24 @@ where
     };
     let now = kst_now().await;
     let question = format_question_with_metadata(&question, now, &msg);
+    let ask_context = planabrain::AskContext {
+        user_id: &user_id,
+        chat_scope: &chat_scope,
+        conversation_id: &conversation_scope_id,
+        request_id: &request_id,
+        deadline_ms,
+    };
     let ask_fut = planabrain::run_planabrain_ask(
         &question,
         &current_turn_text,
         prepared.memory_context.as_deref(),
-        &user_id,
+        &ask_context,
         image_input,
         &prepared.recent_turns,
     );
     tokio::pin!(ask_fut);
-    let timeout = time::sleep(PLANABRAIN_RESPONSE_TIMEOUT);
+    let remaining = Duration::from_millis((deadline_ms - crate::schedule::now_ms()).max(1) as u64);
+    let timeout = time::sleep(remaining.min(PLANABRAIN_RESPONSE_TIMEOUT));
     tokio::pin!(timeout);
 
     let answer = tokio::select! {
@@ -222,7 +238,7 @@ where
             let sent = deliver_planabrain_answer(
                 &bot,
                 &msg,
-                "지연 감지.\n선생님.\n응답 전송이 180초 이상 지연되었습니다.\n실패로 간주합니다.\n다시 시도해 주세요.".to_string(),
+                "지연 감지.\n선생님.\n요청 처리 시간이 초과되었습니다.\n실패로 간주합니다.\n다시 시도해 주세요.".to_string(),
             )
             .await?;
             state
@@ -249,6 +265,7 @@ where
                     msg.chat.id.0,
                     Some(&conversation_scope_id),
                     outcome.transcript.as_ref(),
+                    &request_id,
                 )
                 .await
                 {
@@ -694,7 +711,12 @@ where
             return None;
         }
     };
-    let dir = current_dir.join(".planabot/planabrain_images");
+    let data_root = std::env::var("PLANABRAIN_DATA_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| current_dir.join(value))
+        .unwrap_or(current_dir);
+    let dir = data_root.join(".planabot/planabrain_images");
     if let Err(err) = fs::create_dir_all(&dir).await {
         warn!("이미지 임시 디렉터리 생성 실패: {}", err);
         return None;

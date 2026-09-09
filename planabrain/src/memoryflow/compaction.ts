@@ -1,4 +1,6 @@
-import { loadSettings } from "../config/settings.js";
+import { resolveAuxSettings } from "../chat/auxSettings.js";
+import { checkExecution } from "../runtime/execution.js";
+import { loadSettings, type Settings } from "../config/settings.js";
 import { invokeChat } from "../integrations/chat.js";
 import { summarizeTurns } from "./extractors.js";
 import type { Turn } from "./types.js";
@@ -17,6 +19,7 @@ const MEMORY_COMPACTION_SYSTEM_PROMPT = `당신은 대화 메모리 압축기입
 
 export async function buildCompactedSummary(params: {
   previousSummary?: string;
+  settings?: Settings;
   turns: Turn[];
 }): Promise<string> {
   const previousSummary = normalizeOptionalText(params.previousSummary);
@@ -25,9 +28,12 @@ export async function buildCompactedSummary(params: {
     return "";
   }
 
-  const settings = loadSettings();
+  checkExecution();
+  const settings = { ...resolveAuxSettings(params.settings ?? loadSettings()), chatMaxOutputTokens: 768 };
   const response = await invokeChat({
     settings,
+    enableSearchTool: false,
+    maxContinuations: 0,
     messages: [
       { role: "system", content: MEMORY_COMPACTION_SYSTEM_PROMPT },
       {

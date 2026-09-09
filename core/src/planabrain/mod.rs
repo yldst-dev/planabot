@@ -98,6 +98,8 @@ const PLANABRAIN_ASK_TIMEOUT: Duration = Duration::from_secs(200);
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TurnPrepareInput {
+    pub request_id: String,
+    pub deadline_ms: i64,
     pub user_id: String,
     pub chat_scope: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -112,8 +114,19 @@ pub(crate) struct TurnPrepareInput {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct AskContext<'a> {
+    pub user_id: &'a str,
+    pub chat_scope: &'a str,
+    pub conversation_id: &'a str,
+    pub request_id: &'a str,
+    pub deadline_ms: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AskRequest<'a> {
-    user_id: &'a str,
+    #[serde(flatten)]
+    context: &'a AskContext<'a>,
     question: &'a str,
     current_turn_text: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -125,7 +138,7 @@ struct AskRequest<'a> {
     recent_turns: &'a [serde_json::Value],
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AskTranscript {
     #[serde(default)]
@@ -157,6 +170,7 @@ struct AskResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ExchangeRequest<'a> {
+    request_id: &'a str,
     user_id: &'a str,
     chat_scope: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -321,7 +335,7 @@ pub(crate) async fn run_planabrain_ask(
     question: &str,
     current_turn_text: &str,
     memory_context: Option<&str>,
-    user_id: &str,
+    context: &AskContext<'_>,
     image_input: Option<ImageInput>,
     recent_turns: &[serde_json::Value],
 ) -> Result<AskOutcome> {
@@ -329,8 +343,9 @@ pub(crate) async fn run_planabrain_ask(
         return Err(anyhow!("planabrain 비활성화"));
     }
 
+    let _image_cleanup = ImageCleanup(image_input.as_ref().map(|image| image.path.clone()));
     let request = AskRequest {
-        user_id,
+        context,
         question,
         current_turn_text,
         memory_context,
@@ -366,7 +381,7 @@ pub(crate) async fn run_planabrain_ask(
         question,
         current_turn_text,
         memory_context,
-        user_id,
+        context,
         image_input,
         recent_turns,
     )?;
@@ -375,9 +390,11 @@ pub(crate) async fn run_planabrain_ask(
         .take()
         .context("planabrain 실행 명령이 없습니다")?;
     let output = run_planabrain_output(command, None, PLANABRAIN_ASK_TIMEOUT, "ask").await?;
+    let response: AskResponse = serde_json::from_str(success_stdout(output, "ask")?.trim())
+        .context("planabrain CLI 답변 결과 파싱 실패")?;
     Ok(AskOutcome {
-        answer: success_stdout(output, "ask")?,
-        transcript: None,
+        answer: response.answer,
+        transcript: response.transcript,
     })
 }
 
@@ -398,6 +415,7 @@ pub(crate) async fn remember_planabrain_exchange(
     chat_id: i64,
     conversation_scope_id: Option<&str>,
     transcript: Option<&AskTranscript>,
+    request_id: &str,
 ) -> Result<()> {
     if !is_local_memory_enabled() {
         return Ok(());
@@ -405,6 +423,7 @@ pub(crate) async fn remember_planabrain_exchange(
 
     let chat_scope = format!("chat_{chat_id}");
     let request = ExchangeRequest {
+        request_id,
         user_id,
         chat_scope: &chat_scope,
         conversation_id: conversation_scope_id,
@@ -429,7 +448,7 @@ pub(crate) async fn remember_planabrain_exchange(
     }
 
     let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
-    let (command, temp_files) = build_memory_exchange_command(
+    let (mut command, temp_files) = build_memory_exchange_command(
         &root,
         current_turn_text,
         answer,
@@ -437,6 +456,13 @@ pub(crate) async fn remember_planabrain_exchange(
         &chat_scope,
         conversation_scope_id,
     )?;
+    command.env("PLANABRAIN_REQUEST_ID", request_id);
+    if let Some(transcript) = transcript {
+        command.env(
+            "PLANABRAIN_TRANSCRIPT_JSON",
+            serde_json::to_string(transcript)?,
+        );
+    }
     let result =
         run_planabrain_output(command, None, PLANABRAIN_COMMAND_TIMEOUT, "memory-exchange").await;
     for path in temp_files {
@@ -687,6 +713,16 @@ static ALLOWED_USER_IDS: Lazy<HashSet<i64>> = Lazy::new(|| {
         .collect()
 });
 
+struct ImageCleanup(Option<PathBuf>);
+
+impl Drop for ImageCleanup {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.as_ref() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 struct PreparedPlanabrainAsk {
     command: Option<ProcessCommand>,
     question_file: Option<PathBuf>,
@@ -713,7 +749,7 @@ fn prepare_planabrain_ask(
     question: &str,
     current_turn_text: &str,
     memory_context: Option<&str>,
-    user_id: &str,
+    context: &AskContext<'_>,
     image_input: Option<ImageInput>,
     recent_turns: &[serde_json::Value],
 ) -> Result<PreparedPlanabrainAsk> {
@@ -726,7 +762,12 @@ fn prepare_planabrain_ask(
     let mut question_file = None;
     command
         .current_dir(&root)
-        .env("PLANABRAIN_USER_ID", user_id)
+        .env("PLANABRAIN_USER_ID", context.user_id)
+        .env("PLANABRAIN_CHAT_SCOPE", context.chat_scope)
+        .env("PLANABRAIN_CONVERSATION_ID", context.conversation_id)
+        .env("PLANABRAIN_REQUEST_ID", context.request_id)
+        .env("PLANABRAIN_DEADLINE_MS", context.deadline_ms.to_string())
+        .env("PLANABRAIN_OUTPUT_JSON", "1")
         .env("PLANABRAIN_CURRENT_TURN_TEXT", current_turn_text)
         .env_remove("PLANABRAIN_MEMORY_CONTEXT");
     if let Some(memory_context) = memory_context {
@@ -989,6 +1030,8 @@ mod tests {
     #[test]
     fn turn_prepare_input_serializes_camel_case_and_skips_empty_options() {
         let input = TurnPrepareInput {
+            request_id: "test-request".into(),
+            deadline_ms: 200_000,
             user_id: "u1".into(),
             chat_scope: "chat_1".into(),
             conversation_id: None,
@@ -1010,6 +1053,8 @@ mod tests {
     #[ignore]
     async fn prepare_turn_runs_against_real_cli() {
         let input = TurnPrepareInput {
+            request_id: "test-request".into(),
+            deadline_ms: 200_000,
             user_id: "turn_test_user".into(),
             chat_scope: "chat_turn_test".into(),
             conversation_id: None,

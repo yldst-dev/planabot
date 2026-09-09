@@ -109,6 +109,9 @@ export interface SummaryStore {
 }
 
 export interface MemoryState {
+  revision?: number;
+  exchangeIds?: string[];
+  participantIds?: string[];
   working: WorkingStore;
   semantic: SemanticStore;
   episodic: EpisodicStore;
@@ -138,6 +141,7 @@ export interface RememberAssistantInput extends ScopeParams {
 }
 
 export interface RememberExchangeInput extends ScopeParams {
+  requestId?: string;
   userText: string;
   assistantText: string;
   at?: number;

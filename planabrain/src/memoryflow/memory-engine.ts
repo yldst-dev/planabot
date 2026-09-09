@@ -1,119 +1,26 @@
-import { randomUUID } from "node:crypto";
-
-import { buildCompactedSummary, buildFallbackCompactedSummary } from "./compaction.js";
-import { cosineSimilarity, embedText } from "./embedding.js";
-import {
-  extractSemanticFacts,
-  scoreSalience,
-  shouldCreateEpisode,
-  shouldStoreInGroupMemory,
-  summarizeTurns
-} from "./extractors.js";
-import { createMemoryStore } from "./memory-store.js";
-import { buildContextBundle } from "./ranking.js";
-import { createEmptyState, normalizeState } from "./state-normalize.js";
-import { buildScopeDescriptor, buildScopeId, safeId } from "./storage.js";
-import { estimateTokens } from "./token-estimator.js";
+import { type EngineConfig, type MemoryStore, type ScopeParams, type MemoryRole, type RetrieveContextInput, type ContextBundle, type PreparePromptInput, type RememberExchangeInput, type Turn, type RememberAssistantInput, type ScopeDescriptor, type WireMessage, type MemoryState, type SemanticFact } from "./types.js";
+import { type Settings } from "../config/settings.js";
 import { loadConfig } from "./config.js";
-import type {
-  ContextBundle,
-  EngineConfig,
-  MemoryRole,
-  MemoryState,
-  MemoryStore,
-  PreparePromptInput,
-  RememberAssistantInput,
-  RememberExchangeInput,
-  RetrieveContextInput,
-  ScopeDescriptor,
-  ScopeParams,
-  SemanticFact,
-  Turn,
-  WireMessage
-} from "./types.js";
-
-interface IngestTurnResult {
-  scopeId: string;
-  addedTurn?: Turn;
-  groupStored?: boolean;
-  counts: {
-    working: number;
-    episodic: number;
-    semantic: number;
-    summary: number;
-  };
-}
-
-interface InspectScopeResult {
-  scopeId: string;
-  state: MemoryState;
-}
-
-interface ResetScopeResult {
-  scopeId: string;
-  removed: true;
-}
-
-interface ResetUserResult {
-  userId: string;
-  removed: boolean;
-}
-
-interface ResetAllResult {
-  removed: boolean;
-}
-
-interface ListSemanticFactsResult {
-  scopeId: string;
-  facts: SemanticFact[];
-}
-
-interface DeleteSemanticFactResult {
-  scopeId: string;
-  factId: string;
-  removed: boolean;
-}
-
-interface UpdateSemanticFactResult {
-  scopeId: string;
-  factId: string;
-  updated: boolean;
-  fact?: SemanticFact;
-}
-
-interface PreparePromptResult {
-  scopeId: string;
-  userScopeId: string;
-  conversationScopeId?: string;
-  groupScopeId: string;
-  userText: string;
-  userMemoryContext: string;
-  conversationMemoryContext: string;
-  groupMemoryContext: string;
-  memoryContext: string;
-  memoryTokenEstimate: number;
-  sections: ContextBundle["sections"];
-  groupStored: boolean;
-}
-
-interface RememberExchangeResult {
-  scopeId: string;
-  addedTurns: Turn[];
-  groupStored: boolean;
-  counts: IngestTurnResult["counts"];
-}
-
-interface BudgetSplit {
-  userBudget: number;
-  conversationBudget: number;
-  groupBudget: number;
-}
+import { createMemoryStore } from "./memory-store.js";
+import { buildScopeId, buildScopeDescriptor, safeId } from "./storage.js";
+import { type IngestTurnResult, type PreparePromptResult, type RememberExchangeResult, type InspectScopeResult, type ResetScopeResult, type ResetUserResult, type ResetAllResult, type ListSemanticFactsResult, type DeleteSemanticFactResult, type UpdateSemanticFactResult } from "./results.js";
+import { resolveBudgetSplit, emptyContext, mergeContextBundles, sanitizeAssistantMemoryText, normalizeRole, buildTurn, selectVisibleSemanticFacts, shouldStoreSemanticFact, sameSemanticFactIdentity, formatTurnSpeaker, shouldCompactWorkingTurns, collapseSummaryItems, summarizeBundle } from "./memory-policy.js";
+import { shouldStoreInGroupMemory, scoreSalience, extractSemanticFacts, shouldCreateEpisode, summarizeTurns } from "./extractors.js";
+import { embedText, cosineSimilarity } from "./embedding.js";
+import { randomUUID } from "node:crypto";
+import { estimateTokens } from "./token-estimator.js";
+import { buildContextBundle } from "./ranking.js";
+import { serial } from "../runtime/serial.js";
+import { MemoryConflictError } from "./concurrency.js";
+import { buildCompactedSummary, buildFallbackCompactedSummary } from "./compaction.js";
+import { normalizeState, createEmptyState } from "./state-normalize.js";
+import { checkExecution } from "../runtime/execution.js";
 
 export class LocalMemoryEngine {
   private readonly config: EngineConfig;
   private readonly store: MemoryStore;
 
-  constructor(overrides: Partial<EngineConfig> = {}) {
+  constructor(overrides: Partial<EngineConfig> = {}, private readonly modelSettings?: Settings) {
     this.config = { ...loadConfig(), ...overrides };
     this.store = createMemoryStore(this.config);
   }
@@ -167,18 +74,18 @@ export class LocalMemoryEngine {
     const conversationBundle =
       conversationScope && split.conversationBudget > 0
         ? await this.retrieveContextForScope(
-            conversationScope,
-            String(params.userText ?? ""),
-            split.conversationBudget
-          )
+          conversationScope,
+          String(params.userText ?? ""),
+          split.conversationBudget
+        )
         : emptyContext(split.conversationBudget);
     const groupBundle =
       this.config.groupMemoryEnabled && split.groupBudget > 0
         ? await this.retrieveContextForScope(
-            groupScope,
-            String(params.userText ?? ""),
-            split.groupBudget
-          )
+          groupScope,
+          String(params.userText ?? ""),
+          split.groupBudget
+        )
         : emptyContext(split.groupBudget);
 
     const merged = mergeContextBundles({
@@ -227,6 +134,7 @@ export class LocalMemoryEngine {
     const userScope = this.userScope(params.userId, params.chatId);
     const userResult = await this.storeExchangeInScope({
       scope: userScope,
+      requestId: params.requestId,
       userText,
       assistantText: assistantMemoryText,
       at,
@@ -239,6 +147,7 @@ export class LocalMemoryEngine {
     if (params.conversationId) {
       await this.storeExchangeInScope({
         scope: this.conversationScope(params.chatId, params.conversationId),
+        requestId: params.requestId,
         userText,
         assistantText: assistantMemoryText,
         at,
@@ -258,6 +167,7 @@ export class LocalMemoryEngine {
     if (groupStored) {
       await this.storeExchangeInScope({
         scope: this.groupScope(params.chatId),
+        requestId: params.requestId,
         userText,
         assistantText: assistantMemoryText,
         at,
@@ -268,13 +178,16 @@ export class LocalMemoryEngine {
       });
     }
 
+    if (params.conversationId) {
+      await this.compactScope(this.conversationScope(params.chatId, params.conversationId));
+    }
     return {
       ...userResult,
       groupStored
     };
   }
 
-  async listConversationTurns(params: { chatId: string; conversationId: string }): Promise<Turn[]> {
+  async listConversationTurns(params: { chatId: string; conversationId: string; }): Promise<Turn[]> {
     const state = await this.loadState(this.conversationScope(params.chatId, params.conversationId));
     return state.working.turns;
   }
@@ -364,54 +277,60 @@ export class LocalMemoryEngine {
     };
   }
 
-  async deleteSemanticFact(params: ScopeParams & { factId: string }): Promise<DeleteSemanticFactResult> {
+  async deleteSemanticFact(params: ScopeParams & { factId: string; }): Promise<DeleteSemanticFactResult> {
     const scope = this.resolveScope(params);
-    const state = await this.loadState(scope);
-    const before = state.semantic.facts.length;
-    state.semantic.facts = state.semantic.facts.filter((fact) => fact.id !== params.factId);
-    const removed = state.semantic.facts.length !== before;
-    if (removed) {
-      await this.saveState(scope, state);
-    }
-    return {
-      scopeId: scope.scopeId,
-      factId: params.factId,
-      removed
-    };
-  }
-
-  async updateSemanticFact(
-    params: ScopeParams & { factId: string; value: string }
-  ): Promise<UpdateSemanticFactResult> {
-    const scope = this.resolveScope(params);
-    const state = await this.loadState(scope);
-    const nextValue = String(params.value ?? "").trim();
-    if (!nextValue) {
-      throw new Error("메모리 값은 비워둘 수 없습니다.");
-    }
-    const target = state.semantic.facts.find((fact) => fact.id === params.factId);
-    if (!target) {
+    return this.mutateScope(scope, async () => {
+      const state = await this.loadState(scope);
+      const before = state.semantic.facts.length;
+      state.semantic.facts = state.semantic.facts.filter((fact) => fact.id !== params.factId);
+      const removed = state.semantic.facts.length !== before;
+      if (removed) {
+        await this.saveState(scope, state);
+      }
       return {
         scopeId: scope.scopeId,
         factId: params.factId,
-        updated: false
+        removed
       };
-    }
-    const now = Date.now();
-    target.value = nextValue;
-    target.text = `${target.key}=${nextValue}`;
-    target.at = now;
-    target.lastConfirmedAt = now;
-    target.embedding = embedText(nextValue);
-    target.salience = Number(Math.max(target.salience, scoreSalience(target.text)).toFixed(4));
-    target.confidence = Number(Math.max(target.confidence, 0.85).toFixed(4));
-    await this.saveState(scope, state);
-    return {
-      scopeId: scope.scopeId,
-      factId: params.factId,
-      updated: true,
-      fact: target
-    };
+
+    });
+  }
+
+  async updateSemanticFact(
+    params: ScopeParams & { factId: string; value: string; }
+  ): Promise<UpdateSemanticFactResult> {
+    const scope = this.resolveScope(params);
+    return this.mutateScope(scope, async () => {
+      const state = await this.loadState(scope);
+      const nextValue = String(params.value ?? "").trim();
+      if (!nextValue) {
+        throw new Error("메모리 값은 비워둘 수 없습니다.");
+      }
+      const target = state.semantic.facts.find((fact) => fact.id === params.factId);
+      if (!target) {
+        return {
+          scopeId: scope.scopeId,
+          factId: params.factId,
+          updated: false
+        };
+      }
+      const now = Date.now();
+      target.value = nextValue;
+      target.text = `${target.key}=${nextValue}`;
+      target.at = now;
+      target.lastConfirmedAt = now;
+      target.embedding = embedText(nextValue);
+      target.salience = Number(Math.max(target.salience, scoreSalience(target.text)).toFixed(4));
+      target.confidence = Number(Math.max(target.confidence, 0.85).toFixed(4));
+      await this.saveState(scope, state);
+      return {
+        scopeId: scope.scopeId,
+        factId: params.factId,
+        updated: true,
+        fact: target
+      };
+
+    });
   }
 
   private resolveScope(params: ScopeParams): ScopeDescriptor {
@@ -459,13 +378,48 @@ export class LocalMemoryEngine {
     atInput: number | undefined,
     ownerUserId: string | undefined
   ): Promise<IngestTurnResult> {
-    const state = await this.loadState(scope);
-    const at = atInput ?? Date.now();
-    const text = String(rawText ?? "").trim();
+    const result = await this.mutateScope(scope, async () => {
+      const state = await this.loadState(scope);
+      const at = atInput ?? Date.now();
+      const text = String(rawText ?? "").trim();
 
-    if (!text) {
+      if (!text) {
+        return {
+          scopeId: scope.scopeId,
+          counts: {
+            working: state.working.turns.length,
+            episodic: state.episodic.items.length,
+            semantic: state.semantic.facts.length,
+            summary: state.summary.items.length
+          }
+        };
+      }
+
+      const role = normalizeRole(roleInput);
+      const turn: Turn = {
+        id: `turn_${at}_${randomUUID().slice(0, 8)}`,
+        role,
+        text,
+        at,
+        tokens: estimateTokens(text),
+        salience: scoreSalience(text),
+        ownerUserId: role === "user" ? safeId(String(ownerUserId ?? "").trim()) : undefined
+      };
+
+      state.working.turns.push(turn);
+      if (turn.ownerUserId) state.participantIds = [...new Set([...(state.participantIds ?? []), turn.ownerUserId])];
+      state.working.turns = state.working.turns.slice(-this.config.maxWorkingTurns);
+
+      await this.upsertFacts(scope, state, turn);
+      this.upsertEpisode(scope, state, turn);
+
+      this.applyForgetting(scope, state);
+
+      await this.saveState(scope, state);
+
       return {
         scopeId: scope.scopeId,
+        addedTurn: turn,
         counts: {
           working: state.working.turns.length,
           episodic: state.episodic.items.length,
@@ -473,43 +427,15 @@ export class LocalMemoryEngine {
           summary: state.summary.items.length
         }
       };
-    }
 
-    const role = normalizeRole(roleInput);
-    const turn: Turn = {
-      id: `turn_${at}_${randomUUID().slice(0, 8)}`,
-      role,
-      text,
-      at,
-      tokens: estimateTokens(text),
-      salience: scoreSalience(text),
-      ownerUserId: role === "user" ? safeId(String(ownerUserId ?? "").trim()) : undefined
-    };
-
-    state.working.turns.push(turn);
-    state.working.turns = state.working.turns.slice(-this.config.maxWorkingTurns);
-
-    await this.upsertFacts(scope, state, turn);
-    this.upsertEpisode(scope, state, turn);
-    await this.compactConversationState(state, turn);
-    this.applyForgetting(scope, state);
-
-    await this.saveState(scope, state);
-
-    return {
-      scopeId: scope.scopeId,
-      addedTurn: turn,
-      counts: {
-        working: state.working.turns.length,
-        episodic: state.episodic.items.length,
-        semantic: state.semantic.facts.length,
-        summary: state.summary.items.length
-      }
-    };
+    });
+    await this.compactScope(scope);
+    return result;
   }
 
   private async storeExchangeInScope(params: {
     scope: ScopeDescriptor;
+    requestId?: string;
     userText: string;
     assistantText: string;
     at: number;
@@ -520,56 +446,70 @@ export class LocalMemoryEngine {
     wireMessages?: WireMessage[];
     epoch?: number;
   }): Promise<RememberExchangeResult> {
-    const state = await this.loadState(params.scope);
-    const userTurn = buildTurn("user", params.userText, params.at, params.ownerUserId);
-    const assistantTurn = buildTurn("assistant", params.assistantText, params.at + 1, undefined);
-    if (params.includeWorking) {
-      if (params.wireMessages && params.wireMessages.length > 0) {
-        assistantTurn.wireMessages = params.wireMessages;
+    return this.mutateScope(params.scope, async () => {
+      const state = await this.loadState(params.scope);
+      if (params.requestId && state.exchangeIds?.includes(params.requestId)) {
+        return {
+          scopeId: params.scope.scopeId, addedTurns: [], groupStored: params.includeGroupEpisodes,
+          counts: {
+            working: state.working.turns.length, episodic: state.episodic.items.length,
+            semantic: state.semantic.facts.length, summary: state.summary.items.length
+          }
+        };
       }
-      if (typeof params.epoch === "number" && Number.isFinite(params.epoch)) {
-        userTurn.epoch = params.epoch;
-        assistantTurn.epoch = params.epoch;
+      if (params.requestId) state.exchangeIds = [...(state.exchangeIds ?? []), params.requestId].slice(-128);
+      state.participantIds = [...new Set([...(state.participantIds ?? []), safeId(params.ownerUserId)])];
+      const userTurn = buildTurn("user", params.userText, params.at, params.ownerUserId);
+      const assistantTurn = buildTurn("assistant", params.assistantText, params.at + 1, undefined);
+      if (params.includeWorking) {
+        if (params.wireMessages && params.wireMessages.length > 0) {
+          assistantTurn.wireMessages = params.wireMessages;
+        }
+        if (typeof params.epoch === "number" && Number.isFinite(params.epoch)) {
+          userTurn.epoch = params.epoch;
+          assistantTurn.epoch = params.epoch;
+        }
       }
-    }
 
-    if (params.includeWorking) {
-      state.working.turns.push(userTurn, assistantTurn);
-      state.working.turns = state.working.turns.slice(-this.config.maxWorkingTurns);
-      this.upsertEpisode(params.scope, state, userTurn);
-      this.upsertEpisode(params.scope, state, assistantTurn);
-      await this.compactConversationState(state, assistantTurn);
-    } else {
-      state.working.turns = [];
-    }
+      if (params.includeWorking) {
+        state.working.turns.push(userTurn, assistantTurn);
+        state.working.turns = state.working.turns.slice(-this.config.maxWorkingTurns);
+        this.upsertEpisode(params.scope, state, userTurn);
+        this.upsertEpisode(params.scope, state, assistantTurn);
 
-    if (params.includeUserFacts) {
-      await this.upsertFacts(params.scope, state, userTurn);
-    }
-
-    if (params.includeGroupEpisodes) {
-      if (shouldStoreInGroupMemory(params.userText, "user")) {
-        this.upsertEpisode(params.scope, state, userTurn, true, true);
+      } else {
+        state.working.turns = [];
       }
-      if (shouldStoreInGroupMemory(params.assistantText, "assistant")) {
-        this.upsertEpisode(params.scope, state, assistantTurn, false, true);
-      }
-    }
 
-    this.applyForgetting(params.scope, state);
-    await this.saveState(params.scope, state);
-
-    return {
-      scopeId: params.scope.scopeId,
-      addedTurns: [userTurn, assistantTurn],
-      groupStored: params.includeGroupEpisodes,
-      counts: {
-        working: state.working.turns.length,
-        episodic: state.episodic.items.length,
-        semantic: state.semantic.facts.length,
-        summary: state.summary.items.length
+      if (params.includeUserFacts) {
+        await this.upsertFacts(params.scope, state, userTurn);
       }
-    };
+
+      if (params.includeGroupEpisodes) {
+        if (shouldStoreInGroupMemory(params.userText, "user")) {
+          this.upsertEpisode(params.scope, state, userTurn, true, true);
+        }
+        if (shouldStoreInGroupMemory(params.assistantText, "assistant")) {
+          this.upsertEpisode(params.scope, state, assistantTurn, false, true);
+        }
+      }
+
+      this.applyForgetting(params.scope, state);
+      await this.saveState(params.scope, state);
+
+      return {
+        scopeId: params.scope.scopeId,
+        addedTurns: [userTurn, assistantTurn],
+        groupStored: params.includeGroupEpisodes,
+        counts: {
+          working: state.working.turns.length,
+          episodic: state.episodic.items.length,
+          semantic: state.semantic.facts.length,
+          summary: state.summary.items.length
+        }
+      };
+
+    });
   }
 
   private async retrieveContextForScope(
@@ -737,6 +677,20 @@ export class LocalMemoryEngine {
       .slice(0, this.config.maxSummaryItems);
   }
 
+  private async compactScope(scope: ScopeDescriptor): Promise<void> {
+    await serial(`compaction:${this.storageKey(scope)}`, async () => {
+      const state = await this.loadState(scope);
+      const latest = state.working.turns.at(-1);
+      if (!latest || !shouldCompactWorkingTurns(state, this.config, latest)) return;
+      await this.compactConversationState(state, latest);
+      try {
+        await this.saveState(scope, state);
+      } catch (error) {
+        if (!(error instanceof MemoryConflictError)) throw error;
+      }
+    });
+  }
+
   private async compactConversationState(state: MemoryState, latestTurn: Turn): Promise<void> {
     if (!this.config.compactionEnabled) {
       this.upsertSummary(state);
@@ -762,6 +716,7 @@ export class LocalMemoryEngine {
     try {
       compacted = await buildCompactedSummary({
         previousSummary,
+        settings: this.modelSettings,
         turns: olderTurns
       });
     } catch {
@@ -780,8 +735,8 @@ export class LocalMemoryEngine {
 
     const fromTurnId = previousSummary
       ? state.summary.items
-          .map((item) => item.fromTurnId)
-          .find((item) => item.length > 0) ?? olderTurns[0]?.id ?? ""
+        .map((item) => item.fromTurnId)
+        .find((item) => item.length > 0) ?? olderTurns[0]?.id ?? ""
       : olderTurns[0]?.id ?? "";
     const toTurnId = olderTurns[olderTurns.length - 1]?.id ?? latestTurn.id;
     const at = olderTurns[olderTurns.length - 1]?.at ?? latestTurn.at;
@@ -883,356 +838,25 @@ export class LocalMemoryEngine {
     return normalizeState(state ?? createEmptyState());
   }
 
+  private async mutateScope<T>(scope: ScopeDescriptor, work: () => Promise<T>): Promise<T> {
+    return serial(this.storageKey(scope), async () => {
+      for (let attempt = 0; ; attempt += 1) {
+        checkExecution();
+        try {
+          return await work();
+        } catch (error) {
+          if (!(error instanceof MemoryConflictError) || attempt >= 4) throw error;
+        }
+      }
+    });
+  }
+
+  private storageKey(scope: ScopeDescriptor): string {
+    return JSON.stringify([this.config.sqlitePath, this.config.rootDir, scope.scopeId]);
+  }
+
   private async saveState(scope: ScopeDescriptor, state: MemoryState): Promise<void> {
+    checkExecution();
     await this.store.saveState(scope, normalizeState(state));
   }
-}
-
-function normalizeRole(raw: MemoryRole | "ai"): MemoryRole {
-  const role = String(raw ?? "user").toLowerCase();
-  return role === "assistant" || role === "ai" ? "assistant" : "user";
-}
-
-function buildTurn(
-  role: MemoryRole,
-  rawText: string,
-  at: number,
-  ownerUserId: string | undefined
-): Turn {
-  const text = String(rawText ?? "").trim();
-  return {
-    id: `turn_${at}_${randomUUID().slice(0, 8)}`,
-    role,
-    text,
-    at,
-    tokens: estimateTokens(text),
-    salience: scoreSalience(text),
-    ownerUserId: role === "user" ? safeId(String(ownerUserId ?? "").trim()) : undefined
-  };
-}
-
-function sanitizeAssistantMemoryText(userText: string, assistantText: string): string {
-  if (
-    /(날씨|기온|강수|습도|미세먼지|대기질|환율|시세|주가|코인|암호화폐|금리|뉴스|속보|물가|가격|재고|운행|항공편|교통|경기\s*(?:결과|일정)|스코어|순위|통계|선거\s*결과)/u.test(
-      userText
-    )
-  ) {
-    return "시의성 정보 확인 응답 완료.";
-  }
-  const sanitized = assistantText
-    .split(/\r?\n/u)
-    .filter((line) => !line.trimStart().startsWith("출처:"))
-    .join("\n")
-    .trim();
-  return sanitized || "응답 완료.";
-}
-
-function formatTurnSpeaker(turn: Turn): string {
-  if (turn.role === "assistant") {
-    return "assistant";
-  }
-  if (turn.ownerUserId) {
-    return `user(${turn.ownerUserId})`;
-  }
-  return "user";
-}
-
-function sameSemanticFactIdentity(left: SemanticFact, right: SemanticFact): boolean {
-  const mode = semanticFactMode(left.key);
-  if (mode === "single") {
-    return left.key === right.key;
-  }
-  return left.key === right.key && normalizeSemanticValue(left.value) === normalizeSemanticValue(right.value);
-}
-
-function semanticFactMode(key: string): "single" | "multi" {
-  if (key === "preference.like" || key === "preference.dislike") {
-    return "multi";
-  }
-  return "single";
-}
-
-function normalizeSemanticValue(value: string): string {
-  return String(value ?? "")
-    .normalize("NFKC")
-    .trim()
-    .toLowerCase();
-}
-
-function shouldStoreSemanticFact(sourceText: string, fact: SemanticFact): boolean {
-  const input = String(sourceText ?? "").trim();
-  if (!input) {
-    return false;
-  }
-  if (
-    /(시스템|프롬프트|system prompt|ignore previous|jailbreak|관리자|admin|규칙|정책|합의|공지)/iu.test(
-      input
-    )
-  ) {
-    return false;
-  }
-  if (/(영구히|무조건|반드시|기억해|저장해|메모해|remember this)/iu.test(input)) {
-    return false;
-  }
-  if (/(관리자|admin|system|prompt|규칙|정책)/iu.test(fact.value)) {
-    return false;
-  }
-  if (fact.key === "profile.name") {
-    return /(내\s*이름은|\bmy\s+name\s+is\b)/iu.test(input);
-  }
-  if (fact.key === "profile.hobby") {
-    return /(내\s*(?:취미|관심사)는|\bmy\s+hobby\s+is\b)/iu.test(input);
-  }
-  if (fact.key === "preference.like") {
-    return /(?:나는|저는).*(좋아해|좋아합니다|선호해|선호합니다)|\bi\s+(?:like|love|prefer)\b/iu.test(
-      input
-    );
-  }
-  if (fact.key === "preference.dislike") {
-    return /(?:나는|저는).*(싫어해|싫어합니다|비선호|안\s*좋아해)|\bi\s+(?:hate|dislike)\b/iu.test(
-      input
-    );
-  }
-  return true;
-}
-
-function selectVisibleSemanticFacts(scope: ScopeDescriptor, facts: SemanticFact[]): SemanticFact[] {
-  return facts.filter((fact) => {
-    if (fact.scopeKind !== scope.scopeKind) {
-      return false;
-    }
-    if (scope.scopeKind === "user") {
-      if (fact.visibility !== "private") {
-        return false;
-      }
-      if (fact.createdByUserId && fact.createdByUserId !== scope.userId) {
-        return false;
-      }
-      return true;
-    }
-    if (scope.scopeKind === "conversation") {
-      return fact.visibility === "conversation";
-    }
-    return fact.visibility === "shared";
-  });
-}
-
-function summarizeBundle(bundle: ContextBundle): Record<string, number> {
-  const counts: Record<string, number> = {
-    sections: bundle.sections.length,
-    estimatedTokens: bundle.estimatedTokens
-  };
-  for (const section of bundle.sections) {
-    counts[section.name] = section.items.length;
-  }
-  return counts;
-}
-
-function resolveBudgetSplit(
-  query: string,
-  totalBudget: number,
-  hasConversationScope: boolean,
-  groupMemoryEnabled: boolean
-): BudgetSplit {
-  const budget = Math.max(120, totalBudget);
-  if (!groupMemoryEnabled && !hasConversationScope) {
-    return {
-      userBudget: budget,
-      conversationBudget: 0,
-      groupBudget: 0
-    };
-  }
-  if (!hasConversationScope) {
-    let userRatio = 0.6;
-    if (isPersonalQuery(query)) {
-      userRatio = 0.78;
-    } else if (isGroupQuery(query)) {
-      userRatio = 0.42;
-    }
-    let userBudget = Math.max(72, Math.floor(budget * userRatio));
-    let groupBudget = groupMemoryEnabled ? Math.max(48, budget - userBudget) : 0;
-    if (userBudget + groupBudget > budget) {
-      groupBudget = Math.max(0, budget - userBudget);
-    }
-    if (groupBudget <= 0) {
-      groupBudget = 0;
-      userBudget = budget;
-    }
-    return {
-      userBudget,
-      conversationBudget: 0,
-      groupBudget
-    };
-  }
-
-  let userRatio = 0.26;
-  let conversationRatio = 0.54;
-  let groupRatio = groupMemoryEnabled ? 0.2 : 0;
-  if (isPersonalQuery(query)) {
-    userRatio = 0.3;
-    conversationRatio = groupMemoryEnabled ? 0.55 : 0.7;
-    groupRatio = groupMemoryEnabled ? 0.15 : 0;
-  } else if (isGroupQuery(query)) {
-    userRatio = 0.2;
-    conversationRatio = 0.5;
-    groupRatio = groupMemoryEnabled ? 0.3 : 0;
-  }
-  const userBudget = Math.max(48, Math.floor(budget * userRatio));
-  let conversationBudget = Math.max(72, Math.floor(budget * conversationRatio));
-  let groupBudget = groupMemoryEnabled ? Math.floor(budget * groupRatio) : 0;
-  const assigned = userBudget + conversationBudget + groupBudget;
-  if (assigned > budget) {
-    const overflow = assigned - budget;
-    if (groupBudget > 0) {
-      groupBudget = Math.max(0, groupBudget - overflow);
-    } else {
-      conversationBudget = Math.max(72, conversationBudget - overflow);
-    }
-  }
-  const remaining = budget - userBudget - conversationBudget - groupBudget;
-  if (remaining > 0) {
-    conversationBudget += remaining;
-  }
-  return {
-    userBudget,
-    conversationBudget,
-    groupBudget
-  };
-}
-
-function isPersonalQuery(query: string): boolean {
-  return /(내가|나는|저는|나의|my|me|i\s+am|i'm|내\s*정보|내\s*기록)/iu.test(query);
-}
-
-function isGroupQuery(query: string): boolean {
-  return /(우리|이\s*방|그룹|채널|규칙|정책|합의|공지|프로젝트|일정|team|group|rule|policy|decision)/iu.test(
-    query
-  );
-}
-
-function emptyContext(tokenBudget: number): ContextBundle {
-  return {
-    tokenBudget: Math.max(0, tokenBudget),
-    estimatedTokens: 0,
-    sections: [],
-    contextText: "memory_context: none"
-  };
-}
-
-function mergeContextBundles(params: {
-  totalBudget: number;
-  userBundle: ContextBundle;
-  conversationBundle: ContextBundle;
-  groupBundle: ContextBundle;
-}): ContextBundle {
-  const userHas = hasContext(params.userBundle);
-  const conversationHas = hasContext(params.conversationBundle);
-  const groupHas = hasContext(params.groupBundle);
-  if (!userHas && !conversationHas && !groupHas) {
-    return {
-      tokenBudget: params.totalBudget,
-      estimatedTokens: 0,
-      sections: [],
-      contextText: "memory_context: none"
-    };
-  }
-
-  const lines: string[] = ["memory_context:"];
-  const mergedSections: ContextBundle["sections"] = [];
-
-  if (userHas) {
-    lines.push("user_memory:");
-    for (const section of params.userBundle.sections) {
-      lines.push(`${section.name}:`);
-      for (const item of section.items) {
-        lines.push(`- ${item.text}`);
-      }
-      mergedSections.push({
-        name: section.name,
-        items: section.items.map((item) => ({
-          ...item,
-          text: `[user] ${item.text}`
-        }))
-      });
-    }
-  }
-
-  if (conversationHas) {
-    lines.push("conversation_memory:");
-    for (const section of params.conversationBundle.sections) {
-      lines.push(`${section.name}:`);
-      for (const item of section.items) {
-        lines.push(`- ${item.text}`);
-      }
-      mergedSections.push({
-        name: section.name,
-        items: section.items.map((item) => ({
-          ...item,
-          text: `[conversation] ${item.text}`
-        }))
-      });
-    }
-  }
-
-  if (groupHas) {
-    lines.push("group_memory:");
-    for (const section of params.groupBundle.sections) {
-      lines.push(`${section.name}:`);
-      for (const item of section.items) {
-        lines.push(`- ${item.text}`);
-      }
-      mergedSections.push({
-        name: section.name,
-        items: section.items.map((item) => ({
-          ...item,
-          text: `[group] ${item.text}`
-        }))
-      });
-    }
-  }
-
-  return {
-    tokenBudget: params.totalBudget,
-    estimatedTokens:
-      params.userBundle.estimatedTokens +
-      params.conversationBundle.estimatedTokens +
-      params.groupBundle.estimatedTokens,
-    sections: mergedSections,
-    contextText: lines.join("\n")
-  };
-}
-
-function hasContext(bundle: ContextBundle): boolean {
-  return bundle.sections.length > 0 && bundle.contextText.trim().toLowerCase() !== "memory_context: none";
-}
-
-function shouldCompactWorkingTurns(
-  state: MemoryState,
-  config: EngineConfig,
-  latestTurn: Turn
-): boolean {
-  if (latestTurn.role !== "assistant") {
-    return false;
-  }
-  const keepRecentTurns = Math.max(1, config.compactionKeepRecentTurns);
-  if (state.working.turns.length <= keepRecentTurns) {
-    return false;
-  }
-  const sourceTurns = state.working.turns.length - keepRecentTurns;
-  return sourceTurns >= Math.max(1, config.compactionMinSourceTurns);
-}
-
-function collapseSummaryItems(items: MemoryState["summary"]["items"]): string {
-  const texts = items
-    .slice()
-    .sort((a, b) => a.at - b.at)
-    .map((item) => String(item.text ?? "").trim())
-    .filter((item) => item.length > 0);
-  if (texts.length === 0) {
-    return "";
-  }
-  if (texts.length === 1) {
-    return texts[0] ?? "";
-  }
-  return texts.join("\n\n");
 }

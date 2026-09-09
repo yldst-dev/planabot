@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { loadSettings, type Settings } from "../config/settings.js";
-import { isSearchToolAvailable } from "./chat.js";
+import {
+  isSearchToolAvailable,
+  usesNativeWebSearch,
+  usesPreSearchContext,
+} from "./chat.js";
 
 function settingsFor(overrides: Partial<Settings>): Settings {
   return {
@@ -115,4 +119,33 @@ test("geminimock never exposes the search tool", () => {
     isSearchToolAvailable(settingsFor({ aiProvider: "geminimock" })),
     false,
   );
+});
+
+test("geminiweb never exposes the search tool", () => {
+  assert.equal(
+    isSearchToolAvailable(settingsFor({ aiProvider: "geminiweb" })),
+    false,
+  );
+  assert.equal(
+    isSearchToolAvailable(
+      settingsFor({
+        aiProvider: "geminiweb",
+        openRouterWebSearchEnabled: true,
+        ollamaWebSearchEnabled: true,
+        cerebrasWebSearchEnabled: true,
+        modelStudioWebSearchEnabled: true,
+      }),
+    ),
+    false,
+  );
+});
+
+test("geminiweb never uses ollama pre-search", () => {
+  const settings = settingsFor({
+    aiProvider: "geminiweb",
+    ollamaWebSearchEnabled: true,
+    ollamaSearchHost: "https://ollama.example",
+  });
+  assert.equal(usesNativeWebSearch(settings), true);
+  assert.equal(usesPreSearchContext(settings), false);
 });

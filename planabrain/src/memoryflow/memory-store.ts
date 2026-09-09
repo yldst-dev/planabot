@@ -12,6 +12,7 @@ export function createMemoryStore(config: EngineConfig): MemoryStore {
     return new SqliteWithJsonFallbackStore(sqlite, json);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (!message.startsWith("SQLite runtime unavailable:")) throw error;
     process.stderr.write(`SQLite store init failed, fallback to json store: ${message}\n`);
     return new JsonMemoryStore(config.rootDir);
   }
@@ -28,10 +29,10 @@ class SqliteWithJsonFallbackStore implements MemoryStore {
 
   async loadState(scope: ScopeDescriptor): Promise<MemoryState> {
     const sqliteState = await this.sqliteStore.loadState(scope);
-    if (hasMemory(sqliteState)) {
+    if ((sqliteState.revision ?? 0) > 0 || hasMemory(sqliteState)) {
       return sqliteState;
     }
-    return this.jsonStore.loadState(scope);
+    return { ...await this.jsonStore.loadState(scope), revision: sqliteState.revision ?? 0 };
   }
 
   async saveState(scope: ScopeDescriptor, state: MemoryState): Promise<void> {

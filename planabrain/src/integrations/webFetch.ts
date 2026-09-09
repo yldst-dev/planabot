@@ -1,3 +1,4 @@
+import { currentExecution, checkExecution } from "../runtime/execution.js";
 import { lookup } from "node:dns/promises";
 import type { IncomingHttpHeaders } from "node:http";
 import { request as httpRequest } from "node:http";
@@ -43,7 +44,7 @@ type RawPage = {
   body: Buffer;
 };
 
-class NonRetryableWebFetchError extends Error {}
+class NonRetryableWebFetchError extends Error { }
 
 export function extractUrls(text: string, maxUrls = 3): string[] {
   if (!Number.isSafeInteger(maxUrls) || maxUrls <= 0) {
@@ -79,10 +80,11 @@ export async function fetchWebPage(
   settings: Settings,
   rawUrl: string,
 ): Promise<WebFetchResult> {
+  checkExecution();
   const sourceUrl = parseWebFetchUrl(rawUrl).toString();
   let currentUrl = sourceUrl;
   const visited = new Set<string>();
-  const deadline = Date.now() + settings.webFetchTimeoutMs;
+  const deadline = Math.min(Date.now() + settings.webFetchTimeoutMs, currentExecution()?.deadlineMs ?? Infinity);
 
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
     if (visited.has(currentUrl)) {
@@ -203,7 +205,7 @@ export function isBlockedAddress(address: string): boolean {
 export function extractReadableContent(
   input: string,
   contentType: string,
-): { title: string; content: string } {
+): { title: string; content: string; } {
   if (contentType === "application/json" || contentType === "application/ld+json") {
     try {
       const parsed = JSON.parse(input) as unknown;
@@ -315,6 +317,7 @@ function requestPinnedPage(params: {
       reject(error);
     };
     const options: RequestOptions = {
+      signal: currentExecution()?.signal,
       protocol: params.url.protocol,
       hostname: params.address,
       port: params.url.port || (params.url.protocol === "https:" ? 443 : 80),
@@ -746,7 +749,7 @@ function extractHtmlSections(input: string): HtmlSections {
 
 function parseHtmlTag(
   rawTag: string,
-): { name: string; closing: boolean; selfClosing: boolean } | null {
+): { name: string; closing: boolean; selfClosing: boolean; } | null {
   const trimmed = rawTag.trim();
   if (!trimmed || trimmed.startsWith("!") || trimmed.startsWith("?")) {
     return null;

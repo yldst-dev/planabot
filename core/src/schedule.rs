@@ -715,7 +715,6 @@ fn format_kst(timestamp_ms: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
 
     use super::{
         NewSchedule, ScheduleKind, ScheduleStore, find_schedule_match, list_pending_for_user,
@@ -725,39 +724,40 @@ mod tests {
 
     #[test]
     fn selector_finds_first_schedule() {
-        let mut items = Vec::new();
-        items.push(super::ScheduleItem {
-            id: "a".to_string(),
-            owner_user_id: 1,
-            chat_id: 10,
-            message_thread_id: None,
-            source_message_id: None,
-            kind: ScheduleKind::Schedule,
-            title: "첫 일정".to_string(),
-            due_at_ms: now_ms() + 1000,
-            created_at_ms: now_ms(),
-            updated_at_ms: now_ms(),
-            status: super::ScheduleStatus::Pending,
-            sent_at_ms: None,
-            canceled_at_ms: None,
-            last_error: None,
-        });
-        items.push(super::ScheduleItem {
-            id: "b".to_string(),
-            owner_user_id: 1,
-            chat_id: 10,
-            message_thread_id: None,
-            source_message_id: None,
-            kind: ScheduleKind::Timer,
-            title: "두 번째".to_string(),
-            due_at_ms: now_ms() + 2000,
-            created_at_ms: now_ms(),
-            updated_at_ms: now_ms(),
-            status: super::ScheduleStatus::Pending,
-            sent_at_ms: None,
-            canceled_at_ms: None,
-            last_error: None,
-        });
+        let items = vec![
+            super::ScheduleItem {
+                id: "a".to_string(),
+                owner_user_id: 1,
+                chat_id: 10,
+                message_thread_id: None,
+                source_message_id: None,
+                kind: ScheduleKind::Schedule,
+                title: "첫 일정".to_string(),
+                due_at_ms: now_ms() + 1000,
+                created_at_ms: now_ms(),
+                updated_at_ms: now_ms(),
+                status: super::ScheduleStatus::Pending,
+                sent_at_ms: None,
+                canceled_at_ms: None,
+                last_error: None,
+            },
+            super::ScheduleItem {
+                id: "b".to_string(),
+                owner_user_id: 1,
+                chat_id: 10,
+                message_thread_id: None,
+                source_message_id: None,
+                kind: ScheduleKind::Timer,
+                title: "두 번째".to_string(),
+                due_at_ms: now_ms() + 2000,
+                created_at_ms: now_ms(),
+                updated_at_ms: now_ms(),
+                status: super::ScheduleStatus::Pending,
+                sent_at_ms: None,
+                canceled_at_ms: None,
+                last_error: None,
+            },
+        ];
         let pending = list_pending_for_user(&items, 1);
         let item = find_schedule_match(&pending, "첫번째거").unwrap();
         assert_eq!(item.id, "a");

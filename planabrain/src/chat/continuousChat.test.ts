@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { Settings } from "../config/settings.js";
+import { buildContinuousSystemPrompt } from "./replay.js";
 import {
   answerTurn,
   applySourceSelection,
-  buildContinuousSystemPrompt,
   buildReplay,
   isSearchFollowUp,
   parseRewrittenQuery,
@@ -51,13 +51,13 @@ function createSettings(overrides: Partial<Settings> = {}): Settings {
   } as Settings;
 }
 
-type Recorded = { url: string; body: Record<string, unknown> };
+type Recorded = { url: string; body: Record<string, unknown>; };
 
 function installFetch(handlers: {
   rewrite?: string;
   search?: unknown;
   answer: string;
-}): { requests: Recorded[]; restore: () => void } {
+}): { requests: Recorded[]; restore: () => void; } {
   const original = globalThis.fetch;
   const requests: Recorded[] = [];
   let chatCalls = 0;
@@ -123,7 +123,7 @@ test("continuous mode replays wire messages with a fixed system prompt and recor
       memoryContext: "memory_context:\n- 선생님은 커피를 좋아함",
     });
     assert.equal(mock.requests.length, 1);
-    const messages = mock.requests[0].body.messages as Array<{ role: string; content: string }>;
+    const messages = mock.requests[0].body.messages as Array<{ role: string; content: string; }>;
     assert.equal(messages[0].role, "system");
     assert.equal(messages[0].content, buildContinuousSystemPrompt(settings));
     assert.deepEqual(messages.slice(1, 3), [
@@ -166,7 +166,7 @@ test("continuous mode rewrites the search query and keeps only the selected sour
     assert.equal(chats.length, 2);
     assert.equal(chats[0].body.model, "fast-model");
     assert.equal(chats[1].body.model, settings.chatModel);
-    const finalMessages = chats[1].body.messages as Array<{ role: string; content: string }>;
+    const finalMessages = chats[1].body.messages as Array<{ role: string; content: string; }>;
     assert.match(finalMessages.at(-1)?.content ?? "", /\[웹 검색 결과\]/u);
     assert.doesNotMatch(result.answer, /출처번호/u);
     assert.match(result.answer, /출처: \[TETRAPOD 2026 취소 공지\]\(https:\/\/fest\.example\/notice\)/u);
@@ -286,4 +286,18 @@ test("follow-up detection and query parsing", () => {
   assert.equal(parseRewrittenQuery("{\"query\": \"대전 날씨\"}"), "대전 날씨");
   assert.equal(parseRewrittenQuery("설명 {\"query\": null} 끝"), null);
   assert.equal(parseRewrittenQuery("no json"), undefined);
+});
+
+test("geminiweb continuous prompt forces native search without tools", () => {
+  const prompt = buildContinuousSystemPrompt(
+    createSettings({
+      aiProvider: "geminiweb",
+      geminiWebApiKey: "sk-gemini-test",
+      geminiWebBaseUrl: "http://10.0.0.5:8083/v1",
+      ollamaWebSearchEnabled: true,
+    }),
+  );
+  assert.match(prompt, /반드시 웹 검색으로 최신 정보를 확인/u);
+  assert.doesNotMatch(prompt, /web_search 도구를 먼저 호출/u);
+  assert.doesNotMatch(prompt, /웹 검색 도구를 사용할 수 없습니다/u);
 });

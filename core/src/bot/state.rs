@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use log::warn;
@@ -90,6 +90,7 @@ pub struct AppState {
     group_registry_path: PathBuf,
     image_rate_limiter: Arc<Mutex<ImageRateLimiter>>,
     planabrain_semaphore: Arc<Semaphore>,
+    planabrain_conversations: Arc<Mutex<HashMap<String, Weak<AsyncMutex<()>>>>>,
     pub(crate) schedule_store: ScheduleStore,
     share_claims: Arc<RwLock<HashMap<String, StoredShareClaim>>>,
     share_claims_path: PathBuf,
@@ -152,6 +153,7 @@ impl AppState {
             group_registry_path,
             image_rate_limiter: Arc::new(Mutex::new(image_rate_limiter)),
             planabrain_semaphore: Arc::new(Semaphore::new(4)),
+            planabrain_conversations: Arc::new(Mutex::new(HashMap::new())),
             schedule_store,
             share_claims: Arc::new(RwLock::new(share_claims)),
             share_claims_path,
@@ -318,6 +320,20 @@ impl AppState {
             Err(poisoned) => poisoned.into_inner(),
         };
         limiter.allow(user_id)
+    }
+
+    pub(crate) fn planabrain_conversation_lock(&self, key: &str) -> Arc<AsyncMutex<()>> {
+        let mut locks = self
+            .planabrain_conversations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        locks.retain(|_, value| value.strong_count() > 0);
+        if let Some(lock) = locks.get(key).and_then(Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::new(AsyncMutex::new(()));
+        locks.insert(key.to_string(), Arc::downgrade(&lock));
+        lock
     }
 
     pub(crate) fn try_acquire_planabrain_permit(&self) -> Option<OwnedSemaphorePermit> {

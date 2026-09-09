@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadSettings } from "./settings.js";
+import {
+  defaultChatModel,
+  loadSettings,
+  normalizeGeminiWebBaseUrl,
+} from "./settings.js";
 
 const MODEL_STUDIO_DEFAULT_BASE_URL =
   "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
@@ -9,7 +13,11 @@ const MODEL_STUDIO_DEFAULT_BASE_URL =
 function withEnv<T>(env: Record<string, string>, run: () => T): T {
   const saved = { ...process.env };
   for (const key of Object.keys(process.env)) {
-    if (key.startsWith("PLANABRAIN_") || key.startsWith("MODEL_STUDIO_")) {
+    if (
+      key.startsWith("PLANABRAIN_") ||
+      key.startsWith("MODEL_STUDIO_") ||
+      key.startsWith("GEMINIWEB_")
+    ) {
       delete process.env[key];
     }
   }
@@ -169,6 +177,150 @@ test("aux provider and model are optional and resolve the provider host", () => 
   const plain = withEnv(MODEL_STUDIO_ENV, loadSettings);
   assert.equal(plain.auxProvider, undefined);
   assert.equal(plain.auxModel, undefined);
+});
+
+const GEMINIWEB_ENV = {
+  PLANABRAIN_AI_PROVIDER: "geminiweb",
+  PLANABRAIN_GEMINIWEB_API_KEY: "sk-gemini-test",
+  PLANABRAIN_GEMINIWEB_BASE_URL: "http://10.0.0.5:8083/v1",
+};
+
+test("geminiweb aliases resolve to the same provider", () => {
+  for (const alias of ["geminiweb", "gemini-web", "gemini_web", "web2api"]) {
+    const settings = withEnv(
+      { ...GEMINIWEB_ENV, PLANABRAIN_AI_PROVIDER: alias },
+      loadSettings,
+    );
+    assert.equal(settings.aiProvider, "geminiweb");
+  }
+});
+
+test("geminiweb requires an api key", () => {
+  assert.throws(
+    () =>
+      withEnv(
+        {
+          PLANABRAIN_AI_PROVIDER: "geminiweb",
+          PLANABRAIN_GEMINIWEB_BASE_URL: "http://10.0.0.5:8083/v1",
+        },
+        loadSettings,
+      ),
+    /PLANABRAIN_GEMINIWEB_API_KEY is required when PLANABRAIN_AI_PROVIDER=geminiweb/,
+  );
+});
+
+test("geminiweb requires a base url", () => {
+  assert.throws(
+    () =>
+      withEnv(
+        {
+          PLANABRAIN_AI_PROVIDER: "geminiweb",
+          PLANABRAIN_GEMINIWEB_API_KEY: "sk-gemini-test",
+        },
+        loadSettings,
+      ),
+    /PLANABRAIN_GEMINIWEB_BASE_URL is required when PLANABRAIN_AI_PROVIDER=geminiweb/,
+  );
+});
+
+test("geminiweb rejects a non http(s) base url", () => {
+  assert.throws(
+    () =>
+      withEnv(
+        {
+          ...GEMINIWEB_ENV,
+          PLANABRAIN_GEMINIWEB_BASE_URL: "ftp://10.0.0.5:8083",
+        },
+        loadSettings,
+      ),
+    /PLANABRAIN_GEMINIWEB_BASE_URL must be a valid http\(s\) URL/,
+  );
+});
+
+test("geminiweb appends /v1 when the base url has no path", () => {
+  const settings = withEnv(
+    {
+      ...GEMINIWEB_ENV,
+      PLANABRAIN_GEMINIWEB_BASE_URL: "http://10.0.0.5:8083",
+    },
+    loadSettings,
+  );
+  assert.equal(settings.geminiWebBaseUrl, "http://10.0.0.5:8083/v1");
+});
+
+test("geminiweb strips a trailing slash from an existing /v1 path", () => {
+  const settings = withEnv(
+    {
+      ...GEMINIWEB_ENV,
+      PLANABRAIN_GEMINIWEB_BASE_URL: "http://10.0.0.5:8083/v1/",
+    },
+    loadSettings,
+  );
+  assert.equal(settings.geminiWebBaseUrl, "http://10.0.0.5:8083/v1");
+});
+
+test("geminiweb keeps a base url that already ends with /v1", () => {
+  const settings = withEnv(GEMINIWEB_ENV, loadSettings);
+  assert.equal(settings.geminiWebBaseUrl, "http://10.0.0.5:8083/v1");
+});
+
+test("geminiweb never injects /api/v1 into the base url", () => {
+  assert.equal(
+    normalizeGeminiWebBaseUrl(
+      "http://10.0.0.5:8083",
+      "PLANABRAIN_GEMINIWEB_BASE_URL",
+    ),
+    "http://10.0.0.5:8083/v1",
+  );
+  assert.equal(
+    normalizeGeminiWebBaseUrl(
+      "http://10.0.0.5:8083/v1",
+      "PLANABRAIN_GEMINIWEB_BASE_URL",
+    ),
+    "http://10.0.0.5:8083/v1",
+  );
+  assert.doesNotMatch(
+    normalizeGeminiWebBaseUrl(
+      "http://10.0.0.5:8083",
+      "PLANABRAIN_GEMINIWEB_BASE_URL",
+    ),
+    /\/api\/v1/,
+  );
+});
+
+test("geminiweb defaults to gemini-3.8-flash and honours the model override", () => {
+  assert.equal(defaultChatModel("geminiweb"), "gemini-3.8-flash");
+  assert.equal(withEnv(GEMINIWEB_ENV, loadSettings).chatModel, "gemini-3.8-flash");
+  assert.equal(
+    withEnv(
+      { ...GEMINIWEB_ENV, PLANABRAIN_CHAT_MODEL: "gemini-3.6-flash" },
+      loadSettings,
+    ).chatModel,
+    "gemini-3.6-flash",
+  );
+  assert.equal(
+    withEnv(
+      {
+        ...GEMINIWEB_ENV,
+        PLANABRAIN_CHAT_MODEL: "gemini-3.6-flash",
+        PLANABRAIN_GEMINIWEB_MODEL: "gemini-3.1-pro",
+      },
+      loadSettings,
+    ).chatModel,
+    "gemini-3.1-pro",
+  );
+});
+
+test("geminiweb accepts GEMINIWEB_API_KEY as an alias", () => {
+  const settings = withEnv(
+    {
+      PLANABRAIN_AI_PROVIDER: "geminiweb",
+      GEMINIWEB_API_KEY: "sk-gemini-alias",
+      PLANABRAIN_GEMINIWEB_BASE_URL: "http://10.0.0.5:8083/v1",
+    },
+    loadSettings,
+  );
+  assert.equal(settings.geminiWebApiKey, "sk-gemini-alias");
 });
 
 test("intimacy fallback provider and model are optional", () => {

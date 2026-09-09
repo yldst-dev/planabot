@@ -1,5 +1,6 @@
-import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
+import { LocalMemoryEngine } from "../memoryflow/memory-engine.js";
 
 export type StoredChatMessage = {
   role: "human" | "ai";
@@ -7,82 +8,68 @@ export type StoredChatMessage = {
   at: number;
 };
 
-type StoredChatFile = {
-  version: 1;
-  messages: StoredChatMessage[];
+type MemoryParams = {
+  memoryDir: string;
+  userId: string;
+  chatScope?: string;
+  conversationId?: string;
+  maxMessages: number;
 };
 
-function safeUserId(userId: string): string {
-  const trimmed = userId.trim();
-  if (!trimmed) return "default";
-  return trimmed.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 200) || "default";
-}
-
-function userMemoryFilePath(memoryDir: string, userId: string): string {
-  return path.join(memoryDir, `${safeUserId(userId)}.json`);
-}
-
-export async function loadUserMemory(params: {
-  memoryDir: string;
-  userId: string;
-  maxMessages: number;
-}): Promise<StoredChatMessage[]> {
-  const filePath = userMemoryFilePath(params.memoryDir, params.userId);
-  let raw: string;
-  try {
-    raw = await fs.readFile(filePath, "utf-8");
-  } catch (err: unknown) {
-    if (err && typeof err === "object" && "code" in err && (err as { code?: unknown }).code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
-
-  let parsed: Partial<StoredChatFile>;
-  try {
-    parsed = JSON.parse(raw) as Partial<StoredChatFile>;
-  } catch {
-    return [];
-  }
-  const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
-
-  const normalized: StoredChatMessage[] = messages
-    .filter((m) => Boolean(m) && typeof (m as { content?: unknown }).content === "string")
-    .map((m) => {
-      const roleRaw = (m as { role?: unknown }).role;
-      const role: StoredChatMessage["role"] = roleRaw === "ai" ? "ai" : "human";
-      const content = String((m as { content?: unknown }).content ?? "");
-      const atRaw = (m as { at?: unknown }).at;
-      const at = typeof atRaw === "number" ? atRaw : Date.now();
-      return { role, content, at };
-    })
-    .filter((m) => m.content.trim().length > 0);
-
-  if (params.maxMessages <= 0) return [];
-  return normalized.slice(-params.maxMessages);
-}
-
-export async function appendUserMemory(params: {
-  memoryDir: string;
-  userId: string;
-  maxMessages: number;
-  messages: StoredChatMessage[];
-}): Promise<void> {
-  const existing = await loadUserMemory({
-    memoryDir: params.memoryDir,
-    userId: params.userId,
-    maxMessages: Math.max(0, params.maxMessages)
+function createEngine(params: MemoryParams): LocalMemoryEngine {
+  return new LocalMemoryEngine({
+    rootDir: path.join(params.memoryDir, "scoped"),
+    sqlitePath: path.join(params.memoryDir, "scoped.sqlite"),
+    groupMemoryEnabled: false,
+    compactionEnabled: false,
+    maxWorkingTurns: Math.max(2, params.maxMessages),
   });
+}
 
-  const combined = [...existing, ...params.messages].filter(
-    (m) => m.content.trim().length > 0
-  );
+function scope(params: MemoryParams): { chatId: string; conversationId: string; } {
+  return {
+    chatId: params.chatScope ?? "cli",
+    conversationId: createHash("sha256").update(JSON.stringify([params.userId, params.conversationId ?? "default"])).digest("hex"),
+  };
+}
 
-  const kept =
-    params.maxMessages <= 0 ? [] : combined.slice(-Math.max(0, params.maxMessages));
+export async function loadUserMemory(params: MemoryParams): Promise<StoredChatMessage[]> {
+  if (params.maxMessages <= 0) return [];
+  const engine = createEngine(params);
+  try {
+    const turns = await engine.listConversationTurns(scope(params));
+    return turns.slice(-params.maxMessages).map((turn) => ({
+      role: turn.role === "assistant" ? "ai" : "human",
+      content: turn.text,
+      at: turn.at,
+    }));
+  } finally {
+    engine.close();
+  }
+}
 
-  const file: StoredChatFile = { version: 1, messages: kept };
-  await fs.mkdir(params.memoryDir, { recursive: true });
-  const filePath = userMemoryFilePath(params.memoryDir, params.userId);
-  await fs.writeFile(filePath, JSON.stringify(file), "utf-8");
+export async function appendUserMemory(params: MemoryParams & { messages: StoredChatMessage[]; }): Promise<void> {
+  if (params.maxMessages <= 0) return;
+  const engine = createEngine(params);
+  try {
+    for (let index = 0; index + 1 < params.messages.length; index += 2) {
+      const user = params.messages[index];
+      const assistant = params.messages[index + 1];
+      if (user.role !== "human" || assistant.role !== "ai") continue;
+      await engine.rememberExchange({
+        ...scope(params),
+        userId: params.userId,
+        userText: user.content,
+        assistantText: assistant.content,
+        at: user.at,
+      });
+    }
+  } finally {
+    engine.close();
+  }
+}
+
+export async function resetScopedUserMemory(userId: string, memoryDir: string): Promise<boolean> {
+  const engine = createEngine({ userId, memoryDir, maxMessages: 0 });
+  try { return (await engine.resetUser(userId)).removed; } finally { engine.close(); }
 }

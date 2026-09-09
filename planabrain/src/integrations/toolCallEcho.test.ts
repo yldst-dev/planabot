@@ -46,3 +46,13 @@ test("defaults to the search-disabled rules", () => {
   const fallback = buildSystemPrompt(promptSettings);
   assert.doesNotMatch(fallback, /web_search 도구를 먼저 호출/u);
 });
+
+test("native search mode forces web search without tool-call language", () => {
+  const native = buildSystemPrompt(promptSettings, {
+    searchEnabled: true,
+    searchMode: "native",
+  });
+  assert.match(native, /반드시 웹 검색으로 최신 정보를 확인/u);
+  assert.doesNotMatch(native, /web_search 도구를 먼저 호출/u);
+  assert.doesNotMatch(native, /웹 검색 도구를 사용할 수 없습니다/u);
+});

@@ -18,13 +18,13 @@ export type RecentTurn = {
   role: "user" | "assistant";
   text: string;
   at: number;
-  wireMessages?: Array<{ role: "user" | "assistant"; content: string }>;
+  wireMessages?: Array<{ role: "user" | "assistant"; content: string; }>;
   epoch?: number;
 };
 
 export type TurnPrepareOutput = {
-  todo: { handled: boolean } | null;
-  schedule: { handled: boolean } | null;
+  todo: { handled: boolean; } | null;
+  schedule: { handled: boolean; } | null;
   todoList: unknown | null;
   memoryContext: string | null;
   recentTurns: RecentTurn[];
@@ -32,8 +32,8 @@ export type TurnPrepareOutput = {
 };
 
 export type TurnPrepareDeps = {
-  interpretTodo: (userId: string, text: string) => Promise<{ handled: boolean }>;
-  interpretSchedule: (text: string) => { handled: boolean };
+  interpretTodo: (userId: string, text: string) => Promise<{ handled: boolean; }>;
+  interpretSchedule: (text: string) => { handled: boolean; };
   listTodos: (userId: string) => Promise<unknown>;
   prepareMemory: (input: {
     userId: string;
@@ -42,7 +42,7 @@ export type TurnPrepareDeps = {
     userText: string;
     tokenBudget?: number;
   }) => Promise<string | null>;
-  listRecentTurns: (input: { chatScope: string; conversationId: string }) => Promise<RecentTurn[]>;
+  listRecentTurns: (input: { chatScope: string; conversationId: string; }) => Promise<RecentTurn[]>;
 };
 
 export async function prepareTurn(
@@ -116,7 +116,7 @@ export function parseTurnPrepareInput(raw: string): TurnPrepareInput {
   } catch {
     throw new Error("turn-prepare 입력은 JSON이어야 합니다");
   }
-  if (typeof parsed !== "object" || parsed === null) {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error("turn-prepare 입력은 JSON 객체여야 합니다");
   }
   const record = parsed as Record<string, unknown>;

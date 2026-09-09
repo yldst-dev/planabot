@@ -1,6 +1,7 @@
+import { checkExecution } from "../runtime/execution.js";
 import { buildSystemPrompt } from "../config/systemPrompt.js";
 import type { Settings } from "../config/settings.js";
-import { invokeChat } from "../integrations/chat.js";
+import { invokeChat, usesNativeWebSearch } from "../integrations/chat.js";
 import { resolveAuxSettings } from "./auxSettings.js";
 
 export type VerifiedCitation = {
@@ -59,7 +60,12 @@ export async function finalizeAnswerForDelivery(params: Params): Promise<string>
     chatMaxOutputTokens: deliveryTokenLimit,
   };
   const rewritePrompt = [
-    buildSystemPrompt(params.settings),
+    buildSystemPrompt(
+      params.settings,
+      usesNativeWebSearch(params.settings)
+        ? { searchEnabled: true, searchMode: "native" }
+        : {},
+    ),
     `다음 초안을 텔레그램 전송용 최종 답변으로 다시 작성하십시오.`,
     `반드시 ${deliveryTokenLimit}토큰 이내로 줄이십시오.`,
     ...deliveryRuleLines(),
@@ -68,6 +74,8 @@ export async function finalizeAnswerForDelivery(params: Params): Promise<string>
   try {
     const rewritten = await invokeChat({
       settings: rewriteSettings,
+      enableSearchTool: false,
+      maxContinuations: 0,
       messages: [
         {
           role: "system",
@@ -91,6 +99,7 @@ export async function finalizeAnswerForDelivery(params: Params): Promise<string>
     }
     return finalText;
   } catch {
+    checkExecution();
     return normalized;
   }
 }

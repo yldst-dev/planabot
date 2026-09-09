@@ -238,6 +238,8 @@ mod tests {
     async fn server_roundtrip_against_real_cli() {
         let (child, stdin) = super::launch().await.expect("launch");
         let input = crate::planabrain::TurnPrepareInput {
+            request_id: "server-test-request".into(),
+            deadline_ms: crate::schedule::now_ms() + 60_000,
             user_id: "server_test_user".into(),
             chat_scope: "chat_server_test".into(),
             conversation_id: None,
