@@ -171,6 +171,32 @@ OLLAMA_API_KEY=YOUR_OLLAMA_API_KEY_HERE
 
 `OLLAMA_API_KEY`가 없으면 시의성 질문에 "확인 불가" 응답이 나옵니다. 검색 결과와 출처를 확인하지 못한 답변은 폐기하는 설계이기 때문입니다.
 
+### Geminiweb
+
+- `PLANABRAIN_AI_PROVIDER=geminiweb` (별칭: `gemini-web`, `gemini_web`, `web2api`)
+- 필수: `PLANABRAIN_GEMINIWEB_API_KEY` (또는 `GEMINIWEB_API_KEY`), `PLANABRAIN_GEMINIWEB_BASE_URL`
+- 기본 모델: `gemini-3.8-flash`
+- 자체 호스팅 `gemini-web2api-go` 게이트웨이의 OpenAI Chat Completions 호환 경로입니다. OpenRouter가 아닙니다.
+- 이미지 입력을 지원합니다. `image_url` data URL로 전달합니다.
+- 임베딩은 사용하지 않습니다.
+- OpenRouter 웹 검색을 이 게이트웨이에 켜지 마십시오. Gemini 웹 모델의 내장 검색과 planabrain `web_fetch`를 씁니다.
+- 권장 타임아웃: `PLANABRAIN_HTTP_TIMEOUT_MS=180000`
+- 게이트웨이 `multi_turn`이 켜져 있으면 `PLANABRAIN_CONTINUOUS_CHAT=1`로 맞춥니다. 기본값은 꺼짐입니다.
+
+최소 설정 예시:
+
+```bash
+PLANABRAIN_AI_PROVIDER=geminiweb
+PLANABRAIN_GEMINIWEB_API_KEY=YOUR_GEMINIWEB_API_KEY_HERE
+PLANABRAIN_GEMINIWEB_BASE_URL=http://ROCKY_PRIVATE_IP:8083/v1
+PLANABRAIN_GEMINIWEB_MODEL=gemini-3.8-flash
+PLANABRAIN_HTTP_TIMEOUT_MS=180000
+PLANABRAIN_CONTINUOUS_CHAT=1
+PLANABRAIN_OPENROUTER_ENABLE_WEB_SEARCH=0
+```
+
+Dokploy에서는 `http://127.0.0.1:8083` 또는 `http://host.docker.internal:8083`을 쓰지 않습니다. Rocky 사설 IP 또는 Tailscale 주소를 넣습니다.
+
 ### Ollama Cloud
 
 - `PLANABRAIN_AI_PROVIDER=ollama`
@@ -203,6 +229,7 @@ OLLAMA_API_KEY=YOUR_OLLAMA_API_KEY_HERE
 - `PLANABRAIN_DATA_DIR` (planabrain 데이터 루트, 기본값은 저장소 루트이며 `.planabrain/*` 상대 경로의 기준)
 - `PLANABOT_PLANABRAIN_SERVER` (기본 1, planabrain 상주 서버 사용 여부)
 - `PLANABRAIN_SERVER_PORT` (기본 0, 상주 서버가 쓸 루프백 포트이며 0이면 자동 선택)
+- `PLANABRAIN_HTTP_TIMEOUT_MS` (전역 HTTP 타임아웃, 기본 60000. geminiweb은 180000 권장)
 - `PLANABRAIN_WEB_FETCH_ENABLED`
 - `PLANABRAIN_WEB_FETCH_TIMEOUT_MS`
 - `PLANABRAIN_WEB_FETCH_MAX_BYTES`
@@ -232,6 +259,7 @@ OLLAMA_API_KEY=YOUR_OLLAMA_API_KEY_HERE
 
 - `OPENROUTER_API_KEY`
 - `PLANABRAIN_OPENROUTER_MODEL`
+- `PLANABRAIN_OPENROUTER_IMAGE_MODEL`
 - `PLANABRAIN_OPENROUTER_BASE_URL`
 - `PLANABRAIN_OPENROUTER_SITE_URL`
 - `PLANABRAIN_OPENROUTER_APP_NAME`
@@ -246,6 +274,15 @@ OLLAMA_API_KEY=YOUR_OLLAMA_API_KEY_HERE
 - `PLANABRAIN_MODELSTUDIO_MODEL`
 - `PLANABRAIN_MODELSTUDIO_BASE_URL`
 - `PLANABRAIN_MODELSTUDIO_ENABLE_WEB_SEARCH`
+
+### Geminiweb
+
+- `PLANABRAIN_GEMINIWEB_API_KEY` (별칭 `GEMINIWEB_API_KEY`)
+- `PLANABRAIN_GEMINIWEB_BASE_URL` (예: `http://ROCKY_PRIVATE_IP:8083/v1`)
+- `PLANABRAIN_GEMINIWEB_MODEL` (기본 `gemini-3.8-flash`)
+- `PLANABRAIN_HTTP_TIMEOUT_MS` (이 제공자는 `180000` 권장, 전역 기본값은 60000)
+- `PLANABRAIN_CONTINUOUS_CHAT` (게이트웨이 `multi_turn`이 켜져 있으면 `1`)
+- `PLANABRAIN_OPENROUTER_ENABLE_WEB_SEARCH` (이 게이트웨이에는 `0`)
 
 ### Ollama
 

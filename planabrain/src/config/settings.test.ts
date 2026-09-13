@@ -161,6 +161,27 @@ test("system prompt env override still wins over persona profile", () => {
   assert.equal(settings.systemPrompt, "커스텀 페르소나");
 });
 
+test("openrouter image model is optional and loads the OpenRouter base url", () => {
+  const settings = withEnv(
+    {
+      PLANABRAIN_AI_PROVIDER: "openrouter",
+      OPENROUTER_API_KEY: "sk-or-test",
+      PLANABRAIN_OPENROUTER_IMAGE_MODEL: "google/gemini-3-flash-preview",
+    },
+    loadSettings,
+  );
+  assert.equal(settings.openRouterImageModel, "google/gemini-3-flash-preview");
+  assert.equal(settings.openRouterBaseUrl, "https://openrouter.ai/api/v1");
+  const plain = withEnv(
+    {
+      PLANABRAIN_AI_PROVIDER: "openrouter",
+      OPENROUTER_API_KEY: "sk-or-test",
+    },
+    loadSettings,
+  );
+  assert.equal(plain.openRouterImageModel, undefined);
+});
+
 test("aux provider and model are optional and resolve the provider host", () => {
   const settings = withEnv(
     {

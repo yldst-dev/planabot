@@ -31,6 +31,7 @@ export type Settings = {
   geminiWebBaseUrl?: string;
   openRouterSiteUrl?: string;
   openRouterAppName?: string;
+  openRouterImageModel?: string;
   openRouterWebSearchEnabled: boolean;
   openRouterWebSearchBackend: "plugin" | "ollama";
   openRouterWebSearchMaxResults: number;
@@ -174,6 +175,9 @@ export function loadSettings(): Settings {
   );
   const auxProvider = resolveOptionalAiProvider("PLANABRAIN_AUX_PROVIDER");
   const auxModel = readOptionalEnv("PLANABRAIN_AUX_MODEL");
+  const openRouterImageModel = readOptionalEnv(
+    "PLANABRAIN_OPENROUTER_IMAGE_MODEL",
+  );
   const usesProvider = (provider: Settings["aiProvider"]): boolean =>
     aiProvider === provider ||
     intimacyFallbackProvider === provider ||
@@ -276,7 +280,7 @@ export function loadSettings(): Settings {
         ? resolveGeminiMockBaseUrl()
         : undefined,
     openRouterBaseUrl:
-      usesProvider("openrouter")
+      usesProvider("openrouter") || Boolean(openRouterImageModel)
         ? resolveOpenRouterBaseUrl()
         : undefined,
     openRouterSiteUrl:
@@ -287,6 +291,7 @@ export function loadSettings(): Settings {
       aiProvider === "openrouter"
         ? readOptionalEnv("PLANABRAIN_OPENROUTER_APP_NAME")
         : undefined,
+    openRouterImageModel,
     openRouterWebSearchEnabled,
     openRouterWebSearchBackend,
     openRouterWebSearchMaxResults,

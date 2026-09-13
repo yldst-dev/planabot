@@ -112,6 +112,26 @@ export async function invokeChatOnce(params: ChatInvocationOnceParams): Promise<
   }
   const hasImages = params.messages.some((message) => (message.images?.length ?? 0) > 0);
   if (hasImages && isGlm53FlashModel(params.settings.chatModel)) {
+    const imageModel = params.settings.openRouterImageModel?.trim();
+    if (
+      imageModel &&
+      !isGlm53FlashModel(imageModel) &&
+      params.settings.openRouterApiKey &&
+      params.settings.openRouterBaseUrl
+    ) {
+      const imageSettings = {
+        ...params.settings,
+        aiProvider: "openrouter" as const,
+        chatModel: imageModel,
+      };
+      return measureStage("provider:openrouter", () =>
+        invokeOpenRouterChat(
+          imageSettings,
+          params.messages,
+          params.enableSearchTool,
+        ),
+      );
+    }
     return { content: GLM_53_FLASH_VISION_UNAVAILABLE };
   }
   if (hasImages && !provider.supportsImages) {

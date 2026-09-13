@@ -184,6 +184,78 @@ test("glm-5.3-flash image requests skip the provider and return the vision notic
   }
 });
 
+test("glm-5.3-flash image requests use the OpenRouter image model", async () => {
+  const original = globalThis.fetch;
+  let body: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { role: "assistant", content: "확인 완료." }, finish_reason: "stop" }],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  try {
+    const result = await invokeChatWithMetadata({
+      settings: settingsFor({
+        aiProvider: "openrouter",
+        openRouterApiKey: "sk-or-test",
+        openRouterBaseUrl: "https://openrouter.ai/api/v1",
+        chatModel: "z-ai/glm-5.3-flash",
+        openRouterImageModel: "google/gemini-3-flash-preview",
+      }),
+      messages: [
+        {
+          role: "user",
+          content: "이 사진 봐줘",
+          images: [{ mimeType: "image/jpeg", data: "AAAA" }],
+        },
+      ],
+    });
+    assert.equal(result.content, "확인 완료.");
+    assert.ok(body);
+    assert.equal(body.model, "google/gemini-3-flash-preview");
+    const messages = body.messages as Array<Record<string, unknown>>;
+    assert.deepEqual(messages[0]?.content, [
+      { type: "text", text: "이 사진 봐줘" },
+      { type: "image_url", image_url: { url: "data:image/jpeg;base64,AAAA" } },
+    ]);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("glm-5.3-flash text requests keep the chat model", async () => {
+  const original = globalThis.fetch;
+  let body: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { role: "assistant", content: "정리 완료." }, finish_reason: "stop" }],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  try {
+    const result = await invokeChatWithMetadata({
+      settings: settingsFor({
+        aiProvider: "openrouter",
+        openRouterApiKey: "sk-or-test",
+        openRouterBaseUrl: "https://openrouter.ai/api/v1",
+        chatModel: "z-ai/glm-5.3-flash",
+        openRouterImageModel: "google/gemini-3-flash-preview",
+      }),
+      messages: [{ role: "user", content: "안녕" }],
+    });
+    assert.equal(result.content, "정리 완료.");
+    assert.equal(body?.model, "z-ai/glm-5.3-flash");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("unsupported provider names fail clearly", async () => {
   await assert.rejects(
     invokeChatWithMetadata({
