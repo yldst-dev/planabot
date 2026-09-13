@@ -29,11 +29,10 @@ export async function invokeChat(params: ChatInvocationParams): Promise<string> 
 export async function invokeChatWithMetadata(
   params: ChatInvocationParams,
 ): Promise<ChatInvocationMetadata> {
-  let workingMessages = fitContextMessages(params.messages, params.preserveReplay);
+  let workingMessages = params.preSearchQuery ? fitContextMessages(params.messages, params.preserveReplay) : params.messages;
   let combined = "";
   let citations: WebCitation[] = [];
   let searchUsed = false;
-  let lastRawContent = "";
   const maxContinuations = Math.min(2, Math.max(0, params.maxContinuations ?? 2));
   const preSearch = params.preSearchQuery
     ? await runPreSearch(params.settings, params.preSearchQuery)
@@ -42,33 +41,32 @@ export async function invokeChatWithMetadata(
     workingMessages = insertBeforeLastUserMessage(workingMessages, {
       role: "user",
       content: preSearch.context,
+      contextKind: "evidence",
     });
     citations = preSearch.citations;
     searchUsed = true;
   }
   workingMessages = fitContextMessages(workingMessages, params.preserveReplay);
   const continuationMessages = [...workingMessages];
-  const wireStart = Math.max(0, params.messages.length - 1);
-  const finish = (finishReason: string | undefined): ChatInvocationMetadata => ({
-    content: sanitizeAssistantOutput(normalizeContinuationArtifacts(combined)),
-    citations,
-    searchUsed,
-    finishReason,
-    wireMessages: [
-      ...workingMessages.slice(wireStart).map(toWireMessage),
-      { role: "assistant" as const, content: lastRawContent },
-    ],
-  });
+  const wireInput = workingMessages.slice(Math.max(0, workingMessages.map((message) => message.role).lastIndexOf("user")));
+  const finish = (finishReason: string | undefined): ChatInvocationMetadata => {
+    const content = sanitizeAssistantOutput(normalizeContinuationArtifacts(combined));
+    return {
+      content,
+      citations,
+      searchUsed,
+      finishReason,
+      wireMessages: [...wireInput.map(toWireMessage), { role: "assistant", content }],
+    };
+  };
 
   for (let attempt = 0; attempt <= maxContinuations; attempt += 1) {
-    fitContextMessages(workingMessages, true);
     const result = await invokeChatOnce({
       settings: params.settings,
       messages: workingMessages,
       enableSearchTool: params.enableSearchTool,
       webFetchUrlSource: params.webFetchUrlSource,
     });
-    lastRawContent = result.content;
     combined = combined
       ? mergeContinuationContent(combined, result.content)
       : result.content.trim();
@@ -80,7 +78,7 @@ export async function invokeChatWithMetadata(
     if (attempt === maxContinuations) {
       return finish(result.finishReason);
     }
-    workingMessages = [
+    workingMessages = fitContextMessages([
       ...continuationMessages,
       {
         role: "assistant",
@@ -91,7 +89,7 @@ export async function invokeChatWithMetadata(
         content:
           "방금 답변한 마지막 문장 다음부터만 이어서 남은 정보를 적어 주십시오. 이미 쓴 서두는 반복하지 말고, 출처 줄, 메타 설명, 내부 판단은 쓰지 마십시오.",
       },
-    ];
+    ], true);
   }
 
   return finish(undefined);

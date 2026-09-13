@@ -1,7 +1,10 @@
 import { checkExecution } from "../runtime/execution.js";
 import { buildSystemPrompt } from "../config/systemPrompt.js";
 import type { Settings } from "../config/settings.js";
-import { invokeChat, usesNativeWebSearch } from "../integrations/chat.js";
+import { invokeChat } from "../integrations/chat.js";
+import { requiresGlmReasoning } from "../integrations/providers/options.js";
+import { estimateTokenCount } from "tokenx";
+import { looksAbruptlyTruncated, isLengthLimitedFinishReason } from "../integrations/continuation.js";
 import { resolveAuxSettings } from "./auxSettings.js";
 
 export type VerifiedCitation = {
@@ -14,6 +17,7 @@ type Params = {
   answer: string;
   settings: Settings;
   verifiedCitations?: VerifiedCitation[];
+  finishReason?: string;
 };
 
 export const DEFAULT_DELIVERY_MAX_TOKENS = 1024;
@@ -35,7 +39,7 @@ export function buildDeliveryGenerationRules(
   const limit = deliveryMaxOutputTokens ?? DEFAULT_DELIVERY_MAX_TOKENS;
   return [
     `[전송 형식] 답변은 텔레그램 전송용 최종본입니다.`,
-    `반드시 ${limit}토큰(약 ${Math.floor(limit * 0.7)}자) 이내로 작성하십시오.`,
+    `답변은 ${limit}토큰 이내로 완결하십시오. 짧은 인사나 잡담에는 이 길이를 채우지 마십시오.`,
     ...deliveryRuleLines(),
   ].join("\n");
 }
@@ -49,23 +53,21 @@ export async function finalizeAnswerForDelivery(params: Params): Promise<string>
   if (!params.settings.deliveryRewriteEnabled) {
     return normalized;
   }
-  if (!shouldRewriteForDelivery(normalized, params.settings.deliveryMaxOutputTokens)) {
+  if (!isLengthLimitedFinishReason(params.finishReason) && !shouldRewriteForDelivery(normalized, params.settings.deliveryMaxOutputTokens)) {
     return normalized;
   }
 
   const deliveryTokenLimit =
     params.settings.deliveryMaxOutputTokens ?? DEFAULT_DELIVERY_MAX_TOKENS;
+  const auxSettings = resolveAuxSettings(params.settings);
   const rewriteSettings: Settings = {
-    ...resolveAuxSettings(params.settings),
-    chatMaxOutputTokens: deliveryTokenLimit,
+    ...auxSettings,
+    chatMaxOutputTokens: auxSettings.aiProvider === "openrouter" && requiresGlmReasoning(auxSettings.chatModel)
+      ? Math.max(deliveryTokenLimit, params.settings.chatMaxOutputTokens ?? deliveryTokenLimit)
+      : deliveryTokenLimit,
   };
   const rewritePrompt = [
-    buildSystemPrompt(
-      params.settings,
-      usesNativeWebSearch(params.settings)
-        ? { searchEnabled: true, searchMode: "native" }
-        : {},
-    ),
+    buildSystemPrompt(params.settings),
     `다음 초안을 텔레그램 전송용 최종 답변으로 다시 작성하십시오.`,
     `반드시 ${deliveryTokenLimit}토큰 이내로 줄이십시오.`,
     ...deliveryRuleLines(),
@@ -94,7 +96,7 @@ export async function finalizeAnswerForDelivery(params: Params): Promise<string>
       ],
     });
     const finalText = normalizeDeliveryText(removeModelSourceLines(rewritten));
-    if (!finalText) {
+    if (!finalText || !preservesLiteralFacts(normalized, finalText)) {
       return normalized;
     }
     return finalText;
@@ -118,11 +120,12 @@ function shouldRewriteForDelivery(
   return estimateTokenCount(answer) > maxTokens;
 }
 
-function normalizeDeliveryText(raw: string): string {
+export function normalizeDeliveryText(raw: string): string {
   let text = raw.replace(/\r\n/g, "\n").trim();
   if (!text) {
     return text;
   }
+  text = text.replace(/^([ \t]*(?:네[,，]?\s*)?)선생님[.,，]+[ \t]*(?:\n[ \t]*)*/gmu, (_match, prefix: string) => `${prefix.trim() ? "네.\n" : ""}선생님.\n`);
   text = text.replace(/\n{3,}/g, "\n\n").trim();
   return text.split("\n").map(breakIntoSentenceLines).join("\n").trim();
 }
@@ -135,48 +138,6 @@ function breakIntoSentenceLines(line: string): string {
   return line
     .replace(/([^\s.!?][.!?]+["'”’)\]]*)[ \t]+(?=\S)/g, "$1\n")
     .replace(/([。！？]+["'”’)\]）」』》]*)[ \t]*(?=\S)/g, "$1\n");
-}
-
-function estimateTokenCount(answer: string): number {
-  return Math.ceil(answer.length / 2);
-}
-
-function looksAbruptlyTruncated(content: string): boolean {
-  const trimmed = content.trim();
-  if (trimmed.length < 220) {
-    return false;
-  }
-  if (hasUnbalancedPairs(trimmed)) {
-    return true;
-  }
-  if (/[.!?…][\])}"'”’]*$/.test(trimmed)) {
-    return false;
-  }
-  if (/https?:\/\/\S+$/.test(trimmed)) {
-    return false;
-  }
-  const tail = trimmed.slice(-120);
-  if (/[:;,]\s*$/.test(tail)) {
-    return true;
-  }
-  if (/[가-힣A-Za-z0-9]$/.test(trimmed)) {
-    return /(?:의|은|는|이|가|을|를|와|과|로|에|에서|에게|부터|까지|이며|또는|그리고|및|후|중|예정|가능|경우|관련)$/.test(
-      tail,
-    );
-  }
-  return false;
-}
-
-function hasUnbalancedPairs(content: string): boolean {
-  const boldMatches = content.match(/\*\*/g)?.length ?? 0;
-  if (boldMatches % 2 !== 0) {
-    return true;
-  }
-  const openParens =
-    (content.match(/\(/g)?.length ?? 0) - (content.match(/\)/g)?.length ?? 0);
-  const openBrackets =
-    (content.match(/\[/g)?.length ?? 0) - (content.match(/\]/g)?.length ?? 0);
-  return openParens > 0 || openBrackets > 0;
 }
 
 export function removeModelSourceLines(input: string): string {
@@ -283,4 +244,10 @@ function normalizeVerifiedCitations(
     }
   }
   return entries;
+}
+
+export function preservesLiteralFacts(original: string, rewritten: string): boolean {
+  const numbers = (text: string): string[] => [...new Set(text.match(/\d+(?:[.,:/×x-]\d+)*/gu) ?? [])].sort();
+  const negative = (text: string): boolean => /않|아니|없|불가|미완료|취소/gu.test(text);
+  return JSON.stringify(numbers(original)) === JSON.stringify(numbers(rewritten)) && negative(original) === negative(rewritten);
 }

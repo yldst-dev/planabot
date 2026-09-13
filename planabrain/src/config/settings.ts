@@ -32,6 +32,9 @@ export type Settings = {
   openRouterSiteUrl?: string;
   openRouterAppName?: string;
   openRouterImageModel?: string;
+  openRouterTemperature?: number;
+  openRouterTopP?: number;
+  openRouterProviderOrder?: string[];
   openRouterWebSearchEnabled: boolean;
   openRouterWebSearchBackend: "plugin" | "ollama";
   openRouterWebSearchMaxResults: number;
@@ -331,6 +334,9 @@ export function loadSettings(): Settings {
       process.env.PLANABRAIN_CHAT_MODEL ??
       process.env.PLANABRAIN_GEMINI_MODEL ??
       defaultChatModel(aiProvider),
+    openRouterTemperature: readOptionalRange("PLANABRAIN_OPENROUTER_TEMPERATURE", 0, 2),
+    openRouterTopP: readOptionalRange("PLANABRAIN_OPENROUTER_TOP_P", 0, 1),
+    openRouterProviderOrder: readOptionalEnv("PLANABRAIN_OPENROUTER_PROVIDER_ORDER")?.split(",").map((value) => value.trim()).filter(Boolean),
     chatMaxOutputTokens,
     deliveryMaxOutputTokens,
     deliveryRewriteEnabled,
@@ -868,4 +874,14 @@ function parseBooleanEnv(key: string, defaultValue: boolean): boolean {
 function readOptionalEnv(key: string): string | undefined {
   const value = process.env[key]?.trim();
   return value ? value : undefined;
+}
+
+function readOptionalRange(name: string, min: number, max: number): number | undefined {
+  const raw = readOptionalEnv(name);
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < min || value > max) {
+    throw new Error(`${name} 값은 ${min}부터 ${max}까지의 숫자여야 합니다.`);
+  }
+  return value;
 }

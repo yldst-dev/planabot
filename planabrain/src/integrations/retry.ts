@@ -1,5 +1,5 @@
 import { ProviderApiError, toStructuredError } from "./providerError.js";
-import { checkExecution, waitForRetry } from "../runtime/execution.js";
+import { checkExecution, waitForRetry, currentExecution } from "../runtime/execution.js";
 
 export const RATE_LIMIT_MAX_RETRIES = 2;
 
@@ -32,7 +32,8 @@ export async function withRateLimitRetry<T>(fn: () => Promise<T>): Promise<T> {
       checkExecution();
       const structured = toStructuredError(error);
       const status = structured.status;
-      if (!structured.retryable) {
+      const execution = currentExecution();
+      if (!structured.retryable || (execution && execution.calls >= execution.maxCalls)) {
         throw error;
       }
       if (attempt >= RATE_LIMIT_MAX_RETRIES) {

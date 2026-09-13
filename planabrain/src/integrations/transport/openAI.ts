@@ -1,6 +1,6 @@
 import { type ChatInvocationResult } from "../contracts.js";
 import { fetchWithTimeout, ProviderApiError, classifyHttpStatus, isRetryable } from "../providerError.js";
-import { readUsage } from "../responseMetadata.js";
+import { readUsage, recordProviderResponse } from "../responseMetadata.js";
 import { asRecord } from "../value.js";
 import { hasOpenRouterSearchUsage, parseOpenRouterCitations } from "../evidence.js";
 
@@ -33,6 +33,7 @@ export async function invokeOpenAICompatibleChat(params: {
 
   const body = await readJsonOrText(response);
   readUsage(body);
+  recordProviderResponse(body, readUpstreamProvider(body, response));
   if (!response.ok || hasErrorPayload(body)) {
     throw buildProviderApiError(params.providerName, body, response);
   }
@@ -70,6 +71,7 @@ export async function postOpenAIChatChoice(params: {
 
   const body = await readJsonOrText(response);
   readUsage(body);
+  recordProviderResponse(body, readUpstreamProvider(body, response));
   if (!response.ok || hasErrorPayload(body)) {
     throw buildProviderApiError(params.providerName, body, response);
   }

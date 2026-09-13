@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { Settings } from "../config/settings.js";
-import { buildContinuousSystemPrompt } from "./replay.js";
+import { buildChatSystemPrompt } from "./replay.js";
 import {
   answerTurn,
   applySourceSelection,
@@ -97,7 +97,7 @@ const searchResults = {
   ],
 };
 
-test("continuous mode replays wire messages with a fixed system prompt and records a transcript", async () => {
+test("continuous mode replays canonical turns and records the delivered answer", async () => {
   const settings = createSettings({ searchQueryRewriteEnabled: false });
   const recentTurns: RecentTurnInput[] = [
     { role: "user", text: "안녕", at: 1, epoch: 0 },
@@ -125,19 +125,19 @@ test("continuous mode replays wire messages with a fixed system prompt and recor
     assert.equal(mock.requests.length, 1);
     const messages = mock.requests[0].body.messages as Array<{ role: string; content: string; }>;
     assert.equal(messages[0].role, "system");
-    assert.equal(messages[0].content, buildContinuousSystemPrompt(settings));
+    assert.equal(messages[0].content, buildChatSystemPrompt(settings));
     assert.deepEqual(messages.slice(1, 3), [
-      { role: "user", content: "메타정보\n\n안녕" },
-      { role: "assistant", content: "안녕하세요, 선생님." },
+      { role: "user", content: "안녕" },
+      { role: "assistant", content: "안녕하세요." },
     ]);
-    assert.equal(messages.length, 4);
+    assert.equal(messages.length, 5);
     assert.match(messages[3].content, /PAST_MEMORY_DATA_BEGIN/u);
-    assert.ok(messages[3].content.endsWith("잘 지냈어?"));
+    assert.equal(messages[4].content, "잘 지냈어?");
     assert.equal(result.answer, "잘 지냈습니다.");
     assert.ok(result.transcript);
     assert.equal(result.transcript?.epoch, 0);
     assert.deepEqual(result.transcript?.wireMessages, [
-      { role: "user", content: messages[3].content },
+      { role: "user", content: "잘 지냈어?" },
       { role: "assistant", content: "잘 지냈습니다." },
     ]);
   } finally {
@@ -145,10 +145,9 @@ test("continuous mode replays wire messages with a fixed system prompt and recor
   }
 });
 
-test("continuous mode rewrites the search query and keeps only the selected sources", async () => {
+test("standalone search skips query rewriting and keeps only selected sources", async () => {
   const settings = createSettings({ auxModel: "fast-model" });
   const mock = installFetch({
-    rewrite: "{\"query\": \"TETRAPOD 2026 취소\"}",
     search: searchResults,
     answer: "확인 완료.\n선생님.\nTETRAPOD 2026은 주최 측 사정으로 취소됐습니다.\n출처번호: 1",
   });
@@ -161,13 +160,12 @@ test("continuous mode rewrites the search query and keeps only the selected sour
       recentTurns: [],
     });
     const search = mock.requests.find((r) => r.url.endsWith("/api/web_search"));
-    assert.equal(search?.body.query, "TETRAPOD 2026 취소");
+    assert.equal(search?.body.query, "테트라포트 2026이 취소됐다는데 진짜인지");
     const chats = mock.requests.filter((r) => r.url.endsWith("/chat/completions"));
-    assert.equal(chats.length, 2);
-    assert.equal(chats[0].body.model, "fast-model");
-    assert.equal(chats[1].body.model, settings.chatModel);
-    const finalMessages = chats[1].body.messages as Array<{ role: string; content: string; }>;
-    assert.match(finalMessages.at(-1)?.content ?? "", /\[웹 검색 결과\]/u);
+    assert.equal(chats.length, 1);
+    assert.equal(chats[0].body.model, settings.chatModel);
+    const finalMessages = chats[0].body.messages as Array<{ role: string; content: string; }>;
+    assert.ok(finalMessages.some((message) => message.content.includes("[웹 검색 결과]")));
     assert.doesNotMatch(result.answer, /출처번호/u);
     assert.match(result.answer, /출처: \[TETRAPOD 2026 취소 공지\]\(https:\/\/fest\.example\/notice\)/u);
     assert.doesNotMatch(result.answer, /other\.example/u);
@@ -202,7 +200,7 @@ test("short corrections after a search question trigger a contextual search", as
   }
 });
 
-test("the epoch restarts before working memory would drop the oldest replayed turn", async () => {
+test("canonical replay drops the oldest pair without discarding recent context", async () => {
   const settings = createSettings({ searchQueryRewriteEnabled: false });
   const exchange = (index: number, epoch: number): RecentTurnInput[] => [
     { role: "user", text: `q${index}`, at: index * 2, epoch },
@@ -237,8 +235,9 @@ test("the epoch restarts before working memory would drop the oldest replayed tu
       recentTurns: [...exchange(1, 0), ...exchange(2, 0)],
       workingTurnLimit: 4,
     });
-    assert.equal(reset.transcript?.epoch, 1);
-    assert.equal((mock.requests[1].body.messages as unknown[]).length, 2);
+    assert.equal(reset.transcript?.epoch, 0);
+    assert.equal((mock.requests[1].body.messages as unknown[]).length, 4);
+    assert.equal((mock.requests[1].body.messages as Array<{ content: string }>)[1].content, "q2");
   } finally {
     mock.restore();
   }
@@ -249,7 +248,7 @@ test("a huge replay starts a new epoch instead of resending history", () => {
   const replay = buildReplay([
     { role: "user", text: "q1", epoch: 3, wireMessages: undefined },
     { role: "assistant", text: "a1", epoch: 3, wireMessages: [{ role: "user", content: big }, { role: "assistant", content: big }] },
-  ]);
+  ], true);
   assert.equal(replay.epoch, 3);
   assert.equal(replay.messages.length, 2);
   const older = buildReplay([
@@ -289,7 +288,7 @@ test("follow-up detection and query parsing", () => {
 });
 
 test("geminiweb continuous prompt forces native search without tools", () => {
-  const prompt = buildContinuousSystemPrompt(
+  const prompt = buildChatSystemPrompt(
     createSettings({
       aiProvider: "geminiweb",
       geminiWebApiKey: "sk-gemini-test",

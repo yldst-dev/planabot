@@ -12,6 +12,7 @@
     "test": "node --import tsx --test $(find src -name '*.test.ts' | sort)",
     "start": "node dist/cli/index.js",
     "health": "node dist/health/index.js",
+    "eval:prana": "node --import tsx src/evaluation/prana.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

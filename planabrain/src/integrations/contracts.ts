@@ -14,6 +14,7 @@ export type ChatMessage = {
   role: "system" | "user" | "assistant" | "developer" | "tool";
   content: string;
   name?: string;
+  contextKind?: "history" | "memory" | "reference" | "evidence" | "current";
   images?: InputImage[];
 };
 

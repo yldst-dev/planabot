@@ -1,6 +1,6 @@
 import { type Settings } from "../../config/settings.js";
 import { type ChatMessage, type ChatInvocationResult, type OpenAICompatibleToolChatConfig, type GeminiSafetySetting } from "../contracts.js";
-import { DEFAULT_CHAT_TEMPERATURE, DEFAULT_CHAT_TOP_P } from "./options.js";
+import { DEFAULT_CHAT_TEMPERATURE, DEFAULT_CHAT_TOP_P, requiresGlmReasoning } from "./options.js";
 import { invokeOpenAICompatibleChat, postOpenAIChatChoice, extractOpenAIResult } from "../transport/openAI.js";
 import { withRateLimitRetry } from "../retry.js";
 import { buildWebTools, extractOllamaToolCalls, executeOllamaToolCall } from "../tools/webTools.js";
@@ -76,13 +76,15 @@ export async function invokeOpenRouterChat(
   return withRateLimitRetry(async () => {
     const payload: Record<string, unknown> = {
       model: settings.chatModel,
-      temperature: DEFAULT_CHAT_TEMPERATURE,
-      top_p: DEFAULT_CHAT_TOP_P,
+      temperature: settings.openRouterTemperature ?? DEFAULT_CHAT_TEMPERATURE,
+      top_p: settings.openRouterTopP ?? DEFAULT_CHAT_TOP_P,
       messages: messages.map((message) => ({
         role: normalizeOpenAIRole(message.role),
         content: toOpenAIMessageContent(message),
       })),
     };
+    const reasoning = buildOpenRouterReasoning(settings);
+    if (reasoning) payload.reasoning = reasoning;
     const openRouterWebSearchTool = buildOpenRouterWebSearchTool(
       settings,
       enableSearchTool,
@@ -93,9 +95,10 @@ export async function invokeOpenRouterChat(
     if (settings.chatMaxOutputTokens) {
       payload.max_tokens = settings.chatMaxOutputTokens;
     }
-    if (hasImages || ignoredProviders.length > 0) {
+    if (hasImages || ignoredProviders.length > 0 || settings.openRouterProviderOrder?.length) {
       payload.provider = {
-        allow_fallbacks: true,
+        allow_fallbacks: !settings.openRouterProviderOrder?.length,
+        ...(settings.openRouterProviderOrder?.length ? { order: settings.openRouterProviderOrder } : {}),
         ...(hasImages ? { require_parameters: true } : {}),
         ...(ignoredProviders.length > 0 ? { ignore: [...ignoredProviders] } : {}),
       };
@@ -397,4 +400,11 @@ export function buildSafetySettingsOff(): GeminiSafetySetting[] {
       threshold: "BLOCK_NONE",
     },
   ];
+}
+
+export function buildOpenRouterReasoning(settings: Settings): Record<string, unknown> | undefined {
+  if (!requiresGlmReasoning(settings.chatModel)) return undefined;
+  const mode = settings.chatThinkingMode;
+  if (mode === "default") return undefined;
+  return { effort: mode === "high" || mode === "medium" ? "high" : "low", exclude: true };
 }

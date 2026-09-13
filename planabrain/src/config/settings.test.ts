@@ -137,7 +137,7 @@ test("modelstudio web search can be turned off explicitly", () => {
 test("persona profile defaults to live and can load the original backup", () => {
   const live = withEnv(MODEL_STUDIO_ENV, loadSettings);
   assert.equal(live.personaProfile, "live");
-  assert.match(live.systemPrompt, /성인 여성 캐릭터/u);
+  assert.match(live.systemPrompt, /차분하고 간결한 한국어 존댓말/u);
   assert.doesNotMatch(live.systemPrompt, /법적 문제를 삼지 않습니다/u);
   assert.equal(live.intimacyEnabled, true);
 
@@ -358,4 +358,16 @@ test("intimacy fallback provider and model are optional", () => {
   assert.equal(settings.intimacyFallbackProvider, "ollama");
   assert.equal(settings.intimacyFallbackModel, "gemma4:31b-cloud");
   assert.equal(settings.ollamaHost, "https://ollama.com");
+});
+
+test("OpenRouter sampling overrides validate ranges and parse provider order", () => {
+  const settings = withEnv({ ...MODEL_STUDIO_ENV, PLANABRAIN_OPENROUTER_TEMPERATURE: "0.8", PLANABRAIN_OPENROUTER_TOP_P: "0.95", PLANABRAIN_OPENROUTER_PROVIDER_ORDER: " deepinfra/fp4, z-ai/fp8 " }, loadSettings);
+  assert.equal(settings.openRouterTemperature, 0.8);
+  assert.equal(settings.openRouterTopP, 0.95);
+  assert.deepEqual(settings.openRouterProviderOrder, ["deepinfra/fp4", "z-ai/fp8"]);
+  for (const value of ["NaN", "Infinity", "-1", "2.1"]) {
+    assert.throws(() => withEnv({ ...MODEL_STUDIO_ENV, PLANABRAIN_OPENROUTER_TEMPERATURE: value }, loadSettings), /PLANABRAIN_OPENROUTER_TEMPERATURE/u);
+  }
+  assert.throws(() => withEnv({ ...MODEL_STUDIO_ENV, PLANABRAIN_OPENROUTER_TOP_P: "1.1" }, loadSettings), /PLANABRAIN_OPENROUTER_TOP_P/u);
+  assert.equal(withEnv({ ...MODEL_STUDIO_ENV, PLANABRAIN_OPENROUTER_TOP_P: "" }, loadSettings).openRouterTopP, undefined);
 });

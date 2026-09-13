@@ -19,6 +19,9 @@ export type Execution = {
   inputTokens: number;
   outputTokens: number;
   usageReports: number;
+  cachedInputTokens: number;
+  reasoningTokens: number;
+  providerResponses: Array<{ model?: string; provider?: string; cost?: number; }>;
   maxCalls: number;
   maxTools: number;
 };
@@ -73,6 +76,9 @@ export async function runExecution<T>(
     inputTokens: 0,
     outputTokens: 0,
     usageReports: 0,
+    cachedInputTokens: 0,
+    reasoningTokens: 0,
+    providerResponses: [],
     maxCalls: options.maxCalls ?? 12,
     maxTools: options.maxTools ?? 8,
   };
@@ -98,6 +104,9 @@ export async function runExecution<T>(
       inputTokens: execution.inputTokens,
       outputTokens: execution.outputTokens,
       usageReports: execution.usageReports,
+      cachedInputTokens: execution.cachedInputTokens,
+      reasoningTokens: execution.reasoningTokens,
+      providerResponses: execution.providerResponses,
     }));
   }
 }
@@ -121,7 +130,7 @@ export function consumeTool(): boolean {
   return true;
 }
 
-export function recordUsage(inputTokens: unknown, outputTokens: unknown): void {
+export function recordUsage(inputTokens: unknown, outputTokens: unknown, cachedInputTokens?: unknown, reasoningTokens?: unknown): void {
   const execution = currentExecution();
   if (!execution) return;
   let reported = false;
@@ -133,6 +142,8 @@ export function recordUsage(inputTokens: unknown, outputTokens: unknown): void {
     execution.outputTokens += outputTokens;
     reported = true;
   }
+  if (typeof cachedInputTokens === "number" && Number.isFinite(cachedInputTokens) && cachedInputTokens >= 0) execution.cachedInputTokens += cachedInputTokens;
+  if (typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens) && reasoningTokens >= 0) execution.reasoningTokens += reasoningTokens;
   if (reported) execution.usageReports += 1;
 }
 

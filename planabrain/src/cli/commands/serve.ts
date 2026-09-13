@@ -197,6 +197,7 @@ function parseRecentTurns(value: unknown): RecentTurnInput[] | undefined {
       role,
       text,
       ...(typeof record.at === "number" ? { at: record.at } : {}),
+      ...(typeof record.ownerUserId === "string" ? { ownerUserId: record.ownerUserId.slice(0, 128) } : {}),
       ...(wireMessages ? { wireMessages } : {}),
       ...(epoch !== undefined ? { epoch } : {}),
     });

@@ -1,4 +1,5 @@
-
+import type { ChatMessage, InputImage } from "../integrations/contracts.js";
+import { fitContextMessages } from "./contextBudget.js";
 
 export function normalizeQuestionForMemory(raw: string): string {
   const trimmed = raw.trim();
@@ -8,14 +9,6 @@ export function normalizeQuestionForMemory(raw: string): string {
     return trimmed;
   }
   return trimmed.slice(idx + marker.length).trim();
-}
-
-export function wrapMemoryContent(content: string, role: "user" | "assistant"): string {
-  const trimmed = content.trim();
-  if (!trimmed) {
-    return `기록(참고용 데이터): ${role}`;
-  }
-  return `기록(참고용 데이터): ${role}\n${trimmed}`;
 }
 
 export function buildMemoryContextMessage(memoryContext: string | undefined): string | null {
@@ -52,8 +45,44 @@ export function buildCurrentTurnReference(
   return [
     "[CURRENT_TURN_REFERENCE_BEGIN]",
     "아래 내용은 현재 요청의 시각, 답장, 캡션 등 참고 데이터입니다.",
-    "현재 질문은 다음 사용자 메시지 하나뿐입니다.",
+    "현재 질문은 마지막 사용자 메시지의 질문 부분입니다.",
     context,
     "[CURRENT_TURN_REFERENCE_END]",
   ].join("\n");
+}
+
+export function buildTurnMessages(parts: {
+  systemContent: string;
+  history: ChatMessage[];
+  referenceContext: string | null;
+  memoryContext: string | null;
+  linkContext: string | null;
+  searchContext: string | null;
+  currentTurnText: string;
+  images?: InputImage[];
+}): ChatMessage[] {
+  const contexts: ChatMessage[] = [];
+  if (parts.memoryContext) contexts.push({ role: "user", content: parts.memoryContext, contextKind: "memory" });
+  if (parts.referenceContext) contexts.push({ role: "user", content: parts.referenceContext, contextKind: "reference" });
+  if (parts.linkContext) contexts.push({ role: "user", content: parts.linkContext, contextKind: "evidence" });
+  if (parts.searchContext) contexts.push({ role: "user", content: parts.searchContext, contextKind: "evidence" });
+  const messages = fitContextMessages([
+    { role: "system", content: parts.systemContent },
+    ...parts.history.map((message) => ({ ...message, contextKind: "history" as const })),
+    ...contexts,
+    { role: "user", content: parts.currentTurnText, images: parts.images, contextKind: "current" },
+  ]);
+  const history = new Set(messages.filter((message) => message.contextKind === "history").map((message) => `${message.role}:${memoryKey(message.content)}`));
+  return messages.flatMap((message) => {
+    if (message.contextKind !== "memory") return [message];
+    const content = message.content.split("\n").filter((line) => {
+      const match = line.match(/^- (assistant|user):\s*(.*)$/u);
+      return !match || !history.has(`${match[1]}:${memoryKey(match[2])}`);
+    }).join("\n");
+    return [{ ...message, content }];
+  });
+}
+
+function memoryKey(content: string): string {
+  return content.replace(/\s+/gu, " ").trim();
 }

@@ -1,18 +1,19 @@
 import { type Settings } from "../config/settings.js";
 import { buildSystemPrompt } from "../config/systemPrompt.js";
 import { isSearchToolAvailable, usesPreSearchContext, usesNativeWebSearch, type ChatMessage } from "../integrations/chat.js";
-import { buildDeliveryGenerationRules } from "./deliveryRewrite.js";
-import { INTIMACY_REGISTER_PROMPT } from "../config/persona/index.js";
+import { sanitizeAssistantOutput } from "./sanitizeOutput.js";
+import { normalizeDeliveryText, removeModelSourceLines, buildDeliveryGenerationRules } from "./deliveryRewrite.js";
 import { type Replay, type RecentTurnInput } from "./types.js";
 
 export const MAX_REPLAY_CHARS = 100_000;
 
 export const MAX_REPLAY_MESSAGES = 40;
 
-export function buildContinuousSystemPrompt(settings: Settings): string {
+export function buildChatSystemPrompt(settings: Settings, options: { intimacyActive?: boolean; searchEnabled?: boolean; } = {}): string {
   const nativeSearch = usesNativeWebSearch(settings);
   const basePrompt = buildSystemPrompt(settings, {
-    searchEnabled: nativeSearch || isSearchToolAvailable(settings),
+    searchEnabled: options.searchEnabled ?? (nativeSearch || isSearchToolAvailable(settings)),
+    intimacyActive: options.intimacyActive,
     searchMode: nativeSearch ? "native" : usesPreSearchContext(settings) ? "context" : "tool",
   });
   const deliveryRules = settings.deliveryRewriteEnabled
@@ -26,7 +27,6 @@ export function composeContinuousUserMessage(parts: {
   memoryContext: string | null;
   linkContext: string | null;
   searchContext: string | null;
-  intimacyActive: boolean;
   currentTurnText: string;
 }): string {
   const blocks: string[] = [];
@@ -41,9 +41,6 @@ export function composeContinuousUserMessage(parts: {
   }
   if (parts.searchContext) {
     blocks.push(parts.searchContext);
-  }
-  if (parts.intimacyActive) {
-    blocks.push(INTIMACY_REGISTER_PROMPT);
   }
   blocks.push(parts.currentTurnText);
   return blocks.join("\n\n");
@@ -64,27 +61,36 @@ export function exceedsReplayLimits(
   return workingTurnLimit !== undefined && replay.turnCount + 2 > workingTurnLimit;
 }
 
-export function buildReplay(recentTurns: RecentTurnInput[]): Replay {
+export function buildReplay(recentTurns: RecentTurnInput[], preserveWireMessages = false, maxMessages = MAX_REPLAY_MESSAGES - 2): Replay {
   const latestEpoch = recentTurns.reduce((max, turn) => Math.max(max, turn.epoch ?? 0), 0);
   const turns = recentTurns.filter((turn) => (turn.epoch ?? 0) === latestEpoch);
   const messages: ChatMessage[] = [];
   for (let index = 0; index < turns.length; index += 1) {
     const turn = turns[index];
     if (turn.role === "assistant") {
-      if (turn.wireMessages && turn.wireMessages.length > 0) {
+      if (preserveWireMessages && turn.wireMessages && turn.wireMessages.length > 0) {
         continue;
       }
-      messages.push({ role: "assistant", content: turn.text });
+      const wire = turn.wireMessages;
+      const canonical = wire?.length === 2 && wire[0].role === "user" && wire[0].content === turns[index - 1]?.text && wire[1].role === "assistant";
+      const content = canonical ? normalizeDeliveryText(removeModelSourceLines(sanitizeAssistantOutput(wire[1].content))) : turn.text;
+      messages.push({ role: "assistant", content });
       continue;
     }
     const next = turns[index + 1];
-    if (next && next.role === "assistant" && next.wireMessages && next.wireMessages.length > 0) {
+    if (preserveWireMessages && next && next.role === "assistant" && next.wireMessages && next.wireMessages.length > 0) {
       for (const wire of next.wireMessages) {
         messages.push({ role: wire.role, content: wire.content });
       }
       continue;
     }
-    messages.push({ role: "user", content: turn.text });
+    messages.push({ role: "user", content: turn.ownerUserId ? `발화자 ID: ${JSON.stringify(turn.ownerUserId)}\n${turn.text}` : turn.text });
   }
-  return { messages, epoch: latestEpoch, turnCount: turns.length };
+  if (!preserveWireMessages) {
+    while (messages.length > Math.max(0, maxMessages)) {
+      messages.splice(0, messages[0]?.role === "user" && messages[1]?.role === "assistant" ? 2 : 1);
+    }
+    while (messages[0]?.role === "assistant") messages.shift();
+  }
+  return { messages, epoch: latestEpoch, turnCount: messages.length };
 }

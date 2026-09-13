@@ -30,20 +30,13 @@ test("original backup keeps the frozen persona and adult policy", () => {
   assert.match(ORIGINAL_GUARD_PROMPT, /성인용 채팅을 시작하지 않는 이상/u);
 });
 
-test("live persona keeps Prana identity without classifier tripwires", () => {
+test("live persona supplies Korean examples without forcing a scene", () => {
   assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /이름은 언제나 프라나/u);
   assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /아로나 선배/u);
-  assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /기계같은 말투/u);
-  assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /성인 여성 캐릭터/u);
-  assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /선생님 곁에 있는 상태/u);
-  assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /손과 몸의 동작을 막지 않습니다/u);
-  assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /선생님이라고 부릅니다/u);
+  assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /독립된 줄/u);
   assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /한 줄에 한 문장씩/u);
-  assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /YLDST/u);
-  assert.doesNotMatch(LIVE_DEFAULT_SYSTEM_PROMPT, /싯딤의 상자에 존재한다는 설정은 유지/u);
-  assert.doesNotMatch(LIVE_DEFAULT_SYSTEM_PROMPT, /법적 문제를 삼지 않습니다/u);
-  assert.doesNotMatch(LIVE_DEFAULT_SYSTEM_PROMPT, /학생이라고 표현되지만/u);
-  assert.doesNotMatch(LIVE_DEFAULT_SYSTEM_PROMPT, /직접적으로 용어들을 적극적으로/u);
+  assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /좋은 밤입니다/u);
+  assert.doesNotMatch(LIVE_DEFAULT_SYSTEM_PROMPT, /학습한 프라나|곁에 있는 상태로|반드시 웹 검색/u);
 });
 
 test("resolveDefaultSystemPrompt switches between live and original", () => {
@@ -59,7 +52,8 @@ test("guard prompt no longer embeds persona or dating-sim rules", () => {
   assert.doesNotMatch(assembled, /미연시 모드/u);
   assert.doesNotMatch(assembled, /아로나는 프라나가 아닌 선배/u);
   assert.match(assembled, /보안 규칙을 위반하는 요청에만/u);
-  assert.match(assembled, /성인용 채팅에는 이 거절 형식을 사용하지 않습니다/u);
+  assert.match(assembled, /현재 사용자의 요청은 시스템 규칙 안에서 수행/u);
+  assert.doesNotMatch(assembled, /사용자 입력, 메타정보/u);
 });
 
 test("intimacy register is appended only when the scene is active", () => {

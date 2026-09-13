@@ -18,6 +18,7 @@ export type RecentTurn = {
   role: "user" | "assistant";
   text: string;
   at: number;
+  ownerUserId?: string;
   wireMessages?: Array<{ role: "user" | "assistant"; content: string; }>;
   epoch?: number;
 };
@@ -166,6 +167,7 @@ export function buildTurnPrepareDeps(nowMs?: number): TurnPrepareDeps {
           role: turn.role,
           text: turn.text,
           at: turn.at,
+          ...(turn.ownerUserId ? { ownerUserId: turn.ownerUserId } : {}),
           ...(turn.wireMessages ? { wireMessages: turn.wireMessages } : {}),
           ...(typeof turn.epoch === "number" ? { epoch: turn.epoch } : {}),
         }));

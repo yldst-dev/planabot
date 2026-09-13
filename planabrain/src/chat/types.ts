@@ -5,6 +5,7 @@ export type RecentTurnInput = {
   role: "user" | "assistant";
   text: string;
   at?: number;
+  ownerUserId?: string;
   wireMessages?: WireMessage[];
   epoch?: number;
 };
