@@ -5,6 +5,7 @@ import { buildLongRangeWeatherReply } from "./weatherPolicy.js";
 import { loadUserMemory, appendUserMemory } from "../memory/userMemoryStore.js";
 import { looksUserInitiatedIntimacy, invokeChatWithIntimacyRecovery } from "./intimacyMode.js";
 import { isSearchToolAvailable, usesPreSearchContext, usesNativeWebSearch, performPreSearch, ProviderRateLimitError, type ChatInvocationMetadata, type PreSearchContext, type ChatMessage, mergeWebCitations } from "../integrations/chat.js";
+import { GLM_53_FLASH_VISION_UNAVAILABLE, isGlm53FlashModel } from "../integrations/providers/registry.js";
 import { DEFAULT_DELIVERY_MAX_TOKENS, buildDeliveryGenerationRules, finalizeAnswerForDelivery, removeModelSourceLines } from "./deliveryRewrite.js";
 import { type Settings } from "../config/settings.js";
 import { buildLinkContext } from "./linkContext.js";
@@ -27,6 +28,9 @@ export async function answerWithWebSearch(params: AnswerTurnParams): Promise<str
 }
 
 export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> {
+  if ((params.images?.length ?? 0) > 0 && isGlm53FlashModel(params.settings.chatModel)) {
+    return { answer: GLM_53_FLASH_VISION_UNAVAILABLE };
+  }
   const currentTurnText =
     normalizeCurrentTurnText(
       params.currentTurnText ?? params.linkSourceText ?? params.question,

@@ -7,6 +7,7 @@ import {
   isSearchToolAvailable,
   providerHasCredentials,
 } from "./chat.js";
+import { GLM_53_FLASH_VISION_UNAVAILABLE } from "./providers/registry.js";
 
 function settingsFor(overrides: Partial<Settings>): Settings {
   return { ollamaApiKeys: [], ...overrides } as Settings;
@@ -105,6 +106,79 @@ test("geminiweb accepts image messages", async () => {
       ],
     });
     assert.equal(result.content, "확인 완료.");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("openrouter image requests require parameters and send image_url", async () => {
+  const original = globalThis.fetch;
+  let body: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { role: "assistant", content: "빨강" }, finish_reason: "stop" }],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  try {
+    const result = await invokeChatWithMetadata({
+      settings: settingsFor({
+        aiProvider: "openrouter",
+        openRouterApiKey: "sk-or-test",
+        openRouterBaseUrl: "https://openrouter.ai/api/v1",
+        chatModel: "google/gemini-3-flash-preview",
+      }),
+      messages: [
+        {
+          role: "user",
+          content: "이 사진 봐줘",
+          images: [{ mimeType: "image/jpeg", data: "AAAA" }],
+        },
+      ],
+    });
+    assert.equal(result.content, "빨강");
+    assert.ok(body);
+    const provider = body.provider as Record<string, unknown>;
+    assert.equal(provider.require_parameters, true);
+    assert.equal(provider.allow_fallbacks, true);
+    const messages = body.messages as Array<Record<string, unknown>>;
+    assert.deepEqual(messages[0]?.content, [
+      { type: "text", text: "이 사진 봐줘" },
+      { type: "image_url", image_url: { url: "data:image/jpeg;base64,AAAA" } },
+    ]);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("glm-5.3-flash image requests skip the provider and return the vision notice", async () => {
+  const original = globalThis.fetch;
+  let called = false;
+  globalThis.fetch = (async () => {
+    called = true;
+    throw new Error("provider must not be called");
+  }) as typeof fetch;
+  try {
+    const result = await invokeChatWithMetadata({
+      settings: settingsFor({
+        aiProvider: "openrouter",
+        openRouterApiKey: "sk-or-test",
+        openRouterBaseUrl: "https://openrouter.ai/api/v1",
+        chatModel: "z-ai/glm-5.3-flash",
+      }),
+      messages: [
+        {
+          role: "user",
+          content: "이 사진 봐줘",
+          images: [{ mimeType: "image/jpeg", data: "AAAA" }],
+        },
+      ],
+    });
+    assert.equal(result.content, GLM_53_FLASH_VISION_UNAVAILABLE);
+    assert.equal(called, false);
   } finally {
     globalThis.fetch = original;
   }

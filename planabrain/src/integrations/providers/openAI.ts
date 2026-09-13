@@ -60,25 +60,8 @@ export async function invokeOpenRouterChat(
     );
   }
 
-  const payload: Record<string, unknown> = {
-    model: settings.chatModel,
-    temperature: DEFAULT_CHAT_TEMPERATURE,
-    top_p: DEFAULT_CHAT_TOP_P,
-    messages: messages.map((message) => ({
-      role: normalizeOpenAIRole(message.role),
-      content: toOpenAIMessageContent(message),
-    })),
-  };
-  const openRouterWebSearchTool = buildOpenRouterWebSearchTool(
-    settings,
-    enableSearchTool,
-  );
-  if (openRouterWebSearchTool) {
-    payload.tools = [openRouterWebSearchTool];
-  }
-  if (settings.chatMaxOutputTokens) {
-    payload.max_tokens = settings.chatMaxOutputTokens;
-  }
+  const hasImages = messages.some((message) => (message.images?.length ?? 0) > 0);
+  const ignoredProviders: string[] = [];
 
   const headers: Record<string, string> = {
     authorization: `Bearer ${settings.openRouterApiKey}`,
@@ -90,14 +73,49 @@ export async function invokeOpenRouterChat(
     headers["x-title"] = settings.openRouterAppName;
   }
 
-  return withRateLimitRetry(() =>
-    invokeOpenAICompatibleChat({
-      providerName: "OpenRouter",
-      url: `${settings.openRouterBaseUrl}/chat/completions`,
-      headers,
-      payload,
-    }),
-  );
+  return withRateLimitRetry(async () => {
+    const payload: Record<string, unknown> = {
+      model: settings.chatModel,
+      temperature: DEFAULT_CHAT_TEMPERATURE,
+      top_p: DEFAULT_CHAT_TOP_P,
+      messages: messages.map((message) => ({
+        role: normalizeOpenAIRole(message.role),
+        content: toOpenAIMessageContent(message),
+      })),
+    };
+    const openRouterWebSearchTool = buildOpenRouterWebSearchTool(
+      settings,
+      enableSearchTool,
+    );
+    if (openRouterWebSearchTool) {
+      payload.tools = [openRouterWebSearchTool];
+    }
+    if (settings.chatMaxOutputTokens) {
+      payload.max_tokens = settings.chatMaxOutputTokens;
+    }
+    if (hasImages || ignoredProviders.length > 0) {
+      payload.provider = {
+        allow_fallbacks: true,
+        ...(hasImages ? { require_parameters: true } : {}),
+        ...(ignoredProviders.length > 0 ? { ignore: [...ignoredProviders] } : {}),
+      };
+    }
+    try {
+      return await invokeOpenAICompatibleChat({
+        providerName: "OpenRouter",
+        url: `${settings.openRouterBaseUrl}/chat/completions`,
+        headers,
+        payload,
+      });
+    } catch (error) {
+      if (error instanceof ProviderApiError && error.upstreamProvider) {
+        if (!ignoredProviders.includes(error.upstreamProvider)) {
+          ignoredProviders.push(error.upstreamProvider);
+        }
+      }
+      throw error;
+    }
+  });
 }
 
 export async function invokeGeminiWebChat(

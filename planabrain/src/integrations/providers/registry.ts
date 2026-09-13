@@ -10,6 +10,13 @@ import { checkExecution, measureStage } from "../../runtime/execution.js";
 export const UNSUPPORTED_IMAGE_MESSAGE =
   "현재 선택한 모델 연결은 이미지 입력을 지원하지 않습니다.";
 
+export const GLM_53_FLASH_VISION_UNAVAILABLE =
+  "선생님.. 현재 프라나의 비전 기능에 문제가 생겨 볼 수 없습니다... 죄송합니다.";
+
+export function isGlm53FlashModel(model: string): boolean {
+  return /glm-5\.3-flash/i.test(model);
+}
+
 export const CHAT_PROVIDERS: Record<ChatProviderName, ChatProvider> = {
   google: {
     supportsImages: true,
@@ -104,6 +111,9 @@ export async function invokeChatOnce(params: ChatInvocationOnceParams): Promise<
     throw new Error(`지원하지 않는 provider입니다: ${params.settings.aiProvider}`);
   }
   const hasImages = params.messages.some((message) => (message.images?.length ?? 0) > 0);
+  if (hasImages && isGlm53FlashModel(params.settings.chatModel)) {
+    return { content: GLM_53_FLASH_VISION_UNAVAILABLE };
+  }
   if (hasImages && !provider.supportsImages) {
     throw new Error(UNSUPPORTED_IMAGE_MESSAGE);
   }

@@ -63,6 +63,7 @@ export class ProviderApiError extends Error {
   readonly apiMessage: string;
   readonly retryable: boolean;
   retryAfterMs?: number;
+  upstreamProvider?: string;
 
   constructor(params: {
     kind: ProviderErrorKind;
@@ -71,6 +72,7 @@ export class ProviderApiError extends Error {
     apiMessage?: string;
     retryable?: boolean;
     message?: string;
+    upstreamProvider?: string;
   }) {
     super(params.message ?? params.apiMessage ?? params.kind);
     this.name = "ProviderApiError";
@@ -79,6 +81,7 @@ export class ProviderApiError extends Error {
     this.status = params.status ?? null;
     this.apiMessage = params.apiMessage ?? "";
     this.retryable = params.retryable ?? isRetryable(params.kind);
+    this.upstreamProvider = params.upstreamProvider;
   }
 }
 

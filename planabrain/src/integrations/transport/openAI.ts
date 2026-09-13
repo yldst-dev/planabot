@@ -33,17 +33,21 @@ export async function invokeOpenAICompatibleChat(params: {
 
   const body = await readJsonOrText(response);
   readUsage(body);
-  if (!response.ok) {
+  if (!response.ok || hasErrorPayload(body)) {
     throw buildProviderApiError(params.providerName, body, response);
   }
 
   const result = extractOpenAIResult(body);
   if (!result.content) {
+    const message = `${params.providerName} API response missing choices[0].message.content`;
     throw new ProviderApiError({
       kind: "empty_or_filtered",
       provider: params.providerName,
       status: 200,
-      message: `${params.providerName} API response missing choices[0].message.content`,
+      apiMessage: message,
+      retryable: true,
+      message,
+      upstreamProvider: readUpstreamProvider(body, response),
     });
   }
   return result;
@@ -66,7 +70,7 @@ export async function postOpenAIChatChoice(params: {
 
   const body = await readJsonOrText(response);
   readUsage(body);
-  if (!response.ok) {
+  if (!response.ok || hasErrorPayload(body)) {
     throw buildProviderApiError(params.providerName, body, response);
   }
 
@@ -100,17 +104,70 @@ export function buildProviderApiError(
   response: Response,
 ): ProviderApiError {
   const apiMessage = extractProviderErrorText(body);
-  const kind = classifyHttpStatus(response.status, apiMessage);
+  const status = resolveErrorStatus(body, response.status);
+  const kind = classifyHttpStatus(status, apiMessage);
   const error = new ProviderApiError({
     kind,
     provider: providerName,
-    status: response.status,
+    status,
     apiMessage,
     retryable: isRetryable(kind),
-    message: buildApiErrorMessage(providerName, body, response.status),
+    message: buildApiErrorMessage(providerName, body, status),
+    upstreamProvider: readUpstreamProvider(body, response),
   });
   error.retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
   return error;
+}
+
+export function hasErrorPayload(body: unknown): boolean {
+  const record = asRecord(body);
+  if (!record || record.error == null) {
+    return false;
+  }
+  if (typeof record.error === "string") {
+    return Boolean(record.error.trim());
+  }
+  return asRecord(record.error) !== null;
+}
+
+export function resolveErrorStatus(body: unknown, httpStatus: number): number {
+  const nested = asRecord(asRecord(body)?.error);
+  const code = nested?.code;
+  const numeric =
+    typeof code === "number"
+      ? code
+      : typeof code === "string"
+        ? Number.parseInt(code, 10)
+        : Number.NaN;
+  if (Number.isFinite(numeric) && numeric >= 400) {
+    return numeric;
+  }
+  if (httpStatus >= 400) {
+    return httpStatus;
+  }
+  if (hasErrorPayload(body)) {
+    return 502;
+  }
+  return httpStatus;
+}
+
+export function readUpstreamProvider(
+  body: unknown,
+  response: Response,
+): string | undefined {
+  const header = response.headers.get("x-openrouter-provider")?.trim();
+  if (header) {
+    return header;
+  }
+  const record = asRecord(body);
+  if (typeof record?.provider === "string" && record.provider.trim()) {
+    return record.provider.trim();
+  }
+  const metadata = asRecord(asRecord(record?.error)?.metadata);
+  if (typeof metadata?.provider_name === "string" && metadata.provider_name.trim()) {
+    return metadata.provider_name.trim();
+  }
+  return undefined;
 }
 
 export function extractProviderErrorText(body: unknown): string {
