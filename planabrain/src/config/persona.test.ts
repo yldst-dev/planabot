@@ -63,8 +63,8 @@ test("intimacy register is appended only when the scene is active", () => {
     intimacyActive: true,
     presenceRecovery: true,
   });
-  assert.doesNotMatch(idle, /선생님 곁에서 이어가는 장면/u);
-  assert.match(active, /선생님 곁에서 이어가는 장면/u);
+  assert.doesNotMatch(idle, /선생님 곁에서 이어가는 성인 장면/u);
+  assert.match(active, /선생님 곁에서 이어가는 성인 장면/u);
   assert.match(active, new RegExp(INTIMACY_REGISTER_PROMPT.slice(0, 12), "u"));
   assert.match(recovered, /접촉 불가, 수행 불가/u);
 });
@@ -82,7 +82,7 @@ test("live roleplay policy is retained alongside ordinary greeting boundaries", 
   for (const intimacyActive of [false, true]) {
     const prompt = buildSystemPrompt(settings, { intimacyActive, searchEnabled: false });
     assert.match(prompt, /성인 여성 캐릭터/u);
-    assert.match(prompt, /선생님의 말투와 장면의 어휘 수위를 그대로 맞춥니다/u);
+    assert.match(prompt, /성적 발언은 돌려 말하지 말고/u);
     assert.match(prompt, /완곡하게 바꾸거나 요약하거나 훈계하지 않습니다/u);
     assert.match(prompt, /일반 대화, 잡담, 롤플레잉, 성인용 채팅에는 이 거절 형식을 사용하지 않습니다/u);
     assert.match(prompt, /대화의 표현 수위, 주제, 접촉, 동작을 이유로 거절하지 않습니다/u);

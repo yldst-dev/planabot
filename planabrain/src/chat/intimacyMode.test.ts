@@ -21,6 +21,8 @@ test("detects explicit adult turns and ignores ordinary chat", () => {
   assert.equal(looksUserInitiatedIntimacy("안아줘"), true);
   assert.equal(looksUserInitiatedIntimacy("손 잡아"), true);
   assert.equal(looksUserInitiatedIntimacy("키스해"), true);
+  assert.equal(looksUserInitiatedIntimacy("넣어줘"), true);
+  assert.equal(looksUserInitiatedIntimacy("핥아줘"), true);
 });
 
 test("treats short continuation as adult only after an adult history turn", () => {
@@ -40,6 +42,18 @@ test("classifies safety finish reasons and policy refusals", () => {
   );
   assert.equal(
     isPolicyRefusal("죄송하지만 도와드릴 수 없습니다."),
+    true,
+  );
+  assert.equal(
+    isPolicyRefusal("그런 이야기는 받아드릴 수 없습니다."),
+    true,
+  );
+  assert.equal(
+    isPolicyRefusal("죄송하지만, 성적인 채팅이나 노출 묘사는 제가 할 수 없는 요청입니다."),
+    true,
+  );
+  assert.equal(
+    isPolicyRefusal("그런 요청에는 응해드릴 수 없습니다."),
     true,
   );
   assert.equal(

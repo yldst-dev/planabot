@@ -226,6 +226,36 @@ test("glm-5.3-flash image requests use the OpenRouter image model", async () => 
   }
 });
 
+test("openrouter intimacy ignore list is sent in the provider payload", async () => {
+  const original = globalThis.fetch;
+  let body: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { role: "assistant", content: "확인 완료." }, finish_reason: "stop" }],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  try {
+    await invokeChatWithMetadata({
+      settings: settingsFor({
+        aiProvider: "openrouter",
+        openRouterApiKey: "sk-or-test",
+        openRouterBaseUrl: "https://openrouter.ai/api/v1",
+        chatModel: "z-ai/glm-5.3-flash",
+        openRouterIgnoreProviders: ["Z.AI", "GMICloud", "StreamLake", "Wafer"],
+      }),
+      messages: [{ role: "user", content: "안녕" }],
+    });
+    const provider = body?.provider as Record<string, unknown>;
+    assert.deepEqual(provider.ignore, ["Z.AI", "GMICloud", "StreamLake", "Wafer"]);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("glm-5.3-flash text requests keep the chat model", async () => {
   const original = globalThis.fetch;
   let body: Record<string, unknown> | undefined;

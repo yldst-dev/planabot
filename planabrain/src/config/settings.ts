@@ -35,6 +35,7 @@ export type Settings = {
   openRouterTemperature?: number;
   openRouterTopP?: number;
   openRouterProviderOrder?: string[];
+  openRouterIgnoreProviders?: string[];
   openRouterWebSearchEnabled: boolean;
   openRouterWebSearchBackend: "plugin" | "ollama";
   openRouterWebSearchMaxResults: number;

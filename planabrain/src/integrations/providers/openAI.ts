@@ -61,7 +61,9 @@ export async function invokeOpenRouterChat(
   }
 
   const hasImages = messages.some((message) => (message.images?.length ?? 0) > 0);
-  const ignoredProviders: string[] = [];
+  const ignoredProviders: string[] = [
+    ...(settings.openRouterIgnoreProviders ?? []),
+  ];
 
   const headers: Record<string, string> = {
     authorization: `Bearer ${settings.openRouterApiKey}`,
@@ -97,7 +99,9 @@ export async function invokeOpenRouterChat(
     }
     if (hasImages || ignoredProviders.length > 0 || settings.openRouterProviderOrder?.length) {
       payload.provider = {
-        allow_fallbacks: !settings.openRouterProviderOrder?.length,
+        allow_fallbacks:
+          ignoredProviders.length > 0 ||
+          !settings.openRouterProviderOrder?.length,
         ...(settings.openRouterProviderOrder?.length ? { order: settings.openRouterProviderOrder } : {}),
         ...(hasImages ? { require_parameters: true } : {}),
         ...(ignoredProviders.length > 0 ? { ignore: [...ignoredProviders] } : {}),
