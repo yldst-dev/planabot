@@ -116,7 +116,7 @@ fn strip_tracking_query(url: &mut Url) {
     }
     let query_pairs: Vec<(String, String)> = url
         .query_pairs()
-        .filter(|(k, _)| !is_tracking_param(k))
+        .filter(|(k, _)| !is_tracking_query_param(url, k))
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
 
@@ -235,10 +235,20 @@ fn is_tracking_param(key: &str) -> bool {
     ) || key.starts_with("utm_")
 }
 
+fn is_tracking_query_param(url: &Url, key: &str) -> bool {
+    is_tracking_param(key)
+        || (key == "data"
+            && matches!(
+                url.host_str(),
+                Some("youtube.com" | "www.youtube.com" | "m.youtube.com")
+            )
+            && url.path().starts_with("/post/"))
+}
+
 fn has_tracking_params(url: &Url, raw: &str) -> bool {
     if url
         .query_pairs()
-        .any(|(key, _)| is_tracking_param(key.as_ref()))
+        .any(|(key, _)| is_tracking_query_param(url, key.as_ref()))
     {
         return true;
     }
@@ -427,6 +437,42 @@ mod tests {
         assert_eq!(links.len(), 2);
         assert!(links[0].had_tracking);
         assert!(!links[1].had_tracking);
+    }
+
+    #[test]
+    fn test_youtube_post_data_is_removed_and_detected() {
+        for host in ["youtube.com", "www.youtube.com", "m.youtube.com"] {
+            let original = format!(
+                "https://{host}/post/UgExample?surface=shorts&data=tracking&%64ata=other#reply"
+            );
+            let expected = format!("https://{host}/post/UgExample?surface=shorts#reply");
+            assert_eq!(clean_tracking_params(&original), expected);
+            let links = extract_music_links(&original);
+            assert_eq!(links.len(), 1);
+            assert_eq!(links[0].cleaned, expected);
+            assert!(links[0].had_tracking);
+            assert!(!extract_music_links(&expected)[0].had_tracking);
+        }
+        assert_eq!(
+            clean_music_url("https://youtube.com/post/UgExample?data=tracking"),
+            "https://youtube.com/post/UgExample"
+        );
+    }
+
+    #[test]
+    fn test_data_is_preserved_outside_youtube_posts() {
+        for original in [
+            "https://example.com/post/UgExample?data=value",
+            "https://youtube.com.example.com/post/UgExample?data=value",
+            "https://youtube.com/watch?v=example&data=value",
+            "https://youtube.com/posts/UgExample?data=value",
+            "not a url?data=value",
+        ] {
+            assert_eq!(clean_tracking_params(original), original);
+            assert_eq!(clean_music_url(original), original);
+        }
+        let links = extract_music_links("https://youtube.com/watch?v=example&data=value");
+        assert!(!links[0].had_tracking);
     }
 
     #[test]
