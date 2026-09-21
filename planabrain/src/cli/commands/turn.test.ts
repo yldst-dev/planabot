@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { currentExecution } from "../../runtime/execution.js";
 
 import {
   normalizeMemoryContext,
   parseTurnPrepareInput,
   prepareTurn,
   type TurnPrepareDeps,
-} from "./turn.js";
+} from "../../application/prepareTurn.js";
 
 function deps(overrides: Partial<TurnPrepareDeps> = {}): TurnPrepareDeps & { calls: string[] } {
   const calls: string[] = [];
@@ -113,6 +119,53 @@ test("input parsing validates required fields", () => {
   assert.equal(parsed.tokenBudget, undefined);
   assert.throws(() => parseTurnPrepareInput("{}"), /userId/u);
   assert.throws(() => parseTurnPrepareInput("nope"), /JSON/u);
+});
+
+test("prepare preserves request metadata and rejects expired work before side effects", async () => {
+  const deadlineMs = Date.now() + 60_000;
+  const parsed = parseTurnPrepareInput(JSON.stringify({ ...input, requestId: "prepare-test", deadlineMs }));
+  const d = deps({ interpretTodo: async () => {
+    assert.equal(currentExecution()?.requestId, "prepare-test");
+    assert.equal(currentExecution()?.deadlineMs, deadlineMs);
+    return { handled: true };
+  } });
+  await prepareTurn(parsed, d);
+  const expired = deps();
+  await assert.rejects(prepareTurn({ ...parsed, deadlineMs: 0 }, expired), { name: "TimeoutError" });
+  assert.deepEqual(expired.calls, []);
+  assert.throws(() => parseTurnPrepareInput(JSON.stringify({ ...input, requestId: "invalid/id" })), /ID/u);
+});
+
+test("CLI preparation honors metadata from stdin without environment overrides", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "planabot-prepare-"));
+  try {
+    for (const expired of [false, true]) {
+      const body = { ...input, requestId: "cli-prepare-test", deadlineMs: expired ? 0 : Date.now() + 60_000, question: "10분 타이머 맞춰줘", memoryEnabled: false };
+      const result = await new Promise<{ status: number | null; stdout: string; stderr: string; }>((resolve, reject) => {
+        const child = spawn(process.execPath, ["--import", "tsx", fileURLToPath(new URL("../index.ts", import.meta.url)), "turn-prepare"], {
+          env: { PATH: process.env.PATH, DOTENV_CONFIG_PATH: "/dev/null", PLANABRAIN_DATA_DIR: dir },
+          stdio: ["pipe", "pipe", "pipe"],
+          timeout: 10_000,
+        });
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+        child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+        child.once("error", reject);
+        child.once("close", (status) => resolve({ status, stdout, stderr }));
+        child.stdin.end(JSON.stringify(body));
+      });
+      assert.equal(result.status, expired ? 1 : 0, result.stderr);
+      const events = result.stderr.split("\n").flatMap((line) => {
+        try { return [JSON.parse(line) as { event?: string; requestId?: string; }]; } catch { return []; }
+      });
+      assert.equal(events.find((event) => event.event === "execution")?.requestId, body.requestId);
+      if (!expired) assert.equal(JSON.parse(result.stdout).schedule.handled, true);
+      else assert.equal(result.stdout, "");
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("memory context sentinel becomes null", () => {
