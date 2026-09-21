@@ -5,6 +5,7 @@ import {
   defaultChatModel,
   loadSettings,
   normalizeGeminiWebBaseUrl,
+  normalizeSub2ApiBaseUrl,
 } from "./settings.js";
 
 const MODEL_STUDIO_DEFAULT_BASE_URL =
@@ -36,6 +37,55 @@ const MODEL_STUDIO_ENV = {
   PLANABRAIN_AI_PROVIDER: "modelstudio",
   MODEL_STUDIO_API_KEY: "test-key",
 };
+
+const SUB2API_ENV = {
+  PLANABRAIN_AI_PROVIDER: "sub2api",
+  PLANABRAIN_SUB2API_API_KEY: "test-key",
+  PLANABRAIN_SUB2API_BASE_URL: "http://sub2api:8080",
+};
+
+test("sub2api defaults to Luna independently of stale Gemini and OpenRouter models", () => {
+  const settings = withEnv({
+    ...SUB2API_ENV,
+    PLANABRAIN_CHAT_MODEL: "gemini-3.7-flash",
+    PLANABRAIN_OPENROUTER_MODEL: "z-ai/glm-5.3-flash",
+  }, loadSettings);
+  assert.equal(settings.aiProvider, "sub2api");
+  assert.equal(settings.chatModel, "gpt-5.6-luna");
+  assert.equal(settings.sub2ApiKey, "test-key");
+  assert.equal(settings.sub2ApiBaseUrl, "http://sub2api:8080/v1");
+  assert.equal(withEnv({ ...SUB2API_ENV, PLANABRAIN_SUB2API_MODEL: " custom-model " }, loadSettings).chatModel, "custom-model");
+});
+
+test("sub2api requires a dedicated key and base URL", () => {
+  for (const key of ["PLANABRAIN_SUB2API_API_KEY", "PLANABRAIN_SUB2API_BASE_URL"]) {
+    assert.throws(() => withEnv({ ...SUB2API_ENV, [key]: " " }, loadSettings), new RegExp(key));
+  }
+});
+
+test("sub2api normalizes API roots and rejects credential-bearing or invalid URLs", () => {
+  for (const [input, expected] of [
+    ["http://127.0.0.1:8084/", "http://127.0.0.1:8084/v1"],
+    ["http://[::1]:8084/v1/", "http://[::1]:8084/v1"],
+    ["https://gateway.example/openai/v1/", "https://gateway.example/openai/v1"],
+  ]) {
+    assert.equal(normalizeSub2ApiBaseUrl(input), expected);
+  }
+  for (const input of ["invalid", "ftp://gateway.example", "https://key@gateway.example", "https://gateway.example?key=secret", "https://gateway.example/#fragment"]) {
+    assert.throws(() => normalizeSub2ApiBaseUrl(input), /PLANABRAIN_SUB2API_BASE_URL/);
+  }
+});
+
+test("sub2api loads its endpoint when used only as an auxiliary provider", () => {
+  const settings = withEnv({
+    ...MODEL_STUDIO_ENV,
+    PLANABRAIN_AUX_PROVIDER: "sub2api",
+    PLANABRAIN_SUB2API_API_KEY: "test-key",
+    PLANABRAIN_SUB2API_BASE_URL: "http://sub2api:8080/v1",
+  }, loadSettings);
+  assert.equal(settings.auxProvider, "sub2api");
+  assert.equal(settings.sub2ApiBaseUrl, "http://sub2api:8080/v1");
+});
 
 test("modelstudio falls back to the default compatible-mode base url", () => {
   const settings = withEnv(MODEL_STUDIO_ENV, loadSettings);

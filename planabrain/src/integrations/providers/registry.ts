@@ -2,7 +2,7 @@ import { usesPreSearchContext } from "../search.js";
 import { type ChatProviderName, type ChatProvider, type ChatInvocationOnceParams, type ChatInvocationResult } from "../contracts.js";
 import { invokeGoogleNativeChat as invokeGoogleChat } from "../google/native.js";
 import { invokeVertexExpressChat } from "../google/vertexExpress.js";
-import { invokeGeminiMockChat, invokeOpenRouterChat, invokeCerebrasChat, invokeModelStudioChat, invokeGeminiWebChat } from "./openAI.js";
+import { invokeGeminiMockChat, invokeOpenRouterChat, invokeCerebrasChat, invokeModelStudioChat, invokeGeminiWebChat, invokeSub2ApiChat } from "./openAI.js";
 import { invokeOllamaChat } from "./ollama.js";
 import { type Settings } from "../../config/settings.js";
 import { checkExecution, measureStage } from "../../runtime/execution.js";
@@ -18,6 +18,12 @@ export function isGlm53FlashModel(model: string): boolean {
 }
 
 export const CHAT_PROVIDERS: Record<ChatProviderName, ChatProvider> = {
+  sub2api: {
+    supportsImages: true,
+    hasCredentials: (settings) => Boolean(settings.sub2ApiKey && settings.sub2ApiBaseUrl),
+    searchAvailable: (settings) => usesPreSearchContext(settings),
+    invoke: (params) => invokeSub2ApiChat(params.settings, params.messages),
+  },
   google: {
     supportsImages: true,
     hasCredentials: (settings) => Boolean(settings.googleApiKey),

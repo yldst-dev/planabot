@@ -125,6 +125,38 @@ export async function invokeOpenRouterChat(
   });
 }
 
+export async function invokeSub2ApiChat(
+  settings: Settings,
+  messages: ChatMessage[],
+): Promise<ChatInvocationResult> {
+  if (!settings.sub2ApiKey || !settings.sub2ApiBaseUrl) {
+    throw new Error("PLANABRAIN_SUB2API_API_KEY and PLANABRAIN_SUB2API_BASE_URL are required when using sub2api");
+  }
+  const payload: Record<string, unknown> = {
+    model: settings.chatModel,
+    stream: false,
+    messages: messages.map((message) => ({
+      role: message.role,
+      content: toOpenAIMessageContent(message),
+    })),
+  };
+  if (settings.chatMaxOutputTokens) {
+    payload.max_completion_tokens = settings.chatMaxOutputTokens;
+  }
+  const mode = settings.chatThinkingMode;
+  if (mode && mode !== "default") {
+    payload.reasoning_effort = mode === "off" ? "none" : mode === "minimal" ? "low" : mode;
+  }
+  return withRateLimitRetry(() =>
+    invokeOpenAICompatibleChat({
+      providerName: "sub2api",
+      url: `${settings.sub2ApiBaseUrl}/chat/completions`,
+      headers: { authorization: `Bearer ${settings.sub2ApiKey}` },
+      payload,
+    }),
+  );
+}
+
 export async function invokeGeminiWebChat(
   settings: Settings,
   messages: ChatMessage[],
