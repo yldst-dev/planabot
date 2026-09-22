@@ -12,12 +12,15 @@ services:
         condition: service_healthy
 
   sub2api:
-    image: weishaw/sub2api:0.2.7
+    image: weishaw/sub2api:latest
+    pull_policy: always
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
     ports:
       - "127.0.0.1:${SUB2API_LOCAL_PORT:-8084}:8080"
+    expose:
+      - "8080"
     environment:
       AUTO_SETUP: "true"
       SERVER_HOST: 0.0.0.0

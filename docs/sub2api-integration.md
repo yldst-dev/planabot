@@ -31,7 +31,7 @@ PLANABRAIN_CHAT_MAX_OUTPUT_TOKENS=8192
 
 ## 같은 VM의 Docker Compose에 새로 구성
 
-`docker-compose.sub2api.yml`은 `docker-compose.dokploy.yml`에 합쳐 쓰는 추가 구성입니다. sub2api `0.2.7`, PostgreSQL `18`, Redis `8`을 사용하며 기존 서비스의 의존성 버전은 바꾸지 않습니다.
+`docker-compose.sub2api.yml`은 `docker-compose.dokploy.yml`에 합쳐 쓰는 추가 구성입니다. sub2api는 `weishaw/sub2api:latest`를 사용하고, PostgreSQL `18`과 Redis `8`은 기존대로 유지합니다. Compose를 실행할 때마다 sub2api 이미지를 다시 확인해 최신 이미지를 가져옵니다.
 
 `.env`에서 다음 값을 각각 채웁니다. 비밀번호와 암호화 키는 `openssl rand -hex 32`를 매번 실행해 서로 다른 값으로 생성합니다. `JWT_SECRET`과 `TOTP_ENCRYPTION_KEY`에 해당하는 아래 값은 재배포할 때도 유지해야 합니다.
 
@@ -63,56 +63,27 @@ ssh -N -L 8084:127.0.0.1:8084 deploy@vm-host
 docker compose -f docker-compose.dokploy.yml -f docker-compose.sub2api.yml up -d --build planabot
 ```
 
-Dokploy에서도 두 Compose 파일을 합쳐 배포합니다. 봇의 기본 주소는 내부 DNS인 `http://sub2api:8080/v1`로 덮어씁니다. 이 기본 구성은 로컬 접속용이며 외부 접속은 아래 Cloudflare Tunnel 구성을 추가합니다. 데이터베이스와 Redis는 외부 포트를 열지 않고 내부 저장소 네트워크에서만 통신합니다. 데이터와 계정 정보는 별도 명명 볼륨에 보관합니다.
+Dokploy에서도 두 Compose 파일을 합쳐 배포합니다. 봇의 기본 주소는 내부 DNS인 `http://sub2api:8080/v1`로 덮어씁니다. 데이터베이스와 Redis는 외부 포트를 열지 않고 내부 저장소 네트워크에서만 통신합니다. 데이터와 계정 정보는 별도 명명 볼륨에 보관합니다.
+
+Dokploy에서 외부 도메인이 필요하면 Compose 서비스의 Domains에서 `sub2api` 서비스와 컨테이너 포트 `8080`을 선택해 HTTPS 도메인을 추가합니다. 관리 화면과 API가 같은 도메인에 공개되므로 관리자 비밀번호와 API key를 설정한 뒤 공개하십시오. 배포 미리보기에서 `planabot`과 `sub2api`가 공통 네트워크에 남아 있는지 확인해야 내부 DNS 연결이 유지됩니다. 도메인을 추가하지 않으면 외부에서는 직접 접속할 수 없습니다.
 
 호스트의 `127.0.0.1`에만 실행한 서버에는 Linux 컨테이너의 `host.docker.internal`로 접근할 수 없습니다. 같은 Compose 서비스 주소를 사용하는 위 구성이 이 문제를 피합니다. macOS의 개발 서버와 별도 VM 사이에서도 각 장비의 `127.0.0.1`은 서로 다른 주소입니다.
 
-## Cloudflare Tunnel로 외부 접속
+## Dokploy 배포와 이미지 자동 갱신
 
-sub2api는 Dokploy VM에서 계속 실행하고, 같은 Compose 네트워크의 `sub2api-tunnel` 컨테이너가 Cloudflare에 연결합니다. 외부에서는 `https://sub2api.example.com`으로 접속하고, 내부 봇은 계속 `http://sub2api:8080/v1`을 사용합니다. 예시 도메인은 소유한 Cloudflare 도메인으로 바꿉니다.
+Dokploy의 Docker Compose Custom Command에서 기본 명령의 프로젝트 이름과 첫 번째 Compose 경로를 유지하고 `-f docker-compose.sub2api.yml`을 추가합니다. Dokploy가 명령 앞에 `docker`를 붙이므로 입력은 `compose`로 시작합니다. 기존 프로젝트 이름을 바꾸면 명명 볼륨 이름도 달라질 수 있습니다. Dokploy 환경변수에 위 비밀번호와 키를 설정하고 처음에는 sub2api만 실행한 뒤 관리자 설정과 API key 발급을 완료합니다. 그다음 봇까지 배포합니다.
 
-추가 파일 `docker-compose.sub2api-tunnel.yml`을 선택한 경우에만 Tunnel을 실행합니다. 포트 포워딩이나 VM의 인바운드 포트 추가 개방은 필요하지 않습니다. VM에서 Cloudflare Tunnel로 나가는 연결은 허용돼 있어야 합니다.
+`pull_policy: always`는 Compose를 실행할 때 sub2api 이미지를 갱신합니다. 저장소 푸시로 Dokploy 재배포가 이루어져도 새 이미지가 반영됩니다. 실행 중인 컨테이너는 원격 이미지가 새로 올라왔다는 이유만으로 바뀌지 않습니다. 푸시와 관계없이 최신 상태를 유지하려면 Dokploy Schedule Jobs에 **Dokploy Server Job**을 1개 등록해 정기적으로 Compose를 실행합니다. Compose Job은 서비스 컨테이너 안에서 명령을 실행하므로 이 작업에 사용하지 않습니다.
 
-1. Cloudflare에서 사용할 도메인을 등록하고 DNS를 관리합니다.
-2. 외부 호스트 이름에 맞는 Access의 Self-hosted 애플리케이션을 만들고, 접속할 이메일만 Allow 정책에 허용합니다. 이 설정은 저장소의 Compose 파일이 자동으로 만들지 않습니다.
-3. Cloudflare 대시보드의 Networking > Tunnels에서 원격 관리 Tunnel을 생성합니다. Docker 연결 안내에서 발급된 Tunnel 토큰을 Dokploy 환경변수 `SUB2API_TUNNEL_TOKEN`에 저장합니다. sub2api API key와는 다른 값입니다.
-4. Tunnel의 Published application 경로에 호스트 이름 `sub2api.example.com`, 서비스 주소 `http://sub2api:8080`을 입력합니다. 커넥터 컨테이너 기준 주소이므로 `localhost:8084`를 사용하지 않습니다.
-5. 다음 3개 Compose 파일을 순서대로 합쳐 배포합니다.
+예약 작업에서는 Dokploy가 보여 주는 기본 배포 명령의 프로젝트 이름과 Compose 파일 경로를 그대로 사용합니다. 파일 2개가 있는 디렉터리로 이동한 다음 아래 명령을 실행하도록 구성합니다. 아래 경로와 프로젝트 이름은 실제 Dokploy 값으로 바꿉니다.
 
 ```sh
-docker compose -f docker-compose.dokploy.yml -f docker-compose.sub2api.yml -f docker-compose.sub2api-tunnel.yml config --quiet
-docker compose -f docker-compose.dokploy.yml -f docker-compose.sub2api.yml -f docker-compose.sub2api-tunnel.yml up -d sub2api sub2api-tunnel
+set -eu
+cd /path/to/dokploy/compose-directory
+docker compose -p actual-project-name -f docker-compose.dokploy.yml -f docker-compose.sub2api.yml up -d --no-deps sub2api
 ```
 
-새 설치에서는 먼저 위 명령으로 sub2api와 Tunnel을 실행하고, 외부 브라우저에서 Access 로그인과 sub2api 관리자 로그인을 마칩니다. Codex 계정 연결 및 API key 발급 후 `PLANABRAIN_SUB2API_API_KEY`를 채우고 봇을 시작합니다.
-
-```sh
-docker compose -f docker-compose.dokploy.yml -f docker-compose.sub2api.yml -f docker-compose.sub2api-tunnel.yml up -d --build planabot
-```
-
-Dokploy의 Docker Compose 설정에서 Custom Command를 사용할 수 있습니다. 기본 명령의 `-p` 프로젝트 이름과 첫 번째 `-f` 경로는 유지하고, `up` 앞에 `-f docker-compose.sub2api.yml -f docker-compose.sub2api-tunnel.yml`을 추가합니다. Dokploy는 명령 앞에 `docker`를 붙이므로 입력은 `compose ...`로 시작합니다. 처음에는 실행 서비스를 `sub2api sub2api-tunnel`로 한정하고, 키 발급 후 전체 서비스를 배포합니다. 프로젝트 이름을 바꾸면 기존 명명 볼륨과 다른 볼륨이 만들어질 수 있습니다. 이 구성에서는 Dokploy의 Domains에 별도 공개 도메인을 추가할 필요가 없습니다.
-
-브라우저로 관리 화면만 사용할 때는 Access 로그인으로 충분합니다. 외부 프로그램이 API를 호출한다면 Access Service Token을 발급하고 해당 토큰을 허용하는 Service Auth 정책도 애플리케이션에 연결합니다. 요청에 아래 3개 헤더가 모두 필요합니다.
-
-```text
-CF-Access-Client-Id: <access-client-id>
-CF-Access-Client-Secret: <access-client-secret>
-Authorization: Bearer <sub2api-api-key>
-```
-
-외부 API 주소는 `https://sub2api.example.com/v1`입니다. 사용자 지정 헤더를 지원하지 않는 클라이언트는 위 Access 구성을 그대로 이용할 수 없습니다. 같은 Compose 안의 Planabrain은 Tunnel을 거치지 않으므로 Access 헤더를 추가할 필요가 없습니다. 외부 호스트에서 API key만 보내면 Access 단계에서 차단될 수 있습니다.
-
-배포 후 Tunnel이 Healthy인지 확인하고, 외부 브라우저에서 허용 계정과 미허용 계정의 접속 결과를 확인합니다. API는 Service Token과 sub2api 키를 함께 보낸 `/v1/models` 요청 및 대화 요청으로 검증합니다. Tunnel이 Healthy여도 서비스 주소가 틀리면 원본 서버에 연결되지 않을 수 있습니다.
-
-외부 접속을 끄려면 Cloudflare의 Published application 경로를 제거하고 `sub2api-tunnel` 서비스만 중지합니다. 내부 봇 연결과 데이터 볼륨은 유지됩니다.
-
-## Workers에 직접 올릴 수 있는지
-
-일반 Workers는 기존 Go HTTP 서버 바이너리나 Docker Compose를 그대로 실행하는 환경이 아닙니다. sub2api를 일반 Worker로 바꾸려면 HTTP 처리, 데이터베이스, Redis 및 파일 저장 부분을 Workers 환경에 맞춰 이식해야 합니다.
-
-Cloudflare Containers는 기존 Linux 컨테이너 이미지를 실행할 수 있으므로 sub2api를 옮길 때 검토할 수 있는 별도 경로입니다. Worker와 Durable Object를 통한 요청 전달, 외부 PostgreSQL과 Redis 연결, 설정 및 파일의 영속 저장 설계가 필요합니다. 현재 Compose의 명명 볼륨이 자동으로 옮겨지는 것은 아닙니다. Containers 디스크는 임시 저장소이며 컨테이너가 다시 시작할 때 데이터가 유지된다고 가정할 수 없습니다. Durable Object 저장소가 기존 PostgreSQL이나 Redis 프로토콜을 자동 대체하지도 않습니다.
-
-Containers는 Workers Paid 플랜에서 제공되고 컴퓨팅 및 관련 서비스 사용량에 따라 요금이 발생합니다. 문서를 바탕으로 실행 후보임을 확인한 것이며, sub2api 이미지를 Containers에 실제 배포해 검증한 상태는 아닙니다. 현재 목적에는 기존 데이터 저장과 계정 갱신 구조를 유지할 수 있는 Dokploy와 Tunnel 조합을 권장합니다.
+스케줄 `0 * * * *`는 매시간 확인합니다. 새 이미지가 있으면 sub2api만 교체하고 명명 볼륨의 데이터는 유지합니다. 따라서 최신 공개 이미지 반영은 최대 약 1시간 지연될 수 있고, 배포 중 짧은 재연결이 발생할 수 있습니다. 예약 작업을 저장하기 전에 같은 명령을 Dokploy가 실행되는 환경에서 수동 실행해 서비스 상태와 데이터가 유지되는지 확인하십시오.
 
 ## 키와 모델 실제 검증
 
@@ -148,15 +119,11 @@ JS
 ## 출처
 
 - [OpenAI GPT-5.6 Luna 모델 문서](https://developers.openai.com/api/docs/models/gpt-5.6-luna)
-- [sub2api 0.2.7 릴리즈 및 이미지 이름](https://github.com/Wei-Shaw/sub2api/releases/tag/v0.2.7)
+- [sub2api 공식 Docker 이미지](https://github.com/Wei-Shaw/sub2api/blob/main/deploy/docker-compose.yml)
 - [sub2api API 라우트](https://github.com/Wei-Shaw/sub2api/blob/v0.2.7/backend/internal/server/routes/gateway.go)
 - [Chat Completions와 Responses 변환](https://github.com/Wei-Shaw/sub2api/blob/v0.2.7/backend/internal/service/openai_gateway_chat_completions.go)
 - [공식 Docker Compose](https://github.com/Wei-Shaw/sub2api/blob/v0.2.7/deploy/docker-compose.yml)
-- [Cloudflare Tunnel 생성과 외부 호스트 연결](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel/)
-- [cloudflared 토큰 환경변수](https://developers.cloudflare.com/tunnel/guides/kubernetes/)
-- [Cloudflare Access Service Token](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)
 - [Dokploy Compose Custom Command](https://docs.dokploy.com/docs/core/docker-compose)
-- [Workers 실행 환경](https://developers.cloudflare.com/workers/reference/how-workers-works/)
-- [Cloudflare Containers](https://developers.cloudflare.com/containers/)
-- [Containers 저장소와 수명](https://developers.cloudflare.com/containers/faq/)
-- [Containers 요금](https://developers.cloudflare.com/containers/platform/pricing/)
+- [Dokploy Compose Domains](https://docs.dokploy.com/docs/core/docker-compose/domains)
+- [Dokploy Schedule Jobs](https://docs.dokploy.com/docs/core/schedule-jobs)
+- [Compose 이미지 갱신 정책](https://docs.docker.com/reference/compose-file/services/#pull_policy)
