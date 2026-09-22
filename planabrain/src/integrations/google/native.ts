@@ -114,7 +114,7 @@ async function invokeGoogleNativeChatWithOptions(params: {
 function createGoogleNativeClient(settings: Settings): GoogleGenAI {
   if (settings.aiProvider === "google") {
     if (!settings.googleApiKey) throw new Error("Google API 키가 필요합니다.");
-    return new GoogleGenAI({ apiKey: settings.googleApiKey, httpOptions: { timeout: 60_000, retryOptions: { attempts: 1 } } });
+    return new GoogleGenAI({ vertexai: false, apiKey: settings.googleApiKey, httpOptions: { baseUrl: settings.googleGeminiBaseUrl, timeout: 60_000, retryOptions: { attempts: 1 } } });
   }
   if (!settings.vertexExpressApiKey) {
     throw new Error(

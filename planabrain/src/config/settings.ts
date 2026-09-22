@@ -17,6 +17,7 @@ export type Settings = {
     | "geminiweb"
     | "sub2api";
   googleApiKey?: string;
+  googleGeminiBaseUrl?: string;
   vertexExpressApiKey?: string;
   vertexExpressApiVersion?: string;
   geminiMockBaseUrl?: string;
@@ -80,7 +81,10 @@ export function loadSettings(): Settings {
   const aiProvider = resolveAiProvider(
     process.env.PLANABRAIN_AI_PROVIDER ?? "google",
   );
-  const googleApiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY;
+  const googleGeminiBaseUrl = readOptionalEnv("GOOGLE_GEMINI_BASE_URL");
+  const googleApiKey = googleGeminiBaseUrl
+    ? readOptionalEnv("GEMINI_API_KEY")
+    : readOptionalEnv("GOOGLE_API_KEY") ?? readOptionalEnv("GEMINI_API_KEY");
   const vertexExpressApiKey =
     readOptionalEnv("GOOGLE_VERTEX_EXPRESS_API_KEY") ??
     readOptionalEnv("VERTEX_EXPRESS_API_KEY");
@@ -99,7 +103,7 @@ export function loadSettings(): Settings {
   }
   if (aiProvider === "google" && !googleApiKey) {
     throw new Error(
-      "GOOGLE_API_KEY is required when PLANABRAIN_AI_PROVIDER=google",
+      `${googleGeminiBaseUrl ? "GEMINI_API_KEY" : "GOOGLE_API_KEY"} is required when PLANABRAIN_AI_PROVIDER=google`,
     );
   }
   if (aiProvider === "openrouter" && !openRouterApiKey) {
@@ -266,6 +270,9 @@ export function loadSettings(): Settings {
   return {
     aiProvider,
     googleApiKey,
+    googleGeminiBaseUrl: usesProvider("google") && googleGeminiBaseUrl
+      ? normalizeGoogleGeminiBaseUrl(googleGeminiBaseUrl)
+      : undefined,
     vertexExpressApiKey,
     vertexExpressApiVersion,
     openRouterApiKey,
@@ -336,6 +343,8 @@ export function loadSettings(): Settings {
           ? process.env.PLANABRAIN_GEMINIWEB_MODEL
           : aiProvider === "openrouter"
             ? process.env.PLANABRAIN_OPENROUTER_MODEL
+            : aiProvider === "google"
+              ? readOptionalEnv("GEMINI_MODEL")
             : aiProvider === "vertexexpress"
               ? process.env.PLANABRAIN_VERTEX_EXPRESS_MODEL
               : aiProvider === "ollama"
@@ -510,6 +519,19 @@ export function normalizeSub2ApiBaseUrl(raw: string | undefined): string {
   }
   const pathname = url.pathname.replace(/\/+$/, "");
   return `${url.origin}${pathname || "/v1"}`;
+}
+
+function normalizeGoogleGeminiBaseUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("GOOGLE_GEMINI_BASE_URL must be a valid HTTPS URL");
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+    throw new Error("GOOGLE_GEMINI_BASE_URL must be an HTTPS URL without credentials, query or fragment");
+  }
+  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
 }
 
 function resolveGeminiMockBaseUrl(): string {

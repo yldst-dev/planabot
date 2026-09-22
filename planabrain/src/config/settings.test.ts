@@ -17,7 +17,9 @@ function withEnv<T>(env: Record<string, string>, run: () => T): T {
     if (
       key.startsWith("PLANABRAIN_") ||
       key.startsWith("MODEL_STUDIO_") ||
-      key.startsWith("GEMINIWEB_")
+      key.startsWith("GEMINIWEB_") ||
+      key.startsWith("GOOGLE_") ||
+      key.startsWith("GEMINI_")
     ) {
       delete process.env[key];
     }
@@ -43,6 +45,30 @@ const SUB2API_ENV = {
   PLANABRAIN_SUB2API_API_KEY: "test-key",
   PLANABRAIN_SUB2API_BASE_URL: "http://sub2api:8080",
 };
+
+test("google gateway uses its own key, endpoint and model", () => {
+  const settings = withEnv({
+    PLANABRAIN_AI_PROVIDER: "google",
+    GOOGLE_API_KEY: "direct-key",
+    GOOGLE_GEMINI_BASE_URL: "https://gateway.example/antigravity/",
+    GEMINI_API_KEY: "gateway-key",
+    GEMINI_MODEL: "gemini-3.8-flash",
+    PLANABRAIN_CHAT_MODEL: "gemini-3.7-flash",
+  }, loadSettings);
+  assert.equal(settings.googleApiKey, "gateway-key");
+  assert.equal(settings.googleGeminiBaseUrl, "https://gateway.example/antigravity");
+  assert.equal(settings.chatModel, "gemini-3.8-flash");
+});
+
+test("google gateway requires its own key and an HTTPS endpoint", () => {
+  const env = {
+    PLANABRAIN_AI_PROVIDER: "google",
+    GOOGLE_API_KEY: "direct-key",
+    GOOGLE_GEMINI_BASE_URL: "https://gateway.example/antigravity",
+  };
+  assert.throws(() => withEnv(env, loadSettings), /GEMINI_API_KEY/);
+  assert.throws(() => withEnv({ ...env, GEMINI_API_KEY: "gateway-key", GOOGLE_GEMINI_BASE_URL: "http://gateway.example/antigravity" }, loadSettings), /GOOGLE_GEMINI_BASE_URL/);
+});
 
 test("sub2api defaults to Luna independently of stale Gemini and OpenRouter models", () => {
   const settings = withEnv({
