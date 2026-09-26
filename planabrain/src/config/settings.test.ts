@@ -51,6 +51,12 @@ test("provider variables accept only codex aliases", () => {
   }
 });
 
+test("fast mode is off unless enabled", () => {
+  assert.equal(withEnv(CODEX_ENV, loadSettings).codexFast, false);
+  assert.equal(withEnv({ ...CODEX_ENV, PLANABRAIN_CODEX_FAST: "1" }, loadSettings).codexFast, true);
+  assert.throws(() => withEnv({ ...CODEX_ENV, PLANABRAIN_CODEX_FAST: "maybe" }, loadSettings), /PLANABRAIN_CODEX_FAST/);
+});
+
 test("gateway URLs are normalized and reject credentials or invalid schemes", () => {
   for (const [input, expected] of [
     ["http://gateway:8080", "http://gateway:8080/v1"],

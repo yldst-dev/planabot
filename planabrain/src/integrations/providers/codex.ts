@@ -59,6 +59,7 @@ export function buildCodexPayload(settings: Settings, messages: ChatMessage[]): 
     store: false,
     stream: true,
     ...(effort ? { reasoning: { effort } } : {}),
+    ...(settings.codexFast ? { service_tier: "priority" } : {}),
   };
 }
 

@@ -139,6 +139,7 @@ npm run dev
 - 자체 호스팅 codex-gateway의 Responses API(`POST /responses`)를 스트리밍으로 호출합니다. 게이트웨이 규칙에 맞춰 `store: false`, `stream: true`, 배열 `input`을 보내고 `max_output_tokens`, `temperature`는 보내지 않습니다.
 - 시스템 프롬프트는 `instructions`로 보냅니다. 비어 있으면 게이트웨이가 코딩 에이전트용 지시문을 넣으므로 항상 채웁니다.
 - 생각 모드 `off`와 `minimal`은 `reasoning.effort: low`로 보냅니다. `default`면 모델 기본값을 씁니다.
+- `PLANABRAIN_CODEX_FAST=1`이면 답변 호출에 `service_tier: "priority"`를 붙여 fast 모드로 보냅니다. Codex 사용량을 표준의 2.5배 쓰므로 검색어 재작성, 전달문 재작성, 기억 작성 같은 보조 호출에는 붙이지 않습니다.
 - 이미지 입력은 `input_image` data URL로 보냅니다.
 - `PLANABRAIN_AI_PROVIDER`, `PLANABRAIN_AUX_PROVIDER`는 비우거나 `codex`로 둡니다. 다른 값이면 시작할 때 오류가 납니다.
 - 권장 타임아웃: `PLANABRAIN_HTTP_TIMEOUT_MS=180000`

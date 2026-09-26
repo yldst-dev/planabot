@@ -3,6 +3,7 @@ import { resolveDefaultSystemPrompt } from "./persona/index.js";
 export type Settings = {
   codexApiKey: string;
   codexBaseUrl: string;
+  codexFast: boolean;
   ollamaApiKeys: string[];
   ollamaSearchHost?: string;
   ollamaWebSearchEnabled: boolean;
@@ -49,6 +50,7 @@ export function loadSettings(): Settings {
       readOptionalEnv("PLANABRAIN_CODEX_BASE_URL") ?? readOptionalEnv("CODEX_GATEWAY_BASE_URL"),
       "PLANABRAIN_CODEX_BASE_URL",
     ),
+    codexFast: parseBooleanEnv("PLANABRAIN_CODEX_FAST", false),
     ollamaApiKeys,
     ollamaSearchHost: ollamaApiKeys.length > 0 ? resolveOllamaSearchHost() : undefined,
     ollamaWebSearchEnabled: parseBooleanEnv("PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH", false),

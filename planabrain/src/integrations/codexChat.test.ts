@@ -95,6 +95,16 @@ test("codex sends a Responses request that follows the gateway rules and reads t
   });
 });
 
+test("fast mode adds the priority service tier only when enabled", async () => {
+  await withGateway((res) => streamChunks(res, HAPPY_EVENTS), async (baseUrl, requests) => {
+    const base = { codexApiKey: "cg_test", codexBaseUrl: baseUrl, continuousChat: false };
+    await invokeChatWithMetadata({ settings: testSettings({ ...base, codexFast: true }), maxContinuations: 0, messages: [{ role: "user", content: "안녕" }] });
+    await invokeChatWithMetadata({ settings: testSettings(base), maxContinuations: 0, messages: [{ role: "user", content: "안녕" }] });
+    assert.equal(requests[0]?.body.service_tier, "priority");
+    assert.equal("service_tier" in (requests[1]?.body ?? {}), false);
+  });
+});
+
 test("codex falls back to the joined deltas and always sends instructions", async () => {
   const events = sse([
     { type: "response.output_text.delta", delta: "조각 " },

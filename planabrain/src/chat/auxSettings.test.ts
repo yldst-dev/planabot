@@ -10,6 +10,10 @@ test("aux settings keep the main model and turn thinking off when nothing is con
   assert.equal(aux.chatThinkingMode, "off");
 });
 
+test("aux calls never use fast mode", () => {
+  assert.equal(resolveAuxSettings(testSettings({ codexFast: true })).codexFast, false);
+});
+
 test("aux model swaps only the model", () => {
   const aux = resolveAuxSettings(testSettings({ chatModel: "gpt-6-luna", auxModel: "gpt-5.6-sol" }));
   assert.equal(aux.chatModel, "gpt-5.6-sol");

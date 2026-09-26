@@ -264,6 +264,13 @@ pub(crate) const FIELDS: &[Field] = &[
         Kind::Text,
         "gpt-6-astra",
     ),
+    field(
+        "PLANABRAIN_CODEX_FAST",
+        "codex",
+        "fast 모드",
+        "답변 호출에 service_tier priority를 붙입니다. Codex 사용량을 2.5배 쓰며 보조 호출에는 적용하지 않습니다.",
+        Kind::Bool,
+    ),
     select(
         "PLANABRAIN_CHAT_THINKING_MODE",
         "model",

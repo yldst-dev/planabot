@@ -4,6 +4,7 @@ export function testSettings(overrides: Partial<Settings> = {}): Settings {
   return {
     codexApiKey: "cg_test",
     codexBaseUrl: "http://codex.example/v1",
+    codexFast: false,
     ollamaApiKeys: ["ollama-key"],
     ollamaSearchHost: "https://ollama.example",
     ollamaWebSearchEnabled: true,
