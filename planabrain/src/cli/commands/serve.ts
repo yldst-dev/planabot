@@ -10,9 +10,9 @@ import type { Settings } from "../../config/settings.js";
 import { ProviderApiError, toStructuredError } from "../../integrations/providerError.js";
 import { normalizeWireMessages } from "../../memoryflow/state-normalize.js";
 import type { RecentTurnInput } from "../../chat/webSearchAnswer.js";
-import { runAsk, type AskInput } from "./ask.js";
-import { rememberExchangeTurn } from "./memory.js";
-import { buildTurnPrepareDeps, parseTurnPrepareInput, prepareTurn } from "./turn.js";
+import { runAsk, type AskInput } from "../../application/turnService.js";
+import { rememberExchangeTurn } from "../../application/rememberExchange.js";
+import { prepareTurn, parseTurnPrepareInput } from "../../application/prepareTurn.js";
 import type { CommandContext } from "../registry.js";
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -126,7 +126,7 @@ async function handleRequest(
     switch (url.pathname) {
       case "/v1/turn-prepare": {
         const input = validatedParse(parseTurnPrepareInput, raw);
-        const output = await cache.run(requestId ? `prepare:${requestId}` : undefined, raw, () => prepareTurn(input, buildTurnPrepareDeps(input.nowMs)));
+        const output = await cache.run(requestId ? `prepare:${requestId}` : undefined, raw, () => prepareTurn(input));
         writeJson(response, 200, output);
         return;
       }

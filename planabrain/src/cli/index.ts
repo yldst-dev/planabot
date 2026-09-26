@@ -36,7 +36,7 @@ import {
 export async function main(argv: string[]): Promise<void> {
   const parsed = parseCli(argv);
   const handler = COMMANDS[parsed.command];
-  if (parsed.command === "serve") {
+  if (parsed.command === "serve" || parsed.command === "turn-prepare") {
     await handler(parsed.args, { loadSettings });
   } else {
     const deadline = Number(process.env.PLANABRAIN_DEADLINE_MS);

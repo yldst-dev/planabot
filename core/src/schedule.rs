@@ -124,7 +124,7 @@ impl ScheduleStore {
         }
 
         let (item, items, snapshot) = {
-            let mut items = lock_items(&self.items);
+            let mut items = lock_items(&self.items).clone();
             prune_history(&mut items, now);
             let user_pending_count = items
                 .iter()
@@ -162,10 +162,10 @@ impl ScheduleStore {
             items.push(item.clone());
             sort_items(&mut items);
             let visible = list_pending_for_user(&items, item.owner_user_id);
-            (item, visible, items.clone())
+            (item, visible, items)
         };
 
-        self.persist(&snapshot).await?;
+        self.commit(snapshot).await?;
         Ok(ScheduleMutation {
             ok: true,
             item: Some(item),
@@ -183,7 +183,7 @@ impl ScheduleStore {
         let _guard = self.write_lock.lock().await;
         let now = now_ms();
         let (result, snapshot) = {
-            let mut items = lock_items(&self.items);
+            let mut items = lock_items(&self.items).clone();
             let pending = list_pending_for_user(&items, owner_user_id);
             let Some(target) = find_schedule_match(&pending, query) else {
                 let visible = list_pending_for_user(&items, owner_user_id);
@@ -213,18 +213,18 @@ impl ScheduleStore {
                     items: visible,
                     error: None,
                 },
-                items.clone(),
+                items,
             )
         };
 
-        self.persist(&snapshot).await?;
+        self.commit(snapshot).await?;
         Ok(result)
     }
 
     async fn claim_due(&self, now: i64) -> Result<Vec<ScheduleItem>> {
         let _guard = self.write_lock.lock().await;
         let (due, snapshot) = {
-            let mut items = lock_items(&self.items);
+            let mut items = lock_items(&self.items).clone();
             let mut due = Vec::new();
             for item in items.iter_mut() {
                 if item.status == ScheduleStatus::Pending && item.due_at_ms <= now {
@@ -234,11 +234,11 @@ impl ScheduleStore {
                     due.push(item.clone());
                 }
             }
-            (due, items.clone())
+            (due, items)
         };
 
         if !due.is_empty() {
-            self.persist(&snapshot).await?;
+            self.commit(snapshot).await?;
         }
         Ok(due)
     }
@@ -247,7 +247,7 @@ impl ScheduleStore {
         let _guard = self.write_lock.lock().await;
         let now = now_ms();
         let snapshot = {
-            let mut items = lock_items(&self.items);
+            let mut items = lock_items(&self.items).clone();
             for item in items.iter_mut() {
                 if item.id == id {
                     item.status = ScheduleStatus::Sent;
@@ -257,16 +257,16 @@ impl ScheduleStore {
                     break;
                 }
             }
-            items.clone()
+            items
         };
-        self.persist(&snapshot).await
+        self.commit(snapshot).await
     }
 
     async fn mark_failed(&self, id: &str, error: &str) -> Result<()> {
         let _guard = self.write_lock.lock().await;
         let now = now_ms();
         let snapshot = {
-            let mut items = lock_items(&self.items);
+            let mut items = lock_items(&self.items).clone();
             for item in items.iter_mut() {
                 if item.id == id {
                     item.status = ScheduleStatus::Failed;
@@ -275,9 +275,9 @@ impl ScheduleStore {
                     break;
                 }
             }
-            items.clone()
+            items
         };
-        self.persist(&snapshot).await
+        self.commit(snapshot).await
     }
 
     fn mutation_error(&self, owner_user_id: u64, error: &str) -> ScheduleMutation {
@@ -289,8 +289,10 @@ impl ScheduleStore {
         }
     }
 
-    async fn persist(&self, items: &[ScheduleItem]) -> Result<()> {
-        persist_schedule_items(&self.path, items).await
+    async fn commit(&self, items: Vec<ScheduleItem>) -> Result<()> {
+        persist_schedule_items(&self.path, &items).await?;
+        *lock_items(&self.items) = items;
+        Ok(())
     }
 }
 
@@ -761,6 +763,57 @@ mod tests {
         let pending = list_pending_for_user(&items, 1);
         let item = find_schedule_match(&pending, "첫번째거").unwrap();
         assert_eq!(item.id, "a");
+    }
+
+    #[tokio::test]
+    async fn failed_persistence_keeps_schedule_state_and_allows_retry() {
+        let dir = std::env::temp_dir().join(format!(
+            "planabot_schedule_failure_{}_{}",
+            std::process::id(),
+            super::create_schedule_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("schedules.json");
+        let store = ScheduleStore::with_items(path.clone(), Vec::new());
+        let input = NewSchedule {
+            owner_user_id: 1,
+            chat_id: ChatId(10),
+            message_thread_id: None,
+            source_message_id: None,
+            kind: ScheduleKind::Schedule,
+            title: "저장 검증".to_string(),
+            due_at_ms: now_ms() + 60_000,
+        };
+        std::fs::create_dir(&path).unwrap();
+        assert!(store.add(input.clone()).await.is_err());
+        assert!(store.list_user_pending(1).is_empty());
+        std::fs::remove_dir(&path).unwrap();
+        let item = store.add(input).await.unwrap().item.unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+
+        assert!(store.cancel(1, &item.id).await.is_err());
+        assert!(store.claim_due(item.due_at_ms).await.is_err());
+        assert_eq!(store.list_user_pending(1).len(), 1);
+
+        std::fs::remove_dir(&path).unwrap();
+        assert_eq!(store.claim_due(item.due_at_ms).await.unwrap().len(), 1);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(store.mark_sent(&item.id).await.is_err());
+        assert!(store.mark_failed(&item.id, "실패").await.is_err());
+        assert_eq!(
+            super::lock_items(&store.items)[0].status,
+            super::ScheduleStatus::Sending
+        );
+
+        std::fs::remove_dir(&path).unwrap();
+        store.mark_sent(&item.id).await.unwrap();
+        assert_eq!(
+            super::load_schedule_items(&path)[0].status,
+            super::ScheduleStatus::Sent
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

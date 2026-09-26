@@ -1,4 +1,4 @@
-import type { Settings } from "../../config/settings.js";
+import { rememberExchangeTurn } from "../../application/rememberExchange.js";
 import { resetScopedUserMemory } from "../../memory/userMemoryStore.js";
 import { resolveDataPath } from "../../config/paths.js";
 import { readFile } from "node:fs/promises";
@@ -85,25 +85,6 @@ export async function runMemoryExchangeCommand(args: string[]): Promise<void> {
   });
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
-
-export async function rememberExchangeTurn(params: {
-  userId: string;
-  requestId?: string;
-  chatId: string;
-  conversationId?: string;
-  userText: string;
-  assistantText: string;
-  wireMessages?: Array<{ role: "user" | "assistant"; content: string; }>;
-  epoch?: number;
-}, settings?: Settings): Promise<unknown> {
-  const engine = new LocalMemoryEngine({}, settings);
-  try {
-    return await engine.rememberExchange(params);
-  } finally {
-    engine.close();
-  }
-}
-
 
 export async function runMemoryResetUserCommand(args: string[]): Promise<void> {
   const [userId] = args;

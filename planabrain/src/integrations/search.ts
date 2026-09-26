@@ -19,7 +19,7 @@ export function usesPreSearchContext(settings: Settings): boolean {
   }
   return (
     (settings.aiProvider === "openrouter" && settings.openRouterWebSearchBackend === "ollama") ||
-    (settings.aiProvider === "geminimock" &&
+    ((settings.aiProvider === "geminimock" || settings.aiProvider === "sub2api") &&
       settings.ollamaWebSearchEnabled &&
       settings.ollamaApiKeys.length > 0 &&
       Boolean(settings.ollamaSearchHost))
