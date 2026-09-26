@@ -94,6 +94,7 @@ const PROVIDERS: &[&str] = &[
     "cerebras",
     "modelstudio",
     "geminiweb",
+    "sub2api",
 ];
 
 const THINKING: &[&str] = &["default", "off", "minimal", "low", "medium", "high"];
@@ -182,6 +183,12 @@ pub(crate) const GROUPS: &[Group] = &[
         section: "제공자",
         label: "Geminiweb",
         description: "자체 호스팅 게이트웨이",
+    },
+    Group {
+        id: "sub2api",
+        section: "제공자",
+        label: "Sub2API",
+        description: "OpenAI 호환 사설 게이트웨이",
     },
     Group {
         id: "geminimock",
@@ -504,6 +511,29 @@ pub(crate) const FIELDS: &[Field] = &[
         "Google AI Studio 키입니다.",
         Kind::Secret,
     ),
+    hinted(
+        "GOOGLE_GEMINI_BASE_URL",
+        "google",
+        "게이트웨이 주소",
+        "지정하면 Gemini 게이트웨이로 보내고 GEMINI_API_KEY를 씁니다. HTTPS만 됩니다.",
+        Kind::Text,
+        "https://your-gemini-gateway.example.com/antigravity",
+    ),
+    field(
+        "GEMINI_API_KEY",
+        "google",
+        "게이트웨이 API 키",
+        "게이트웨이 주소를 지정했을 때 쓰는 키입니다.",
+        Kind::Secret,
+    ),
+    hinted(
+        "GEMINI_MODEL",
+        "google",
+        "게이트웨이 모델",
+        "게이트웨이 주소를 지정했을 때 쓰는 모델입니다.",
+        Kind::Text,
+        "gemini-3.8-flash",
+    ),
     field(
         "PLANABRAIN_GEMINI_MODEL",
         "google",
@@ -762,6 +792,29 @@ pub(crate) const FIELDS: &[Field] = &[
         "게이트웨이 모델 이름입니다.",
         Kind::Text,
         "gemini-3.8-flash",
+    ),
+    field(
+        "PLANABRAIN_SUB2API_API_KEY",
+        "sub2api",
+        "API 키",
+        "게이트웨이 접근 키입니다.",
+        Kind::Secret,
+    ),
+    hinted(
+        "PLANABRAIN_SUB2API_BASE_URL",
+        "sub2api",
+        "기본 주소",
+        "OpenAI 호환 API 주소입니다. 인증 정보나 쿼리는 넣지 않습니다.",
+        Kind::Text,
+        "http://10.0.0.3:8080/v1",
+    ),
+    hinted(
+        "PLANABRAIN_SUB2API_MODEL",
+        "sub2api",
+        "모델",
+        "게이트웨이 모델 이름입니다.",
+        Kind::Text,
+        "gpt-5.6-luna",
     ),
     hinted(
         "PLANABRAIN_GEMINIMOCK_BASE_URL",
