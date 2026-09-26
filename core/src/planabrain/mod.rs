@@ -629,20 +629,30 @@ pub(crate) async fn list_user_todos(user_id: &str) -> Result<TodoListOutput> {
 }
 
 pub(crate) fn is_planabrain_allowed(chat_id: i64, user_id: Option<i64>, is_private: bool) -> bool {
-    if !is_planabrain_enabled() {
-        return false;
-    }
+    is_planabrain_enabled()
+        && is_allowed_by_lists(
+            chat_id,
+            user_id,
+            is_private,
+            &ALLOWED_CHAT_IDS,
+            &ALLOWED_USER_IDS,
+        )
+}
 
-    if ALLOWED_CHAT_IDS.contains(&chat_id) {
+fn is_allowed_by_lists(
+    chat_id: i64,
+    user_id: Option<i64>,
+    is_private: bool,
+    allowed_chats: &HashSet<i64>,
+    allowed_users: &HashSet<i64>,
+) -> bool {
+    if allowed_chats.contains(&chat_id) {
         return true;
     }
     if !is_private {
         return false;
     }
-    let Some(user_id) = user_id else {
-        return false;
-    };
-    ALLOWED_USER_IDS.contains(&user_id)
+    allowed_users.is_empty() || user_id.is_some_and(|id| allowed_users.contains(&id))
 }
 
 pub(crate) fn truncate_message(text: &str, limit: usize) -> String {
@@ -1001,12 +1011,26 @@ pub(crate) fn resolve_local_memory_token_budget() -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TurnPrepareInput, TurnPrepareOutput, data_root_from, prepare_turn, run_planabrain_output,
-        truncate_message,
+        TurnPrepareInput, TurnPrepareOutput, data_root_from, is_allowed_by_lists, prepare_turn,
+        run_planabrain_output, truncate_message,
     };
+    use std::collections::HashSet;
     use std::path::{Path, PathBuf};
     use std::process::Command as ProcessCommand;
     use std::time::Duration;
+
+    #[test]
+    fn private_chats_are_open_when_the_user_list_is_empty() {
+        let chats: HashSet<i64> = [-100].into_iter().collect();
+        let empty = HashSet::new();
+        let users: HashSet<i64> = [7].into_iter().collect();
+        assert!(is_allowed_by_lists(42, Some(42), true, &chats, &empty));
+        assert!(is_allowed_by_lists(42, None, true, &chats, &empty));
+        assert!(!is_allowed_by_lists(-200, Some(42), false, &chats, &empty));
+        assert!(is_allowed_by_lists(-100, Some(42), false, &chats, &empty));
+        assert!(is_allowed_by_lists(7, Some(7), true, &chats, &users));
+        assert!(!is_allowed_by_lists(42, Some(42), true, &chats, &users));
+    }
 
     #[tokio::test]
     async fn run_planabrain_output_pipes_stdin_and_captures_stdout() {

@@ -106,7 +106,8 @@ npm run dev
   - `/memoryreset`
   - `/schedule`
   - `/timer`
-  - `/groupinfo`
+  - `/groupinfo` (그룹 전용)
+  - `/chat_id` (개인 채팅 전용, 개인 채팅 명령 목록에만 표시)
 - AI 호출
   - `프라나야`로 시작하는 메시지
   - 일반 텍스트, 캡션, 답장, 답장 이미지까지 함께 반영
@@ -194,8 +195,8 @@ OPENROUTER_API_KEY=YOUR_OPENROUTER_API_KEY_HERE
 - `PLANABRAIN_WEB_FETCH_MAX_BYTES`
 - `PLANABRAIN_WEB_FETCH_MAX_CHARS`
 - `PLANABRAIN_WEB_FETCH_MAX_TOTAL_CHARS`
-- `PLANABRAIN_ALLOWED_CHAT_IDS`
-- `PLANABRAIN_ALLOWED_USER_IDS`
+- `PLANABRAIN_ALLOWED_CHAT_IDS` (그룹은 이 목록에 있는 채팅에서만 응답)
+- `PLANABRAIN_ALLOWED_USER_IDS` (개인 채팅 허용 사용자. 비우면 모든 개인 채팅 허용)
 
 ### 웹 검색과 판단 모델
 

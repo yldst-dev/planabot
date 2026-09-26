@@ -331,6 +331,14 @@ where
             )
             .await?;
         }
+        Command::ChatId => {
+            let reply = if msg.chat.is_private() {
+                format!("확인 완료.\n선생님.\n채팅 ID: {}", msg.chat.id.0)
+            } else {
+                "불가.\n선생님.\n이 명령은 개인 채팅에서만 지원합니다.".to_string()
+            };
+            send_reply_with_fallback(&bot, &msg, reply, SendOptions::default()).await?;
+        }
         Command::Donation => {
             let photo = InputFile::memory(DONATION_QR).file_name("donation_qr.png");
             let mut request = bot

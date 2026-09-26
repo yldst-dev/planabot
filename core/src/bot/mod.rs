@@ -10,7 +10,7 @@ use std::sync::Arc;
 use teloxide::dispatching::UpdateFilterExt;
 use teloxide::filter_command;
 use teloxide::prelude::*;
-use teloxide::types::Message;
+use teloxide::types::{BotCommandScope, Message};
 use teloxide::utils::command::BotCommands;
 
 use crate::urlchanger;
@@ -44,7 +44,15 @@ where
     <B as teloxide::net::Download>::StreamErr: std::fmt::Debug + Send,
     <B as teloxide::net::Download>::Stream: Unpin + Send,
 {
-    bot.set_my_commands(commands::Command::bot_commands())
+    let private_commands = commands::Command::bot_commands();
+    let shared_commands: Vec<_> = private_commands
+        .iter()
+        .filter(|command| command.command.trim_start_matches('/') != commands::PRIVATE_ONLY_COMMAND)
+        .cloned()
+        .collect();
+    bot.set_my_commands(shared_commands).await?;
+    bot.set_my_commands(private_commands)
+        .scope(BotCommandScope::AllPrivateChats)
         .await?;
 
     let error_handler = Arc::new(|err| async move {
