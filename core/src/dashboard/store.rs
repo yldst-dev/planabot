@@ -15,13 +15,9 @@ const MAX_VALUE_BYTES: usize = 32 * 1024;
 const ALLOWED_PREFIXES: &[&str] = &[
     "PLANABOT_",
     "PLANABRAIN_",
-    "MEMORY_FLOW_",
+    "CODEX_",
     "OLLAMA_",
-    "GEMINI_",
-    "GOOGLE_",
     "OPENROUTER_",
-    "CEREBRAS_",
-    "MODEL_STUDIO_",
     "SENDVIS_",
 ];
 const BLOCKED_KEYS: &[&str] = &[
@@ -191,7 +187,9 @@ mod tests {
     fn accepts_catalog_and_prefixed_keys() {
         assert!(validate_key("TELEGRAM_API_TOKEN").is_ok());
         assert!(validate_key("PLANABRAIN_NEW_FLAG").is_ok());
-        assert!(validate_key("MEMORY_FLOW_ROOT").is_ok());
+        assert!(validate_key("CODEX_GATEWAY_BASE_URL").is_ok());
+        assert!(validate_key("MEMORY_FLOW_ROOT").is_err());
+        assert!(validate_key("GOOGLE_API_KEY").is_err());
     }
 
     #[test]
@@ -211,8 +209,8 @@ mod tests {
 
     #[test]
     fn rejects_nul_and_oversized_values() {
-        assert!(validate_entry("PLANABRAIN_CHAT_MODEL", "a\0b").is_err());
-        assert!(validate_entry("PLANABRAIN_CHAT_MODEL", &"a".repeat(40_000)).is_err());
+        assert!(validate_entry("PLANABRAIN_CODEX_MODEL", "a\0b").is_err());
+        assert!(validate_entry("PLANABRAIN_CODEX_MODEL", &"a".repeat(40_000)).is_err());
         assert!(validate_entry("PLANABRAIN_SYSTEM_PROMPT", "줄 하나\n줄 둘").is_ok());
     }
 

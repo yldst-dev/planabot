@@ -36,9 +36,8 @@ export interface Overview {
   version: string
   uptime: number
   bot_username: string | null
-  provider: string | null
   model: string | null
-  aux_provider: string | null
+  aux_model: string | null
   planabrain_server: boolean
   overrides: number
   pending: string[]

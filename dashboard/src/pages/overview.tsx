@@ -52,8 +52,8 @@ export function OverviewPage() {
       <dl className="grid grid-cols-2 overflow-hidden rounded-lg border md:grid-cols-3 xl:grid-cols-5 [&>div]:border-b [&>div]:border-r">
         <Stat icon={TagIcon} label="버전" value={`v${o.version}`} sub={`가동 ${formatUptime(o.uptime)}`} />
         <Stat icon={BotIcon} label="텔레그램 봇" value={o.bot_username ? `@${o.bot_username}` : "연결 전"} sub="봇 계정" />
-        <Stat icon={BrainCircuitIcon} label="주 제공자" value={o.provider ?? "google"} sub={o.model ?? "모델 기본값"} />
-        <Stat icon={GitForkIcon} label="보조 제공자" value={o.aux_provider ?? "주 제공자와 같음"} sub="검색어와 전달문" />
+        <Stat icon={BrainCircuitIcon} label="주 모델" value={o.model ?? "gpt-6-astra"} sub="codex 게이트웨이" />
+        <Stat icon={GitForkIcon} label="보조 모델" value={o.aux_model ?? "주 모델과 같음"} sub="검색어, 전달문, 기억 작성" />
         <Stat
           icon={ActivityIcon}
           label="planabrain 서버"
