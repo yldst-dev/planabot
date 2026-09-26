@@ -36,6 +36,10 @@ coverage/
 /.playwright-mcp
 /.tmp
 
+# dashboard build/deps
+/dashboard/dist
+/dashboard/node_modules
+
 # planabrain build/deps
 /planabrain/dist
 /planabrain/node_modules

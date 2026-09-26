@@ -328,6 +328,47 @@ node dist/cli/index.js memory-reset-all
 - `PLANABOT_TOKEN_LIMIT`
 - `PLANABOT_TOKEN_ESTIMATE_MULTIPLIER`
 
+## 설정 대시보드
+
+헬스체크 포트(`HEALTH_PORT`, 기본 8080)의 `/` 경로에서 설정 대시보드가 열립니다. `PLANABOT_DASHBOARD_ENABLED=0`이면 꺼집니다.
+
+화면은 `dashboard/`의 React(TypeScript), shadcn/ui, Tailwind CSS 앱이고, 봇은 빌드 결과(`PLANABOT_DASHBOARD_DIR`, 기본 `dashboard/dist`)를 그대로 서빙합니다. Docker 이미지는 빌드 단계에서 함께 만듭니다.
+
+```bash
+cd dashboard
+npm ci
+npm run build      # dashboard/dist 생성, 봇을 띄우면 / 에서 열림
+npm run dev        # 화면 개발용, /api 요청은 127.0.0.1:8080 으로 넘김
+```
+
+### 비밀번호
+
+1. 비밀번호가 없으면 봇이 시작할 때 로그에 설정 코드를 남깁니다. `docker logs planabot 2>&1 | grep "설정 코드"`로 찾습니다.
+2. 첫 접속 화면에서 설정 코드와 새 비밀번호(8자 이상)를 입력합니다. 설정 코드는 URL을 먼저 연 다른 사람이 비밀번호를 가로채지 못하게 막는 용도입니다.
+3. 설정을 마치면 복구 코드가 한 번만 표시됩니다. 비밀번호 관리자 같은 곳에 보관하십시오.
+
+비밀번호를 잊었을 때는 두 가지 방법이 있습니다.
+
+- 로그인 화면의 "비밀번호를 잊으셨습니까?"에서 복구 코드와 새 비밀번호를 입력합니다. 복구 코드는 한 번 쓰면 새 코드로 바뀝니다.
+- 복구 코드도 없으면 서버에서 아래 명령을 실행합니다. 비밀번호와 모든 로그인 세션이 지워지고 새 설정 코드가 출력되므로, 그 코드로 처음처럼 다시 설정합니다. 로컬에서는 `cargo run -- dashboard-reset-password`입니다.
+
+```bash
+docker exec planabot planabot dashboard-reset-password
+```
+
+로그인한 뒤에는 사이드바 아래 계정 메뉴에서 비밀번호 변경과 복구 코드 재발급을 할 수 있습니다. 비밀번호를 바꾸면 다른 기기의 로그인은 모두 끊깁니다.
+
+비밀번호, 복구 코드, 설정 코드는 PBKDF2-SHA256(비밀번호는 600,000회)으로 해시해 `.planabot/dashboard-auth.json`(권한 600)에만 남깁니다. 로그인, 설정, 복구를 합쳐 5번 연속 실패하면 10분 동안 막습니다. 로그인 세션은 12시간 유지되고 재시작해도 살아 있습니다.
+
+### 설정 값
+
+- 왼쪽 사이드바에서 봇, planabrain, 제공자, 시스템 분류를 오가며 값을 바꿉니다. `⌘K` 또는 `/`로 설정 검색, `⌘S`/`Ctrl+S`로 저장합니다.
+- 저장한 값은 `PLANABOT_DASHBOARD_STATE_PATH`(기본 `.planabot/dashboard.json`, 권한 600)에 남고, 프로세스가 시작할 때 `.env`와 컨테이너 env보다 먼저 적용됩니다. 되돌리기 버튼을 누르면 대시보드 값을 지우고 env 값으로 돌아갑니다.
+- 실행 중인 프로세스에는 바로 반영되지 않습니다. 사이드바의 재시작 버튼을 누르면 프로세스가 종료되고, 컨테이너 재시작 정책(`restart: unless-stopped`)으로 다시 올라오면서 적용됩니다. 로컬 `cargo run`에서는 직접 다시 실행해야 합니다.
+- API 키와 토큰은 화면과 API 응답에 끝 4자리만 보이며 원문은 돌려주지 않습니다.
+- 목록에 없는 키는 사용자 지정 메뉴에서 추가합니다. `PLANABOT_`, `PLANABRAIN_`, `MEMORY_FLOW_`, `OLLAMA_`, `GEMINI_`, `GOOGLE_`, `OPENROUTER_`, `CEREBRAS_`, `MODEL_STUDIO_`, `SENDVIS_` 접두사만 허용하며, 대시보드 자체 설정(`PLANABOT_DASHBOARD_*`)은 대시보드에서 바꿀 수 없습니다.
+- 공개 도메인에 연결할 때는 반드시 HTTPS 리버스 프록시 뒤에 두십시오. `X-Forwarded-Proto: https`가 오면 쿠키에 `Secure`를 붙입니다.
+
 ## 로컬 데이터 경로
 
 - `/.planabot`

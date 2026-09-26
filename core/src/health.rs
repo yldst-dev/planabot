@@ -32,15 +32,17 @@ async fn health_check(
         }
     }
 
-    let uptime = START_TIME.get().map(|s| s.elapsed().as_secs()).unwrap_or(0);
-
     Ok(Json(HealthResponse {
         status: "ok",
-        uptime,
+        uptime: uptime_secs(),
         version: env!("CARGO_PKG_VERSION"),
         timestamp: chrono::Utc::now().to_rfc3339(),
         planabrain_server: crate::planabrain::server::is_ready(),
     }))
+}
+
+pub fn uptime_secs() -> u64 {
+    START_TIME.get().map(|s| s.elapsed().as_secs()).unwrap_or(0)
 }
 
 pub fn init_start_time() {
@@ -51,7 +53,9 @@ pub async fn run_health_server() {
     let port = env::var("HEALTH_PORT").unwrap_or_else(|_| "8080".to_string());
     let addr = format!("0.0.0.0:{}", port);
 
-    let app = Router::new().route("/health", get(health_check));
+    let app = Router::new()
+        .route("/health", get(health_check))
+        .merge(crate::dashboard::router());
 
     log::info!("헬스체크 서버 시작: {}", addr);
 

@@ -12,7 +12,8 @@
 - Gallery/Hitomi client: `core/src/hitomi/`.
 - URL rewrite utilities and tests: `core/src/urlchanger/`.
 - TypeScript CLI (“planabrain”) lives in `planabrain/src/`.
-- Built artifacts are excluded: `target/`, `planabrain/dist/`, `planabrain/node_modules/`.
+- Settings dashboard UI (React, shadcn/ui, Tailwind) lives in `dashboard/src/`; the Rust side is `core/src/dashboard/`.
+- Built artifacts are excluded: `target/`, `planabrain/dist/`, `planabrain/node_modules/`, `dashboard/dist/`, `dashboard/node_modules/`.
 - Favor clear directory/module boundaries and design around cohesive modules.
 - Split functionality by component so each unit is testable and maintainable.
 
@@ -24,6 +25,7 @@
 - `npm run dev` (in `planabrain/`): run the CLI with tsx.
 - `npm run typecheck` (in `planabrain/`): TypeScript type check.
 - `npm run build` (in `planabrain/`): compile to `planabrain/dist/`.
+- `npm run lint`, `npm run typecheck`, `npm run build` (in `dashboard/`): lint, type check, and build the settings dashboard.
 - Always run type checks, linting, and builds before pushing.
 
 ## Coding Style & Naming Conventions

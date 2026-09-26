@@ -37,6 +37,16 @@ COPY planabrain/tsconfig.json ./
 COPY planabrain/src ./src
 RUN npm run build && npm prune --omit=dev
 
+FROM ${NODE_IMAGE} AS dashboard-builder
+
+WORKDIR /app/dashboard
+
+COPY dashboard/package.json dashboard/package-lock.json ./
+RUN npm ci
+
+COPY dashboard/ ./
+RUN npm run build
+
 FROM ${RUNTIME_IMAGE}
 
 ENV RUST_LOG=info \
@@ -46,7 +56,8 @@ ENV RUST_LOG=info \
     HIROMI_BIN=/usr/local/bin/hiromi \
     HIROMI_DOWNLOAD_DIR=/tmp/hiromi-downloads \
     PLANABOT_MUSIC_CARD_FONT_DIR=/usr/share/fonts/opentype/noto \
-    PLANABRAIN_DATA_DIR=/app
+    PLANABRAIN_DATA_DIR=/app \
+    PLANABOT_DASHBOARD_DIR=/app/dashboard/dist
 
 RUN if grep -q "VERSION_CODENAME=buster" /etc/os-release; then \
         sed -i 's|deb.debian.org/debian|archive.debian.org/debian|g' /etc/apt/sources.list && \
@@ -68,6 +79,7 @@ COPY --from=planabrain-builder /usr/local/ /usr/local/
 COPY --from=planabrain-builder /app/planabrain/package.json /app/planabrain/package.json
 COPY --from=planabrain-builder /app/planabrain/node_modules /app/planabrain/node_modules
 COPY --from=planabrain-builder /app/planabrain/dist /app/planabrain/dist
+COPY --from=dashboard-builder /app/dashboard/dist /app/dashboard/dist
 
 EXPOSE 8080 8081
 

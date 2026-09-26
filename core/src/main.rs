@@ -1,5 +1,6 @@
 mod bot;
 mod config;
+mod dashboard;
 mod health;
 mod hiromi_share;
 mod hitomi;
@@ -22,9 +23,20 @@ use teloxide::Bot;
 use teloxide::prelude::Requester;
 use tokio::time::sleep;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let _ = dotenvy::dotenv();
+    if std::env::args().nth(1).as_deref() == Some("dashboard-reset-password") {
+        return dashboard::reset_password();
+    }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    dashboard::store::apply_startup_overrides();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run())
+}
+
+async fn run() -> Result<()> {
     health::init_start_time();
     reboot::install_panic_reboot_hook();
 
@@ -39,6 +51,7 @@ async fn main() -> Result<()> {
     let bot_username = me.user.username.clone().unwrap_or_default();
     let bot_user_id = me.user.id;
     info!("봇 초기화 완료: @{}", bot_username);
+    dashboard::set_bot_username(&bot_username);
 
     let notice_chat_id = config.notice_chat_id.map(teloxide::types::ChatId);
     let notice_url = Some(config.notice_url.clone()).filter(|raw| !raw.trim().is_empty());
