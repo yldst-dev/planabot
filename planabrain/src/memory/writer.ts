@@ -1,4 +1,4 @@
-import { evaluateSystemOne, type SystemOneConfig } from "../decision/systemOne.js";
+import { type DecisionEvaluator } from "../decision/systemOne.js";
 import { checkExecution } from "../runtime/execution.js";
 import { bigrams } from "./recall.js";
 import { MEMORY_KINDS, type ChatContext, type MemoryKind, type MemoryOperation, type MemoryRecord } from "./types.js";
@@ -11,7 +11,7 @@ export type WriterInput = {
 };
 
 export type WriterDeps = {
-  decision?: SystemOneConfig;
+  decision?: DecisionEvaluator;
   complete: (system: string, user: string) => Promise<string>;
 };
 
@@ -31,11 +31,10 @@ export async function planMemoryOperations(input: WriterInput, deps: WriterDeps)
   return parseOperations(raw, labels, input.context);
 }
 
-async function passesGate(input: WriterInput, decision: SystemOneConfig | undefined): Promise<boolean> {
+async function passesGate(input: WriterInput, decision: DecisionEvaluator | undefined): Promise<boolean> {
   if (!decision) return true;
   try {
-    const answers = await evaluateSystemOne(
-      decision,
+    const answers = await decision.evaluate(
       { user_message: input.userText.slice(0, 2000), assistant_reply: input.assistantText.slice(0, 600) },
       {
         remember: {
@@ -53,7 +52,7 @@ async function passesGate(input: WriterInput, decision: SystemOneConfig | undefi
   } catch (error) {
     checkExecution();
     const reason = error instanceof Error ? error.message : String(error);
-    console.error(`[planabrain] 기억 판단 실패, 작성기로 넘김: ${reason}`);
+    console.error(`[planabrain] 기억 판단 실패(${decision.name}), 작성기로 넘김: ${reason}`);
     return true;
   }
 }

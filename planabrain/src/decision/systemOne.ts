@@ -31,6 +31,11 @@ export type ChoiceAnswer = {
 
 export type SystemOneAnswer = NoulAnswer | ChoiceAnswer;
 
+export type DecisionEvaluator = {
+  name: string;
+  evaluate: (state: unknown, questions: Record<string, SystemOneQuestion>) => Promise<Record<string, SystemOneAnswer>>;
+};
+
 export async function evaluateSystemOne(
   config: SystemOneConfig,
   state: unknown,
@@ -56,7 +61,7 @@ export async function evaluateSystemOne(
   return readAnswers(body.answers, questions);
 }
 
-function readAnswers(
+export function readAnswers(
   raw: unknown,
   questions: Record<string, SystemOneQuestion>,
 ): Record<string, SystemOneAnswer> {

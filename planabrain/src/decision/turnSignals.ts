@@ -1,6 +1,6 @@
 import { checkExecution } from "../runtime/execution.js";
-import { loadDecisionConfig } from "./config.js";
-import { evaluateSystemOne, type SystemOneAnswer, type SystemOneConfig, type SystemOneQuestion } from "./systemOne.js";
+import { loadDecisionEvaluator } from "./config.js";
+import { type DecisionEvaluator, type SystemOneAnswer, type SystemOneQuestion } from "./systemOne.js";
 
 export const TURN_ROUTES = [
   "chat",
@@ -79,10 +79,10 @@ const SOCIAL_QUESTION: SystemOneQuestion = {
 
 export async function classifyTurn(
   input: TurnClassificationInput,
-  config: SystemOneConfig | undefined = loadDecisionConfig(),
+  evaluator: DecisionEvaluator | undefined = loadDecisionEvaluator(),
 ): Promise<TurnClassification | undefined> {
   const message = input.message.trim().slice(0, MAX_STATE_CHARS);
-  if (!config || !message) {
+  if (!evaluator || !message) {
     return undefined;
   }
   const previous = input.previousUserMessage?.trim().slice(0, MAX_STATE_CHARS);
@@ -98,7 +98,7 @@ export async function classifyTurn(
     : { last_user_message: message };
   const startedAt = Date.now();
   try {
-    const answers = await evaluateSystemOne(config, state, questions);
+    const answers = await evaluator.evaluate(state, questions);
     const route = answers.route.type === "choice" ? answers.route : undefined;
     const signals: TurnSignals = {
       route: (route?.choice ?? "chat") as TurnRoute,
@@ -113,13 +113,13 @@ export async function classifyTurn(
         .map((memory) => memory.id),
     );
     console.error(
-      `[planabrain] 턴 판단(ms=${Date.now() - startedAt}) route=${signals.route}(${route?.confidence.toFixed(2) ?? "-"}) 최신정보=${signals.currentInfo} 후속=${signals.searchFollowUp} 인사=${signals.socialOnly} 기억=${relevantMemoryIds.size}/${input.memories?.length ?? 0}`,
+      `[planabrain] 턴 판단(${evaluator.name}, ms=${Date.now() - startedAt}) route=${signals.route}(${route?.confidence.toFixed(2) ?? "-"}) 최신정보=${signals.currentInfo} 후속=${signals.searchFollowUp} 인사=${signals.socialOnly} 기억=${relevantMemoryIds.size}/${input.memories?.length ?? 0}`,
     );
     return { signals, relevantMemoryIds };
   } catch (error) {
     checkExecution();
     const reason = error instanceof Error ? error.message : String(error);
-    console.error(`[planabrain] 턴 판단 실패, 규칙 판단으로 대체: ${reason}`);
+    console.error(`[planabrain] 턴 판단 실패(${evaluator.name}), 규칙 판단으로 대체: ${reason}`);
     return undefined;
   }
 }

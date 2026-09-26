@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { classifyTurn, parseTurnSignals } from "./turnSignals.js";
-import { loadDecisionConfig } from "./config.js";
+import { codexEvaluator, jevEvaluator, loadDecisionConfig, loadDecisionEvaluator } from "./config.js";
+import { codexInputText, codexStream, installFetch } from "../testing/codex.js";
+import { testSettings } from "../testing/settings.js";
 
-const config = { apiKey: "test-key", baseUrl: "https://decision.example/api", model: "typesafe/jev-1.13", timeoutMs: 1000 };
+const config = jevEvaluator({ apiKey: "test-key", baseUrl: "https://decision.example/api", model: "typesafe/jev-1.13", timeoutMs: 1000 });
 
 function mockFetch(reply: (body: Record<string, unknown>, url: string) => Response): { requests: Array<{ url: string; body: Record<string, unknown>; }>; restore: () => void; } {
   const original = globalThis.fetch;
@@ -89,15 +91,58 @@ test("classification is skipped when the decision provider is off", async () => 
   } finally { mock.restore(); }
 });
 
-test("decision config is opt-in and reuses the OpenRouter key", () => {
-  assert.equal(loadDecisionConfig({ OPENROUTER_API_KEY: "key" }), undefined);
+test("jev is used whenever its key exists unless another provider is chosen", () => {
+  assert.equal(loadDecisionConfig({}), undefined);
   assert.equal(loadDecisionConfig({ PLANABRAIN_DECISION_PROVIDER: "jev" }), undefined);
-  assert.deepEqual(loadDecisionConfig({ PLANABRAIN_DECISION_PROVIDER: "jev", OPENROUTER_API_KEY: "key", PLANABRAIN_DECISION_BASE_URL: "https://gw.example/api/" }), {
+  assert.equal(loadDecisionConfig({ PLANABRAIN_DECISION_PROVIDER: "codex", OPENROUTER_API_KEY: "key" }), undefined);
+  assert.deepEqual(loadDecisionConfig({ OPENROUTER_API_KEY: "key", PLANABRAIN_DECISION_BASE_URL: "https://gw.example/api/" }), {
     apiKey: "key",
     baseUrl: "https://gw.example/api",
     model: "typesafe/jev-1.13",
     timeoutMs: 2500,
   });
+});
+
+test("codex takes over decisions when jev is not configured", () => {
+  const settings = () => testSettings();
+  assert.equal(loadDecisionEvaluator({ OPENROUTER_API_KEY: "key" }, settings)?.name, "jev");
+  assert.equal(loadDecisionEvaluator({}, settings)?.name, "codex");
+  assert.equal(loadDecisionEvaluator({ PLANABRAIN_DECISION_PROVIDER: "jev" }, settings)?.name, "codex");
+  assert.equal(loadDecisionEvaluator({ PLANABRAIN_DECISION_PROVIDER: "codex", OPENROUTER_API_KEY: "key" }, settings)?.name, "codex");
+  assert.equal(loadDecisionEvaluator({ PLANABRAIN_DECISION_PROVIDER: "off", OPENROUTER_API_KEY: "key" }, settings), undefined);
+  assert.equal(loadDecisionEvaluator({}, () => testSettings({ codexApiKey: "" })), undefined);
+  assert.equal(loadDecisionEvaluator({}, () => { throw new Error("no settings"); }), undefined);
+});
+
+test("codex answers the same questions in the same shape", async () => {
+  const mock = installFetch(() => codexStream('판단: {"answers":{"route":{"choice":"chat","confidence":0.88},"current_info":0.96,"social":{"noul":0.02},"memory_4":{"noul":0.7}}}'));
+  try {
+    const result = await classifyTurn({ message: "오늘 대전 날씨 어때?", memories: [{ id: 4, content: "사용자는 대전에 산다" }] }, codexEvaluator(testSettings()));
+    assert.deepEqual(result?.signals, { route: "chat", routeConfident: true, currentInfo: true, searchFollowUp: false, socialOnly: false });
+    assert.deepEqual([...(result?.relevantMemoryIds ?? [])], [4]);
+    const [request] = mock.codexRequests();
+    assert.equal(mock.codexRequests().length, 1);
+    assert.match(codexInputText(request), /판단 모델/u);
+    assert.match(codexInputText(request), /대전 날씨/u);
+    assert.equal("service_tier" in request.body, false);
+  } finally { mock.restore(); }
+});
+
+test("codex judgements missing a closing brace are still read", async () => {
+  const mock = installFetch(() => codexStream('{"answers":{"route":{"choice":"todo_add","confidence":0.9},"current_info":{"noul":0.1},"social":{"noul":0.01}}'));
+  try {
+    const result = await classifyTurn({ message: "우유 사기 할 일에 넣어줘" }, codexEvaluator(testSettings()));
+    assert.equal(result?.signals.route, "todo_add");
+  } finally { mock.restore(); }
+});
+
+test("malformed codex judgements fall back to rule decisions", async () => {
+  for (const reply of ["판단할 수 없습니다.", '{"route":{"choice":"chat","confidence":1},"current_info":', '{"answers":{"route":{"choice":"shell","confidence":1},"current_info":0.1,"social":0.1}}', '{"answers":{"route":{"choice":"chat","confidence":1},"social":0.1}}']) {
+    const mock = installFetch(() => codexStream(reply));
+    try {
+      assert.equal(await classifyTurn({ message: "안녕" }, codexEvaluator(testSettings())), undefined);
+    } finally { mock.restore(); }
+  }
 });
 
 test("forwarded signals are validated before use", () => {

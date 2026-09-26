@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { jevEvaluator } from "../decision/config.js";
 import { parseOperations, planMemoryOperations } from "./writer.js";
 import { chatContext, type MemoryRecord } from "./types.js";
 
@@ -41,7 +42,7 @@ test("short or unremarkable turns never reach the writer model", async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({ answers: { remember: { type: "noul", noul: 0.03 }, forget: { type: "noul", noul: 0.01 } } }), { status: 200 });
   try {
-    const decision = { apiKey: "k", baseUrl: "https://decision.example/api", model: "jev", timeoutMs: 1000 };
+    const decision = jevEvaluator({ apiKey: "k", baseUrl: "https://decision.example/api", model: "jev", timeoutMs: 1000 });
     assert.deepEqual(await planMemoryOperations({ context: dm, userText: "오늘 환율 얼마야?", assistantText: "1,380원입니다.", existing: [] }, { decision, complete }), []);
   } finally { globalThis.fetch = original; }
   assert.equal(calls, 0);

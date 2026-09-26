@@ -1,6 +1,6 @@
 import { resolveAuxSettings } from "../chat/auxSettings.js";
 import { loadSettings, type Settings } from "../config/settings.js";
-import { loadDecisionConfig } from "../decision/config.js";
+import { loadDecisionEvaluator } from "../decision/config.js";
 import { invokeChat } from "../integrations/chat.js";
 import { runDetached, runExecution } from "../runtime/execution.js";
 import { serial } from "../runtime/serial.js";
@@ -139,11 +139,13 @@ async function writeLongTermMemory(
 ): Promise<void> {
   const database = openMemoryDatabase(config);
   const context = chatContext(userId, chatId);
-  const auxSettings = resolveAuxSettings(settings ?? loadSettings());
+  const baseSettings = settings ?? loadSettings();
+  const auxSettings = resolveAuxSettings(baseSettings);
+  const decision = loadDecisionEvaluator(process.env, () => baseSettings);
   const operations = await planMemoryOperations(
     { context, userText, assistantText, existing: database.listVisibleMemories(context) },
     {
-      decision: loadDecisionConfig(),
+      decision: decision?.name === "jev" ? decision : undefined,
       complete: (system, user) => invokeChat({
         settings: auxSettings,
         maxContinuations: 0,
