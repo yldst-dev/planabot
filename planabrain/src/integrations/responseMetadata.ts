@@ -23,31 +23,3 @@ export function recordProviderResponse(value: unknown, provider: string | undefi
   const cost = record(root.usage).cost;
   execution.providerResponses.push({ model: label(root.model), provider: label(provider), ...(typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? { cost } : {}) });
 }
-
-export function readGoogleGrounding(value: unknown): {
-  citations: Array<{ url: string; title?: string; }>;
-  searchUsed: boolean;
-} {
-  const root = record(value);
-  const candidate = record(Array.isArray(root.candidates) ? root.candidates[0] : undefined);
-  const metadata = record(root.response_metadata);
-  const grounding = record(candidate.groundingMetadata ?? metadata.groundingMetadata ?? root.groundingMetadata);
-  const chunks = Array.isArray(grounding.groundingChunks) ? grounding.groundingChunks : [];
-  const citations: Array<{ url: string; title?: string; }> = [];
-  for (const chunk of chunks) {
-    const web = record(record(chunk).web);
-    if (typeof web.uri !== "string") continue;
-    try {
-      const url = new URL(web.uri);
-      if (url.protocol !== "https:" || url.username || url.password) continue;
-      if (citations.some((citation) => citation.url === url.toString())) continue;
-      citations.push({ url: url.toString(), ...(typeof web.title === "string" ? { title: web.title } : {}) });
-    } catch {
-      continue;
-    }
-  }
-  return {
-    citations,
-    searchUsed: citations.length > 0 || (Array.isArray(grounding.webSearchQueries) && grounding.webSearchQueries.length > 0),
-  };
-}

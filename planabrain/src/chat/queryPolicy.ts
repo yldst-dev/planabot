@@ -38,10 +38,10 @@ export async function resolveSearchQuery(
   settings: Settings,
   priorUserTexts: string[],
   currentTurnText: string,
-  options: { forceQuery: boolean; },
+  options: { forceQuery: boolean; followUp: boolean; },
 ): Promise<string | undefined> {
   const fallback = buildSearchQuery(currentTurnText);
-  if (!settings.searchQueryRewriteEnabled || (fallback.length <= 120 && !isSearchFollowUp(priorUserTexts.at(-1), currentTurnText))) {
+  if (!settings.searchQueryRewriteEnabled || (fallback.length <= 120 && !options.followUp)) {
     return fallback;
   }
   const rewritten = await rewriteSearchQuery(settings, priorUserTexts, currentTurnText);
@@ -68,8 +68,7 @@ export async function rewriteSearchQuery(
   ].join("\n\n");
   try {
     const result = await invokeChatWithMetadata({
-      settings: { ...resolveAuxSettings(settings), chatMaxOutputTokens: 120 },
-      enableSearchTool: false,
+      settings: resolveAuxSettings(settings),
       maxContinuations: 0,
       messages: [
         { role: "system", content: QUERY_REWRITE_SYSTEM },

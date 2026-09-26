@@ -15,12 +15,18 @@ export type TodoInterpretOutput = {
   error?: string;
 };
 
-export async function interpretTodoRequest(userId: string, text: string): Promise<TodoInterpretOutput> {
+export type TodoAction = Exclude<TodoInterpretOutput["action"], "none">;
+
+export async function interpretTodoRequest(
+  userId: string,
+  text: string,
+  action?: TodoAction,
+): Promise<TodoInterpretOutput> {
   const userText = extractUserText(text);
   const normalized = normalizeIntentText(userText);
-  const todoRelated = isTodoRelated(normalized) || isTodoContextText(text);
+  const todoRelated = action !== undefined || isTodoRelated(normalized) || isTodoContextText(text);
 
-  const update = parseUpdate(userText);
+  const update = !action || action === "update" ? parseUpdate(userText) : undefined;
   if (update) {
     const result = await updateTodo(userId, update.target, update.content);
     if (!result.ok && !todoRelated) {
@@ -29,7 +35,7 @@ export async function interpretTodoRequest(userId: string, text: string): Promis
     return mutationOutput("update", result.ok ? "수정 완료.\n선생님." : "확인 불가.\n선생님.", result);
   }
 
-  if (hasAny(normalized, ["삭제", "지워", "제거"])) {
+  if (action ? action === "delete" : hasAny(normalized, ["삭제", "지워", "제거"])) {
     const target = extractTarget(userText, ["삭제", "지워", "제거", "해줘", "해주세요", "해", "줘"]);
     const result = await deleteTodo(userId, target);
     if (!result.ok && !todoRelated) {
@@ -38,7 +44,7 @@ export async function interpretTodoRequest(userId: string, text: string): Promis
     return mutationOutput("delete", result.ok ? "삭제 완료.\n선생님." : "확인 불가.\n선생님.", result);
   }
 
-  if (hasAny(normalized, ["완료", "끝냈", "끝낫", "처리했", "체크", "했어", "했습니다"])) {
+  if (action ? action === "complete" : hasAny(normalized, ["완료", "끝냈", "끝낫", "처리했", "체크", "했어", "했습니다"])) {
     const target = extractCompleteTarget(userText, text, todoRelated);
     const result = await completeTodo(userId, target);
     if (!result.ok && !todoRelated) {
@@ -51,13 +57,13 @@ export async function interpretTodoRequest(userId: string, text: string): Promis
     return emptyOutput();
   }
 
-  const add = parseAdd(userText, todoRelated);
+  const add = !action || action === "add" ? parseAdd(userText, todoRelated) : undefined;
   if (add) {
     const result = await addTodo(userId, add);
     return mutationOutput("add", result.ok ? "등록 완료.\n선생님." : "확인 불가.\n선생님.", result);
   }
 
-  if (isListRequest(normalized)) {
+  if (action ? action === "list" : isListRequest(normalized)) {
     const result = await listTodos(userId);
     return {
       handled: true,

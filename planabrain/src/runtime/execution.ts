@@ -176,3 +176,7 @@ export async function measureStage<T>(stage: string, work: () => Promise<T>): Pr
     if (execution) console.error(JSON.stringify({ event: "stage", requestId: execution.requestId, stage, outcome, durationMs: Date.now() - startedAt }));
   }
 }
+
+export function runDetached<T>(work: () => Promise<T>): Promise<T> {
+  return executions.exit(work);
+}

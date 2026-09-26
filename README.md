@@ -23,7 +23,7 @@
 - 메시지에 포함된 웹 링크의 안전한 본문 직접 수집
 - 장기 메모리와 그룹 공용 메모리
 - 응답 잘림 감지 후 자동 이어쓰기
-- OpenRouter, Vertex Express, Ollama Cloud 등 다중 provider 지원
+- codex 게이트웨이 하나로 모델 호출, OpenRouter는 판단 모델(Jev)에만 사용
 
 ## 저장소 구조
 
@@ -49,8 +49,8 @@ cp .env.example .env
 
 ```dotenv
 TELEGRAM_API_TOKEN=123456:ABC-YourRealToken
-PLANABRAIN_AI_PROVIDER=vertexexpress
-GOOGLE_VERTEX_EXPRESS_API_KEY=YOUR_VERTEX_EXPRESS_API_KEY_HERE
+CODEX_GATEWAY_API_KEY=cg_YOUR_KEY_HERE
+PLANABRAIN_CODEX_BASE_URL=http://192.168.0.9:8080/v1
 PLANABRAIN_ALLOWED_CHAT_IDS=-1001234567890
 PLANABRAIN_ALLOWED_USER_IDS=123456789
 ```
@@ -101,6 +101,8 @@ npm run dev
   - `/ping`
   - `/version`
   - `/token`
+  - `/memory`
+  - `/forget`
   - `/memoryreset`
   - `/schedule`
   - `/timer`
@@ -120,7 +122,7 @@ npm run dev
 - 개인 채팅에서는 Telegram draft 상태 표시를 우선 사용하고, 불가하면 typing 으로 폴백합니다.
 - 그룹에서는 프라나 응답에 달린 답장을 같은 대화 체인으로 이어받습니다.
 - 이미지가 있으면 planabrain 쪽에서 직접 멀티모달 입력으로 처리합니다.
-- 최신 정보가 필요하면 provider별 웹 검색 경로를 사용합니다.
+- 최신 정보가 필요하면 Ollama 웹 검색 결과를 답변 전에 미리 넣고, 확인한 출처만 붙입니다.
 - 질문에 웹 링크가 포함되면 planabrain이 공개 HTTP/HTTPS 페이지의 본문을 직접 추출해 참고합니다.
 - 내부 네트워크 주소, 비표준 포트, 과도한 응답, 바이너리 콘텐츠와 위험한 리디렉션은 차단합니다.
 - 응답이 길이 제한으로 끊기면 자동으로 이어서 받아 한 번 더 합칩니다.
@@ -128,82 +130,41 @@ npm run dev
 - 내부 메타 문장이나 reasoning 누출은 후처리에서 제거합니다.
 - 선생님이 먼저 연 친밀 장면은 같은 수위로 이어가고, 모델이 거절하면 한 번 더 시도합니다.
 
-## AI Provider
+## 모델 연결
 
-### Google
+### Codex gateway (주 모델과 보조 모델)
 
-- `PLANABRAIN_AI_PROVIDER=google`
-- 필수: `GOOGLE_API_KEY`
-
-### Vertex Express
-
-- `PLANABRAIN_AI_PROVIDER=vertexexpress`
-- 필수: `GOOGLE_VERTEX_EXPRESS_API_KEY` 또는 `VERTEX_EXPRESS_API_KEY`
-- 기본 모델 예시: `gemini-3-flash-preview`
-
-### GeminiMock
-
-- `PLANABRAIN_AI_PROVIDER=geminimock`
-- 필수: `PLANABRAIN_GEMINIMOCK_BASE_URL` 또는 `GEMINI_CLI_API_HOST`, `GEMINI_CLI_API_PORT`
-
-### OpenRouter
-
-- `PLANABRAIN_AI_PROVIDER=openrouter`
-- 필수: `OPENROUTER_API_KEY`
-- 권장 검색 방식: `openrouter:web_search` server tool
-
-### Alibaba Cloud Model Studio
-
-- `PLANABRAIN_AI_PROVIDER=modelstudio` (별칭: `alibaba`, `dashscope`, `qwen`)
-- 필수: `MODEL_STUDIO_API_KEY`
-- 기본 모델: `qwen-plus`
-- 기본 엔드포인트: `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`
-- OpenAI Chat Completions 호환 방식이며 이미지 입력은 지원하지 않습니다.
-- 검색은 기본 활성입니다. `web_search`, `web_fetch` 툴을 사용하며 검색 백엔드로 `OLLAMA_API_KEY`가 필요합니다. 키가 없으면 검색이 자동으로 꺼지고, `PLANABRAIN_MODELSTUDIO_ENABLE_WEB_SEARCH=0`으로 직접 끌 수도 있습니다.
-
-최소 설정 예시:
-
-```bash
-PLANABRAIN_AI_PROVIDER=modelstudio
-MODEL_STUDIO_API_KEY=YOUR_MODEL_STUDIO_API_KEY_HERE
-OLLAMA_API_KEY=YOUR_OLLAMA_API_KEY_HERE
-```
-
-`OLLAMA_API_KEY`가 없으면 시의성 질문에 "확인 불가" 응답이 나옵니다. 검색 결과와 출처를 확인하지 못한 답변은 폐기하는 설계이기 때문입니다.
-
-### Geminiweb
-
-- `PLANABRAIN_AI_PROVIDER=geminiweb` (별칭: `gemini-web`, `gemini_web`, `web2api`)
-- 필수: `PLANABRAIN_GEMINIWEB_API_KEY` (또는 `GEMINIWEB_API_KEY`), `PLANABRAIN_GEMINIWEB_BASE_URL`
-- 기본 모델: `gemini-3.8-flash`
-- 자체 호스팅 `gemini-web2api-go` 게이트웨이의 OpenAI Chat Completions 호환 경로입니다. OpenRouter가 아닙니다.
-- 이미지 입력을 지원합니다. `image_url` data URL로 전달합니다.
-- 임베딩은 사용하지 않습니다.
-- OpenRouter 웹 검색을 이 게이트웨이에 켜지 마십시오. Gemini 웹 모델의 내장 검색과 planabrain `web_fetch`를 씁니다.
+- 필수: `CODEX_GATEWAY_API_KEY`, `PLANABRAIN_CODEX_BASE_URL` (또는 `CODEX_GATEWAY_BASE_URL`)
+- 기본 모델: `gpt-6-astra` (`PLANABRAIN_CODEX_MODEL`로 변경)
+- 자체 호스팅 codex-gateway의 Responses API(`POST /responses`)를 스트리밍으로 호출합니다. 게이트웨이 규칙에 맞춰 `store: false`, `stream: true`, 배열 `input`을 보내고 `max_output_tokens`, `temperature`는 보내지 않습니다.
+- 시스템 프롬프트는 `instructions`로 보냅니다. 비어 있으면 게이트웨이가 코딩 에이전트용 지시문을 넣으므로 항상 채웁니다.
+- 생각 모드 `off`와 `minimal`은 `reasoning.effort: low`로 보냅니다. `default`면 모델 기본값을 씁니다.
+- 이미지 입력은 `input_image` data URL로 보냅니다.
+- `PLANABRAIN_AI_PROVIDER`, `PLANABRAIN_AUX_PROVIDER`는 비우거나 `codex`로 둡니다. 다른 값이면 시작할 때 오류가 납니다.
 - 권장 타임아웃: `PLANABRAIN_HTTP_TIMEOUT_MS=180000`
-- 게이트웨이 `multi_turn`이 켜져 있으면 `PLANABRAIN_CONTINUOUS_CHAT=1`로 맞춥니다. 기본값은 꺼짐입니다.
 
-최소 설정 예시:
+### 웹 검색 (Ollama)
+
+- codex에는 검색 도구가 없어서, 시의성 질문이면 Ollama 웹 검색 결과를 답변 전에 미리 넣습니다.
+- 필수: `PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH=1`, `OLLAMA_API_KEY` 또는 `OLLAMA_API_KEYS`
+- 키가 없으면 시의성 질문에 "확인 불가" 응답이 나옵니다. 검색 결과와 출처를 확인하지 못한 답변은 폐기하는 설계이기 때문입니다.
+
+### 판단 모델 (OpenRouter Jev)
+
+- 턴 판단(할 일과 일정 경로, 최신 정보 필요 여부, 후속 질문, 인사, 기억 관련성)과 기억 저장 판단을 한 번의 호출로 처리합니다.
+- `PLANABRAIN_DECISION_PROVIDER=jev`와 `OPENROUTER_API_KEY`(또는 `PLANABRAIN_DECISION_API_KEY`)로 켭니다. 꺼져 있으면 규칙 판단을 씁니다.
+- OpenRouter는 이 판단 모델에만 씁니다.
 
 ```bash
-PLANABRAIN_AI_PROVIDER=geminiweb
-PLANABRAIN_GEMINIWEB_API_KEY=YOUR_GEMINIWEB_API_KEY_HERE
-PLANABRAIN_GEMINIWEB_BASE_URL=http://ROCKY_PRIVATE_IP:8083/v1
-PLANABRAIN_GEMINIWEB_MODEL=gemini-3.8-flash
+CODEX_GATEWAY_API_KEY=cg_YOUR_KEY_HERE
+PLANABRAIN_CODEX_BASE_URL=http://192.168.0.9:8080/v1
+PLANABRAIN_CODEX_MODEL=gpt-6-astra
 PLANABRAIN_HTTP_TIMEOUT_MS=180000
-PLANABRAIN_CONTINUOUS_CHAT=1
-PLANABRAIN_OPENROUTER_ENABLE_WEB_SEARCH=0
+PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH=1
+OLLAMA_API_KEY=YOUR_OLLAMA_API_KEY_HERE
+PLANABRAIN_DECISION_PROVIDER=jev
+OPENROUTER_API_KEY=YOUR_OPENROUTER_API_KEY_HERE
 ```
-
-Dokploy에서는 `http://127.0.0.1:8083` 또는 `http://host.docker.internal:8083`을 쓰지 않습니다. Rocky 사설 IP 또는 Tailscale 주소를 넣습니다.
-
-### Ollama Cloud
-
-- `PLANABRAIN_AI_PROVIDER=ollama`
-- 필수: `OLLAMA_API_KEY` 또는 `OLLAMA_API_KEYS`
-- 권장 모델 예시: `gemma4:31b-cloud`
-- 검색: `web_search`, `web_fetch`
-- 여러 API 키를 등록하면 쿼타 제한 시 다음 키로 재시도합니다.
 
 ## 주요 환경변수
 
@@ -211,25 +172,22 @@ Dokploy에서는 `http://127.0.0.1:8083` 또는 `http://host.docker.internal:808
 
 - `TELEGRAM_API_TOKEN`
 - `PLANABRAIN_ENABLED`
-- `PLANABOT_TELEGRAM_DRAFT_ENABLED`
-- `PLANABRAIN_AI_PROVIDER`
-- `PLANABRAIN_CHAT_MODEL`
-- `PLANABRAIN_CHAT_MAX_OUTPUT_TOKENS`
+- `PLANABRAIN_AI_PROVIDER` (비우거나 `codex`)
+- `CODEX_GATEWAY_API_KEY`, `PLANABRAIN_CODEX_BASE_URL`, `PLANABRAIN_CODEX_MODEL`
 - `PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS`
 - `PLANABRAIN_DELIVERY_REWRITE_ENABLED`
 - `PLANABRAIN_CHAT_THINKING_MODE`
 - `PLANABRAIN_SYSTEM_PROMPT`
 - `PLANABRAIN_PERSONA_PROFILE` (`live` 기본, `original`은 동결 백업)
 - `PLANABRAIN_INTIMACY_ENABLED`
-- `PLANABRAIN_INTIMACY_FALLBACK_PROVIDER`
 - `PLANABRAIN_INTIMACY_FALLBACK_MODEL`
-- `PLANABRAIN_CONTINUOUS_CHAT` (기본 0, 1이면 시스템 프롬프트를 고정하고 이전 턴 원문을 재전송해 Gemini 웹 게이트웨이의 대화 이어가기에 맞춤)
+- `PLANABRAIN_CONTINUOUS_CHAT` (기본 0, 1이면 지난 대화를 정리된 형태로 매번 다시 보냄)
 - `PLANABRAIN_SEARCH_QUERY_REWRITE` (기본 1, 시의성 질문의 검색어를 모델이 다시 작성)
-- `PLANABRAIN_AUX_PROVIDER`, `PLANABRAIN_AUX_MODEL` (검색어 재작성과 전달문 재작성 같은 보조 호출에 쓸 제공자와 모델, 비우면 주 제공자와 모델을 사용하며 자격 증명이 없으면 주 제공자로 복귀)
+- `PLANABRAIN_AUX_MODEL` (검색어 재작성, 전달문 재작성, 기억 작성 같은 보조 호출에 쓸 codex 모델, 비우면 주 모델 사용)
 - `PLANABRAIN_DATA_DIR` (planabrain 데이터 루트, 기본값은 저장소 루트이며 `.planabrain/*` 상대 경로의 기준)
 - `PLANABOT_PLANABRAIN_SERVER` (기본 1, planabrain 상주 서버 사용 여부)
 - `PLANABRAIN_SERVER_PORT` (기본 0, 상주 서버가 쓸 루프백 포트이며 0이면 자동 선택)
-- `PLANABRAIN_HTTP_TIMEOUT_MS` (전역 HTTP 타임아웃, 기본 60000. geminiweb은 180000 권장)
+- `PLANABRAIN_HTTP_TIMEOUT_MS` (전역 HTTP 타임아웃, 기본 60000. codex는 180000 권장)
 - `PLANABRAIN_WEB_FETCH_ENABLED`
 - `PLANABRAIN_WEB_FETCH_TIMEOUT_MS`
 - `PLANABRAIN_WEB_FETCH_MAX_BYTES`
@@ -238,86 +196,35 @@ Dokploy에서는 `http://127.0.0.1:8083` 또는 `http://host.docker.internal:808
 - `PLANABRAIN_ALLOWED_CHAT_IDS`
 - `PLANABRAIN_ALLOWED_USER_IDS`
 
-### Google / Vertex
+### 웹 검색과 판단 모델
 
-- `GOOGLE_API_KEY`
-- `GOOGLE_VERTEX_EXPRESS_API_KEY`
-- `VERTEX_EXPRESS_API_KEY`
-- `PLANABRAIN_VERTEX_EXPRESS_API_VERSION`
-- `PLANABRAIN_VERTEX_EXPRESS_MODEL`
-- `PLANABRAIN_VERTEX_EXPRESS_THINKING_LEVEL`
-- `gemini-3-flash-preview`에서는 `PLANABRAIN_VERTEX_EXPRESS_THINKING_LEVEL=off`가 사실상 `MINIMAL`로 적용됩니다.
-
-### GeminiMock
-
-- `PLANABRAIN_GEMINIMOCK_BASE_URL`
-- `GEMINI_CLI_API_HOST`
-- `GEMINI_CLI_API_PORT`
-- `GEMINI_CLI_MODEL`
-
-### OpenRouter
-
-- `OPENROUTER_API_KEY`
-- `PLANABRAIN_OPENROUTER_MODEL`
-- `PLANABRAIN_OPENROUTER_IMAGE_MODEL`
-- `PLANABRAIN_OPENROUTER_BASE_URL`
-- `PLANABRAIN_OPENROUTER_SITE_URL`
-- `PLANABRAIN_OPENROUTER_APP_NAME`
-- `PLANABRAIN_OPENROUTER_ENABLE_WEB_SEARCH`
-- `PLANABRAIN_OPENROUTER_WEB_SEARCH_MAX_RESULTS`
-- `PLANABRAIN_OPENROUTER_WEB_SEARCH_MAX_TOTAL_RESULTS`
-- `PLANABRAIN_OPENROUTER_WEB_SEARCH_CONTEXT_SIZE`
-
-### Model Studio
-
-- `MODEL_STUDIO_API_KEY`
-- `PLANABRAIN_MODELSTUDIO_MODEL`
-- `PLANABRAIN_MODELSTUDIO_BASE_URL`
-- `PLANABRAIN_MODELSTUDIO_ENABLE_WEB_SEARCH`
-
-### Geminiweb
-
-- `PLANABRAIN_GEMINIWEB_API_KEY` (별칭 `GEMINIWEB_API_KEY`)
-- `PLANABRAIN_GEMINIWEB_BASE_URL` (예: `http://ROCKY_PRIVATE_IP:8083/v1`)
-- `PLANABRAIN_GEMINIWEB_MODEL` (기본 `gemini-3.8-flash`)
-- `PLANABRAIN_HTTP_TIMEOUT_MS` (이 제공자는 `180000` 권장, 전역 기본값은 60000)
-- `PLANABRAIN_CONTINUOUS_CHAT` (게이트웨이 `multi_turn`이 켜져 있으면 `1`)
-- `PLANABRAIN_OPENROUTER_ENABLE_WEB_SEARCH` (이 게이트웨이에는 `0`)
-
-### Ollama
-
-- `OLLAMA_API_KEY`
-- `OLLAMA_API_KEYS`
-- `PLANABRAIN_OLLAMA_HOST`
-- `PLANABRAIN_OLLAMA_SEARCH_HOST`
-- `PLANABRAIN_OLLAMA_MODEL`
-- `PLANABRAIN_OLLAMA_THINKING_MODE`
-- `PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH`
-- `PLANABRAIN_OLLAMA_ENABLE_WEB_FETCH`
-- `PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS`
-- `PLANABRAIN_OLLAMA_TOOL_MAX_ITERATIONS`
+- `PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH`, `OLLAMA_API_KEY`, `OLLAMA_API_KEYS`, `PLANABRAIN_OLLAMA_SEARCH_HOST`, `PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS`
+- `PLANABRAIN_DECISION_PROVIDER`, `OPENROUTER_API_KEY`, `PLANABRAIN_DECISION_API_KEY`, `PLANABRAIN_DECISION_BASE_URL`, `PLANABRAIN_DECISION_MODEL`, `PLANABRAIN_DECISION_TIMEOUT_MS`
 
 ### 장기 메모리
 
-- `PLANABOT_LOCAL_MEMORY_ENABLED`
-- `PLANABRAIN_LOCAL_GROUP_MEMORY_ENABLED`
-- `PLANABRAIN_LOCAL_MEMORY_DIR`
-- `PLANABRAIN_LOCAL_MEMORY_STORE`
-- `PLANABRAIN_LOCAL_MEMORY_SQLITE_PATH`
-- `PLANABRAIN_LOCAL_MEMORY_COMPACTION_ENABLED`
-- `PLANABRAIN_LOCAL_MEMORY_COMPACTION_KEEP_RECENT_TURNS`
-- `PLANABRAIN_LOCAL_MEMORY_COMPACTION_MIN_SOURCE_TURNS`
-- `PLANABRAIN_LOCAL_MEMORY_CONVERSATION_TTL_DAYS`
-- `PLANABRAIN_LOCAL_MEMORY_RETRIEVAL_LOGGING_ENABLED`
-- `PLANABOT_LOCAL_MEMORY_TOKEN_BUDGET`
+- 대화 기록과 장기 기억은 `PLANABRAIN_MEMORY_DB_PATH`(기본 `.planabrain/memory.sqlite`) 한 파일에 저장합니다.
+- 답변을 보낸 뒤 판단 모델이 기억할 내용이 있는지 먼저 확인하고, 있으면 보조 모델이 기억을 추가, 수정, 삭제합니다. 이 작업은 백그라운드에서 돌아서 다음 대화를 막지 않습니다.
+- 다음 질문을 받으면 호칭과 부탁한 규칙은 항상 넣고, 나머지 기억은 턴 판단 호출에서 관련 있다고 판단된 것만 넣습니다. 판단 모델이 꺼져 있으면 낱말 겹침으로 고릅니다.
+- DM에서 알게 된 기억은 DM에서만 씁니다. 그룹에서 알게 된 기억은 그 그룹과 본인 DM에서 씁니다.
+- `/memory`로 이 대화방에서 쓰는 기억을 번호와 함께 보고, `/forget 번호`로 하나씩 지웁니다.
 
-장기 메모리 관리 CLI:
+설정:
+
+- `PLANABOT_LOCAL_MEMORY_ENABLED`
+- `PLANABOT_LOCAL_MEMORY_TOKEN_BUDGET`
+- `PLANABRAIN_MEMORY_DB_PATH`
+- `PLANABRAIN_MEMORY_MAX_TURNS`
+- `PLANABRAIN_MEMORY_CONVERSATION_TTL_DAYS`
+- `PLANABRAIN_MEMORY_MAX_ITEMS`
+- `PLANABRAIN_MEMORY_WRITER_ENABLED`
+
+관리 CLI:
 
 ```bash
 cd planabrain
-node dist/cli/index.js memory-list-facts <userId> <chatId>
-node dist/cli/index.js memory-update-fact <userId> <chatId> <factId> <value>
-node dist/cli/index.js memory-delete-fact <userId> <chatId> <factId>
+node dist/cli/index.js memory-list <userId> <chatScope>
+node dist/cli/index.js memory-forget <userId> <chatScope> <memoryId>
 node dist/cli/index.js memory-reset-user <userId>
 node dist/cli/index.js memory-reset-all
 ```
@@ -362,11 +269,11 @@ docker exec planabot planabot dashboard-reset-password
 
 ### 설정 값
 
-- 왼쪽 사이드바에서 봇, planabrain, 제공자, 시스템 분류를 오가며 값을 바꿉니다. `⌘K` 또는 `/`로 설정 검색, `⌘S`/`Ctrl+S`로 저장합니다.
+- 왼쪽 사이드바에서 봇, planabrain, 제공자(Codex 게이트웨이, 웹 검색, 판단 모델), 시스템 분류를 오가며 값을 바꿉니다. `⌘K` 또는 `/`로 설정 검색, `⌘S`/`Ctrl+S`로 저장합니다.
 - 저장한 값은 `PLANABOT_DASHBOARD_STATE_PATH`(기본 `.planabot/dashboard.json`, 권한 600)에 남고, 프로세스가 시작할 때 `.env`와 컨테이너 env보다 먼저 적용됩니다. 되돌리기 버튼을 누르면 대시보드 값을 지우고 env 값으로 돌아갑니다.
 - 실행 중인 프로세스에는 바로 반영되지 않습니다. 사이드바의 재시작 버튼을 누르면 프로세스가 종료되고, 컨테이너 재시작 정책(`restart: unless-stopped`)으로 다시 올라오면서 적용됩니다. 로컬 `cargo run`에서는 직접 다시 실행해야 합니다.
 - API 키와 토큰은 화면과 API 응답에 끝 4자리만 보이며 원문은 돌려주지 않습니다.
-- 목록에 없는 키는 사용자 지정 메뉴에서 추가합니다. `PLANABOT_`, `PLANABRAIN_`, `MEMORY_FLOW_`, `OLLAMA_`, `GEMINI_`, `GOOGLE_`, `OPENROUTER_`, `CEREBRAS_`, `MODEL_STUDIO_`, `SENDVIS_` 접두사만 허용하며, 대시보드 자체 설정(`PLANABOT_DASHBOARD_*`)은 대시보드에서 바꿀 수 없습니다.
+- 목록에 없는 키는 사용자 지정 메뉴에서 추가합니다. `PLANABOT_`, `PLANABRAIN_`, `CODEX_`, `OLLAMA_`, `OPENROUTER_`, `SENDVIS_` 접두사만 허용하며, 대시보드 자체 설정(`PLANABOT_DASHBOARD_*`)은 대시보드에서 바꿀 수 없습니다.
 - 공개 도메인에 연결할 때는 반드시 HTTPS 리버스 프록시 뒤에 두십시오. `X-Forwarded-Proto: https`가 오면 쿠키에 `Secure`를 붙입니다.
 
 ## 로컬 데이터 경로
@@ -439,8 +346,8 @@ cd planabrain && npm run typecheck && npm run build
 
 - 그룹 대화 답장 체인 맥락 유지
 - 이미지 분석을 planabrain 멀티모달 경로로 통합
-- OpenRouter 웹 검색 tool 지원
-- Vertex Express provider 지원
+- codex 게이트웨이 단일 모델 연결과 Ollama 사전 검색
+- OpenRouter Jev 판단 모델로 턴 판단과 기억 관련성 판단
 - Ollama 다중 API 키 fallback 지원
 - 30초 응답 지연 감지
 - 내부 메타 응답 누출 필터링

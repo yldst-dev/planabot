@@ -1,7 +1,9 @@
 import { checkExecution, runExecution } from "../runtime/execution.js";
-import { LocalMemoryEngine } from "../memoryflow/memory-engine.js";
+import { buildMemoryContext, listRecentTurns, recallMemories } from "../memory/service.js";
+import type { MemoryRecall } from "../memory/recall.js";
 import { interpretScheduleRequest } from "../schedule/intent.js";
-import { interpretTodoRequest } from "../todo/intent.js";
+import { interpretTodoRequest, type TodoAction } from "../todo/intent.js";
+import { classifyTurn, type TurnClassification, type TurnClassificationInput, type TurnSignals } from "../decision/turnSignals.js";
 import { listTodos } from "../todo/store.js";
 
 export type TurnPrepareInput = {
@@ -30,20 +32,22 @@ export type TurnPrepareOutput = {
   todo: { handled: boolean; } | null;
   schedule: { handled: boolean; } | null;
   todoList: unknown | null;
+  signals: TurnSignals | null;
   memoryContext: string | null;
   recentTurns: RecentTurn[];
   errors: Record<string, string>;
 };
 
 export type TurnPrepareDeps = {
-  interpretTodo: (userId: string, text: string) => Promise<{ handled: boolean; }>;
+  classifyTurn: (input: TurnClassificationInput) => Promise<TurnClassification | undefined>;
+  interpretTodo: (userId: string, text: string, action?: TodoAction) => Promise<{ handled: boolean; }>;
   interpretSchedule: (text: string) => { handled: boolean; };
   listTodos: (userId: string) => Promise<unknown>;
-  prepareMemory: (input: {
-    userId: string;
-    chatScope: string;
-    conversationId?: string;
-    userText: string;
+  recallMemory: (input: { userId: string; chatScope: string; query: string; }) => Promise<MemoryRecall>;
+  renderMemory: (input: {
+    recall: MemoryRecall;
+    relevantIds?: ReadonlySet<number>;
+    query: string;
     tokenBudget?: number;
   }) => Promise<string | null>;
   listRecentTurns: (input: { chatScope: string; conversationId: string; }) => Promise<RecentTurn[]>;
@@ -64,27 +68,68 @@ async function executePrepareTurn(input: TurnPrepareInput, deps: TurnPrepareDeps
     todo: null,
     schedule: null,
     todoList: null,
+    signals: null,
     memoryContext: null,
     recentTurns: [],
     errors: {},
   };
 
-  try {
-    output.todo = await deps.interpretTodo(input.userId, input.question);
-  } catch (error) {
-    output.errors.todo = describeError(error);
-  }
-  if (output.todo?.handled) {
-    return output;
+  const memoryEnabled = input.memoryEnabled !== false;
+  const query = input.memoryQueryText ?? input.question;
+  let recentTurns: RecentTurn[] = [];
+  if (memoryEnabled && input.conversationId) {
+    try {
+      recentTurns = await deps.listRecentTurns({
+        chatScope: input.chatScope,
+        conversationId: input.conversationId,
+      });
+    } catch (error) {
+      output.errors.recentTurns = describeError(error);
+    }
   }
 
-  try {
-    output.schedule = deps.interpretSchedule(input.question);
-  } catch (error) {
-    output.errors.schedule = describeError(error);
+  let recall: MemoryRecall = { pinned: [], candidates: [] };
+  if (memoryEnabled) {
+    try {
+      recall = await deps.recallMemory({ userId: input.userId, chatScope: input.chatScope, query });
+    } catch (error) {
+      output.errors.memory = describeError(error);
+    }
   }
-  if (output.schedule?.handled) {
-    return output;
+
+  let classification: TurnClassification | undefined;
+  try {
+    classification = await deps.classifyTurn({
+      message: query,
+      previousUserMessage: recentTurns.filter((turn) => turn.role === "user").at(-1)?.text,
+      memories: recall.candidates.map((memory) => ({ id: memory.id, content: memory.content })),
+    });
+  } catch (error) {
+    output.errors.signals = describeError(error);
+  }
+  output.signals = classification?.signals ?? null;
+  const route = output.signals?.routeConfident ? output.signals.route : undefined;
+
+  if (!route || route.startsWith("todo_")) {
+    try {
+      output.todo = await deps.interpretTodo(input.userId, input.question, route ? toTodoAction(route) : undefined);
+    } catch (error) {
+      output.errors.todo = describeError(error);
+    }
+    if (output.todo?.handled) {
+      return output;
+    }
+  }
+
+  if (!route || route.startsWith("schedule_")) {
+    try {
+      output.schedule = deps.interpretSchedule(input.question);
+    } catch (error) {
+      output.errors.schedule = describeError(error);
+    }
+    if (output.schedule?.handled) {
+      return output;
+    }
   }
 
   try {
@@ -93,81 +138,38 @@ async function executePrepareTurn(input: TurnPrepareInput, deps: TurnPrepareDeps
     output.errors.todoList = describeError(error);
   }
 
-  if (input.memoryEnabled !== false) {
+  if (memoryEnabled) {
     try {
-      output.memoryContext = await deps.prepareMemory({
-        userId: input.userId,
-        chatScope: input.chatScope,
-        conversationId: input.conversationId,
-        userText: input.memoryQueryText ?? input.question,
+      output.memoryContext = await deps.renderMemory({
+        recall,
+        relevantIds: classification?.relevantMemoryIds,
+        query,
         tokenBudget: input.tokenBudget,
       });
     } catch (error) {
       output.errors.memory = describeError(error);
     }
-    if (input.conversationId) {
-      try {
-        output.recentTurns = await deps.listRecentTurns({
-          chatScope: input.chatScope,
-          conversationId: input.conversationId,
-        });
-      } catch (error) {
-        output.errors.recentTurns = describeError(error);
-      }
-    }
+    output.recentTurns = recentTurns;
   }
 
   return output;
 }
 
-export function buildTurnPrepareDeps(nowMs?: number): TurnPrepareDeps {
-  return {
-    interpretTodo: (userId, text) => interpretTodoRequest(userId, text),
-    interpretSchedule: (text) => interpretScheduleRequest(text, { nowMs }),
-    listTodos: (userId) => listTodos(userId),
-    prepareMemory: async (params) => {
-      const engine = new LocalMemoryEngine();
-      try {
-        const prepared = await engine.preparePromptInput({
-          userId: params.userId,
-          chatId: params.chatScope,
-          conversationId: params.conversationId,
-          userText: params.userText,
-          tokenBudget: params.tokenBudget,
-        });
-        return normalizeMemoryContext(prepared.memoryContext);
-      } finally {
-        engine.close();
-      }
-    },
-    listRecentTurns: async (params) => {
-      const engine = new LocalMemoryEngine();
-      try {
-        const turns = await engine.listConversationTurns({
-          chatId: params.chatScope,
-          conversationId: params.conversationId,
-        });
-        return turns.map((turn) => ({
-          role: turn.role,
-          text: turn.text,
-          at: turn.at,
-          ...(turn.ownerUserId ? { ownerUserId: turn.ownerUserId } : {}),
-          ...(turn.wireMessages ? { wireMessages: turn.wireMessages } : {}),
-          ...(typeof turn.epoch === "number" ? { epoch: turn.epoch } : {}),
-        }));
-      } finally {
-        engine.close();
-      }
-    },
-  };
+function toTodoAction(route: TurnSignals["route"]): TodoAction | undefined {
+  const action = route.slice("todo_".length);
+  return ["add", "complete", "delete", "update", "list"].includes(action) ? (action as TodoAction) : undefined;
 }
 
-export function normalizeMemoryContext(raw: unknown): string | null {
-  const text = typeof raw === "string" ? raw.trim() : "";
-  if (!text || text.toLowerCase() === "memory_context: none") {
-    return null;
-  }
-  return text;
+export function buildTurnPrepareDeps(nowMs?: number): TurnPrepareDeps {
+  return {
+    classifyTurn: (input) => classifyTurn(input),
+    interpretTodo: (userId, text, action) => interpretTodoRequest(userId, text, action),
+    interpretSchedule: (text) => interpretScheduleRequest(text, { nowMs }),
+    listTodos: (userId) => listTodos(userId),
+    recallMemory: async (params) => recallMemories({ userId: params.userId, chatId: params.chatScope, query: params.query }),
+    renderMemory: async (params) => buildMemoryContext(params),
+    listRecentTurns: async (params) => listRecentTurns(params.chatScope, params.conversationId),
+  };
 }
 
 function describeError(error: unknown): string {

@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import type { Settings } from "../../config/settings.js";
 import type { RecentTurnInput } from "../../chat/webSearchAnswer.js";
 import { runAsk } from "../../application/turnService.js";
+import { parseTurnSignals } from "../../decision/turnSignals.js";
 export { runAsk, type AskInput } from "../../application/turnService.js";
 
 export async function runAskCommand(args: string[], settings: Settings): Promise<void> {
@@ -35,10 +36,19 @@ export async function runAskCommand(args: string[], settings: Settings): Promise
         ? { path: imageFile, mimeType: process.env.PLANABRAIN_IMAGE_MIME_TYPE?.trim() }
         : undefined,
       recentTurns: await readRecentTurnsFile(process.env.PLANABRAIN_RECENT_TURNS_FILE),
+      signals: readSignals(process.env.PLANABRAIN_TURN_SIGNALS),
     },
     settings,
   );
   process.stdout.write(`${process.env.PLANABRAIN_OUTPUT_JSON === "1" ? JSON.stringify(result) : result.answer}\n`);
+}
+
+function readSignals(raw: string | undefined): ReturnType<typeof parseTurnSignals> {
+  try {
+    return raw?.trim() ? parseTurnSignals(JSON.parse(raw)) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function readRecentTurnsFile(path: string | undefined): Promise<RecentTurnInput[] | undefined> {

@@ -3,7 +3,8 @@ import { fitContextMessages } from "../chat/contextBudget.js";
 import { runPreSearch } from "./search.js";
 import { sanitizeAssistantOutput } from "../chat/sanitizeOutput.js";
 import { normalizeContinuationArtifacts, mergeContinuationContent, shouldContinueChat } from "./continuation.js";
-import { invokeChatOnce } from "./providers/registry.js";
+import { invokeCodexChat } from "./providers/codex.js";
+import { measureStage } from "../runtime/execution.js";
 import { mergeWebCitations } from "./evidence.js";
 
 export function insertBeforeLastUserMessage(
@@ -29,7 +30,7 @@ export async function invokeChat(params: ChatInvocationParams): Promise<string> 
 export async function invokeChatWithMetadata(
   params: ChatInvocationParams,
 ): Promise<ChatInvocationMetadata> {
-  let workingMessages = params.preSearchQuery ? fitContextMessages(params.messages, params.preserveReplay) : params.messages;
+  let workingMessages = params.preSearchQuery ? fitContextMessages(params.messages) : params.messages;
   let combined = "";
   let citations: WebCitation[] = [];
   let searchUsed = false;
@@ -46,7 +47,7 @@ export async function invokeChatWithMetadata(
     citations = preSearch.citations;
     searchUsed = true;
   }
-  workingMessages = fitContextMessages(workingMessages, params.preserveReplay);
+  workingMessages = fitContextMessages(workingMessages);
   const continuationMessages = [...workingMessages];
   const wireInput = workingMessages.slice(Math.max(0, workingMessages.map((message) => message.role).lastIndexOf("user")));
   const finish = (finishReason: string | undefined): ChatInvocationMetadata => {
@@ -61,12 +62,7 @@ export async function invokeChatWithMetadata(
   };
 
   for (let attempt = 0; attempt <= maxContinuations; attempt += 1) {
-    const result = await invokeChatOnce({
-      settings: params.settings,
-      messages: workingMessages,
-      enableSearchTool: params.enableSearchTool,
-      webFetchUrlSource: params.webFetchUrlSource,
-    });
+    const result = await measureStage("provider:codex", () => invokeCodexChat(params.settings, workingMessages));
     combined = combined
       ? mergeContinuationContent(combined, result.content)
       : result.content.trim();
@@ -103,7 +99,6 @@ export function toWireMessage(message: ChatMessage): WireMessage {
 }
 
 export { ProviderRateLimitError } from "./retry.js";
-export { type InputImage, type ChatMessage, type WebCitation, type WireMessage, type ChatInvocationMetadata, type ChatInvocationParams, type PreSearchContext, type ChatInvocationOnceParams } from "./contracts.js";
-export { usesPreSearchContext, usesNativeWebSearch, buildSearchQuery, SOURCE_SELECTION_INSTRUCTION, performPreSearch } from "./search.js";
-export { providerHasCredentials, isSearchToolAvailable } from "./providers/registry.js";
-export { parseOpenRouterCitations, parseWebSearchCitations, mergeWebCitations } from "./evidence.js";
+export { type InputImage, type ChatMessage, type WebCitation, type WireMessage, type ChatInvocationMetadata, type ChatInvocationParams, type PreSearchContext } from "./contracts.js";
+export { usesPreSearchContext, buildSearchQuery, SOURCE_SELECTION_INSTRUCTION, performPreSearch } from "./search.js";
+export { parseWebSearchCitations, mergeWebCitations } from "./evidence.js";

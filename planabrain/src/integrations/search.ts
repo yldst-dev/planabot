@@ -9,21 +9,8 @@ export const PRE_SEARCH_EVIDENCE_LIMIT = 1500;
 export const SEARCH_REQUEST_SUFFIX_PATTERN =
   /(?:\s*(?:좀|한번|한\s*번|다시|빨리|지금|바로))*\s*(?:[을를]\s*)?(?:알아\s*(?:봐\s*줘|봐\s*주세요|봐\s*줄래|봐|보자)|알려\s*(?:줘|주세요|줄래|다오)|찾아\s*(?:봐\s*줘|봐|줘|주세요|보자)|검색해\s*(?:줘|주세요|봐|볼래)|조사해\s*(?:줘|주세요)|확인해\s*(?:줘|주세요|봐)|말해\s*(?:줘|주세요))\s*[.?!~…]*$/u;
 
-export function usesNativeWebSearch(settings: Settings): boolean {
-  return settings.aiProvider === "geminiweb";
-}
-
 export function usesPreSearchContext(settings: Settings): boolean {
-  if (usesNativeWebSearch(settings)) {
-    return false;
-  }
-  return (
-    (settings.aiProvider === "openrouter" && settings.openRouterWebSearchBackend === "ollama") ||
-    ((settings.aiProvider === "geminimock" || settings.aiProvider === "sub2api") &&
-      settings.ollamaWebSearchEnabled &&
-      settings.ollamaApiKeys.length > 0 &&
-      Boolean(settings.ollamaSearchHost))
-  );
+  return settings.ollamaWebSearchEnabled && settings.ollamaApiKeys.length > 0 && Boolean(settings.ollamaSearchHost);
 }
 
 export function buildSearchQuery(text: string): string {

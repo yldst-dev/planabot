@@ -6,44 +6,12 @@ import path from "node:path";
 import test from "node:test";
 
 import type { Settings } from "../../config/settings.js";
+import { testSettings } from "../../testing/settings.js";
+import { codexStream } from "../../testing/codex.js";
 import { createPlanabrainServer, parseAskInput, parseExchangeInput } from "./serve.js";
 
 function createSettings(overrides: Partial<Settings> = {}): Settings {
-  return {
-    aiProvider: "openrouter",
-    openRouterApiKey: "gateway-key",
-    openRouterBaseUrl: "http://gateway.example/v1",
-    openRouterWebSearchEnabled: false,
-    openRouterWebSearchBackend: "plugin",
-    openRouterWebSearchMaxResults: 5,
-    openRouterWebSearchMaxTotalResults: 15,
-    openRouterWebSearchContextSize: "medium",
-    cerebrasWebSearchEnabled: false,
-    modelStudioWebSearchEnabled: false,
-    ollamaApiKeys: [],
-    ollamaWebSearchEnabled: false,
-    ollamaWebFetchEnabled: false,
-    ollamaWebSearchMaxResults: 3,
-    ollamaToolMaxIterations: 4,
-    webFetchEnabled: false,
-    webFetchTimeoutMs: 1000,
-    webFetchMaxBytes: 100000,
-    webFetchMaxChars: 12000,
-    webFetchMaxTotalChars: 18000,
-    chatModel: "gemini-3.7-flash",
-    deliveryRewriteEnabled: false,
-    chatThinkingMode: "off",
-    indexPath: ".planabrain/index.json",
-    systemPrompt: "테스트 시스템",
-    personaProfile: "live",
-    intimacyEnabled: false,
-    continuousChat: false,
-    searchQueryRewriteEnabled: false,
-    memoryEnabled: false,
-    memoryMaxMessages: 0,
-    memoryDir: ".planabrain/memory",
-    ...overrides,
-  } as Settings;
+  return testSettings({ ollamaWebSearchEnabled: false, continuousChat: false, searchQueryRewriteEnabled: false, ...overrides });
 }
 
 const realFetch = globalThis.fetch;
@@ -113,14 +81,7 @@ test("ask answers through the configured provider and validation errors are stru
       if (url.startsWith("http://127.0.0.1")) {
         return realFetch(input, init);
       }
-      return new Response(
-        JSON.stringify({
-          choices: [
-            { message: { role: "assistant", content: "안녕하세요, 선생님." }, finish_reason: "stop" },
-          ],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+      return codexStream("안녕하세요, 선생님.");
     }) as typeof fetch;
 
     const answered = await call(base, "/v1/ask", {
@@ -214,7 +175,7 @@ test("repeated ask IDs reuse a response without another provider call", async ()
     let calls = 0;
     globalThis.fetch = async () => {
       calls += 1;
-      return new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "확인했습니다." } }] }));
+      return codexStream("확인했습니다.");
     };
     const body = JSON.stringify({ userId: "actor", question: "질문", requestId: "request-one", memoryEnabled: false });
     const first = await call(base, "/v1/ask", { method: "POST", body });

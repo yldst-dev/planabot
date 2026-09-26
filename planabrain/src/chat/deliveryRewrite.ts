@@ -2,7 +2,6 @@ import { checkExecution } from "../runtime/execution.js";
 import { buildSystemPrompt } from "../config/systemPrompt.js";
 import type { Settings } from "../config/settings.js";
 import { invokeChat } from "../integrations/chat.js";
-import { requiresGlmReasoning } from "../integrations/providers/options.js";
 import { estimateTokenCount } from "tokenx";
 import { looksAbruptlyTruncated, isLengthLimitedFinishReason } from "../integrations/continuation.js";
 import { resolveAuxSettings } from "./auxSettings.js";
@@ -59,13 +58,7 @@ export async function finalizeAnswerForDelivery(params: Params): Promise<string>
 
   const deliveryTokenLimit =
     params.settings.deliveryMaxOutputTokens ?? DEFAULT_DELIVERY_MAX_TOKENS;
-  const auxSettings = resolveAuxSettings(params.settings);
-  const rewriteSettings: Settings = {
-    ...auxSettings,
-    chatMaxOutputTokens: auxSettings.aiProvider === "openrouter" && requiresGlmReasoning(auxSettings.chatModel)
-      ? Math.max(deliveryTokenLimit, params.settings.chatMaxOutputTokens ?? deliveryTokenLimit)
-      : deliveryTokenLimit,
-  };
+  const rewriteSettings = resolveAuxSettings(params.settings);
   const rewritePrompt = [
     buildSystemPrompt(params.settings),
     `다음 초안을 텔레그램 전송용 최종 답변으로 다시 작성하십시오.`,
@@ -76,7 +69,6 @@ export async function finalizeAnswerForDelivery(params: Params): Promise<string>
   try {
     const rewritten = await invokeChat({
       settings: rewriteSettings,
-      enableSearchTool: false,
       maxContinuations: 0,
       messages: [
         {

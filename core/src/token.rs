@@ -69,7 +69,7 @@ pub(crate) async fn count_text_tokens(text: &str) -> Result<TokenCount> {
 
 fn resolve_token_model() -> String {
     env_var_trimmed("PLANABOT_TOKEN_MODEL")
-        .or_else(|| env_var_trimmed("PLANABRAIN_GEMINI_MODEL"))
+        .or_else(|| env_var_trimmed("PLANABRAIN_CODEX_MODEL"))
         .map(|value| normalize_model_name(&value))
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "unknown".to_string())

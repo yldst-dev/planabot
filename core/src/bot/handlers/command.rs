@@ -147,6 +147,45 @@ where
                 }
             }
         }
+        Command::Memory => {
+            let reply = match memory_user(&msg) {
+                Err(reply) => reply.to_string(),
+                Ok(user_id) => match planabrain::list_memories(&user_id, msg.chat.id.0).await {
+                    Ok(memories) => render_memory_list(&memories),
+                    Err(err) => {
+                        error!("기억 목록 조회 실패: {}", err);
+                        "오류.\n선생님.\n기억 목록을 불러오지 못했습니다.".to_string()
+                    }
+                },
+            };
+            send_reply_with_fallback(&bot, &msg, reply, SendOptions::default()).await?;
+        }
+        Command::Forget => {
+            let memory_id = msg
+                .text()
+                .and_then(|text| text.split_whitespace().nth(1))
+                .and_then(|raw| raw.trim_start_matches('#').parse::<i64>().ok())
+                .filter(|id| *id > 0);
+            let reply = match (memory_user(&msg), memory_id) {
+                (Err(reply), _) => reply,
+                (Ok(_), None) => {
+                    "확인 불가.\n선생님.\n삭제할 기억 번호가 필요합니다.\n예: /forget 12"
+                }
+                (Ok(user_id), Some(memory_id)) => {
+                    match planabrain::forget_memory(&user_id, msg.chat.id.0, memory_id).await {
+                        Ok(true) => "삭제 완료.\n선생님.\n해당 기억을 지웠습니다.",
+                        Ok(false) => {
+                            "확인 불가.\n선생님.\n이 대화방에서 지울 수 있는 기억이 아닙니다."
+                        }
+                        Err(err) => {
+                            error!("기억 삭제 실패: {}", err);
+                            "오류.\n선생님.\n기억을 지우지 못했습니다."
+                        }
+                    }
+                }
+            };
+            send_reply_with_fallback(&bot, &msg, reply, SendOptions::default()).await?;
+        }
         Command::MemoryReset => {
             if !planabrain::is_planabrain_enabled() {
                 send_reply_with_fallback(
@@ -432,4 +471,70 @@ pub(super) fn resolve_token_limit() -> u32 {
         .and_then(|raw| raw.trim().parse::<u32>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(1024)
+}
+
+fn memory_user(msg: &Message) -> Result<String, &'static str> {
+    if !planabrain::is_planabrain_enabled() {
+        return Err("불가.\n선생님.\n프라나브레인 기능이 비활성화 상태입니다.");
+    }
+    msg.from
+        .as_ref()
+        .map(|user| user.id.to_string())
+        .ok_or("확인 불가.\n선생님.\n사용자 정보를 확인하지 못했습니다.")
+}
+
+fn render_memory_list(memories: &[planabrain::MemoryItem]) -> String {
+    const MAX_LISTED: usize = 40;
+    if memories.is_empty() {
+        return "확인 완료.\n선생님.\n이 대화방에서 저장된 기억이 없습니다.".to_string();
+    }
+    let mut lines = vec!["기억 목록.".to_string(), "선생님.".to_string()];
+    for memory in memories.iter().take(MAX_LISTED) {
+        let label = if memory.kind == "room" {
+            " [대화방]"
+        } else {
+            ""
+        };
+        lines.push(format!("#{}{} {}", memory.id, label, memory.content));
+    }
+    if memories.len() > MAX_LISTED {
+        lines.push(format!("외 {}건.", memories.len() - MAX_LISTED));
+    }
+    lines.push("삭제: /forget 번호".to_string());
+    lines.join("\n")
+}
+
+#[cfg(test)]
+mod memory_list_tests {
+    use super::render_memory_list;
+    use crate::planabrain::MemoryItem;
+
+    fn item(id: i64, kind: &str, content: &str) -> MemoryItem {
+        MemoryItem {
+            id,
+            kind: kind.to_string(),
+            content: content.to_string(),
+        }
+    }
+
+    #[test]
+    fn empty_memory_list_uses_status_line() {
+        assert!(render_memory_list(&[]).starts_with("확인 완료.\n선생님.\n"));
+    }
+
+    #[test]
+    fn memory_list_shows_ids_room_label_and_overflow() {
+        let mut memories = vec![
+            item(12, "fact", "사용자는 부산에 산다"),
+            item(13, "room", "이 방은 금요일마다 회의한다"),
+        ];
+        memories.extend((0..40).map(|index| item(100 + index, "fact", "기억")));
+        let rendered = render_memory_list(&memories);
+        assert!(
+            rendered
+                .starts_with("기억 목록.\n선생님.\n#12 사용자는 부산에 산다\n#13 [대화방] 이 방은")
+        );
+        assert!(rendered.contains("외 2건."));
+        assert!(rendered.ends_with("삭제: /forget 번호"));
+    }
 }

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isCurrentInformationRequest, isExplicitSearchRequest, isSearchFollowUp } from "../chat/queryPolicy.js";
-import { buildContextBundle } from "../memoryflow/ranking.js";
-import { embedText } from "../memoryflow/embedding.js";
+import { fallbackRelevant } from "../memory/recall.js";
+import type { MemoryRecord } from "../memory/types.js";
 
 const searchCases = [
   { question: "오늘 서울 날씨 알려줘", required: true },
@@ -34,20 +34,18 @@ for (const entry of [
   });
 }
 
-const episodes = [
-  { id: "travel", text: "삿포로 여행 일정은 8월 말입니다", at: 1000, salience: 0.8 },
-  { id: "project", text: "봇 프로젝트의 배포 작업을 진행합니다", at: 1000, salience: 0.8 },
-].map((entry) => ({ ...entry, embedding: embedText(entry.text) }));
+const memories: MemoryRecord[] = [
+  { id: 1, content: "사용자는 8월 말에 삿포로 여행을 간다" },
+  { id: 2, content: "사용자는 봇 프로젝트의 배포 작업을 진행 중이다" },
+].map((entry) => ({ ...entry, subjectUserId: "u1", chatId: "chat_u1", direct: true, kind: "plan", importance: 0.6, createdAt: 1000, updatedAt: 1000, lastRecalledAt: null }));
 
 for (const entry of [
-  { question: "삿포로 여행 일정", expected: "travel" },
-  { question: "봇 프로젝트 배포", expected: "project" },
+  { question: "삿포로 여행 일정", expected: 1 },
+  { question: "봇 프로젝트 배포", expected: 2 },
   { question: "심심해", expected: undefined },
 ]) {
-  test(`Korean memory retrieval: ${entry.question}`, () => {
-    const bundle = buildContextBundle({ query: entry.question, tokenBudget: 900, semanticFacts: [], episodicItems: episodes, summaryItems: [], workingTurns: [], now: 1000 });
-    const ranked = bundle.sections.flatMap((section) => section.items);
-    if (entry.expected) assert.equal(ranked[0]?.id, entry.expected); else assert.equal(ranked.length, 0);
-    assert.ok(bundle.estimatedTokens <= 900);
+  test(`Korean memory fallback recall: ${entry.question}`, () => {
+    const recalled = fallbackRelevant(memories, entry.question);
+    if (entry.expected) assert.equal(recalled[0]?.id, entry.expected); else assert.equal(recalled.length, 0);
   });
 }

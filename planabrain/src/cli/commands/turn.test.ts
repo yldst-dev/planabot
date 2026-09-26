@@ -6,9 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { currentExecution } from "../../runtime/execution.js";
+import type { TurnRoute } from "../../decision/turnSignals.js";
+import type { MemoryRecord } from "../../memory/types.js";
 
 import {
-  normalizeMemoryContext,
   parseTurnPrepareInput,
   prepareTurn,
   type TurnPrepareDeps,
@@ -18,6 +19,7 @@ function deps(overrides: Partial<TurnPrepareDeps> = {}): TurnPrepareDeps & { cal
   const calls: string[] = [];
   return {
     calls,
+    classifyTurn: async () => undefined,
     interpretTodo: async () => {
       calls.push("todo");
       return { handled: false };
@@ -30,7 +32,11 @@ function deps(overrides: Partial<TurnPrepareDeps> = {}): TurnPrepareDeps & { cal
       calls.push("list");
       return { items: [{ id: 1 }], context: "- 할 일" };
     },
-    prepareMemory: async () => {
+    recallMemory: async () => {
+      calls.push("recall");
+      return { pinned: [], candidates: [memory(7, "사용자는 매운 음식을 못 먹는다")] };
+    },
+    renderMemory: async () => {
       calls.push("memory");
       return "memory_context:\n- 기억";
     },
@@ -43,6 +49,10 @@ function deps(overrides: Partial<TurnPrepareDeps> = {}): TurnPrepareDeps & { cal
     },
     ...overrides,
   };
+}
+
+function memory(id: number, content: string): MemoryRecord {
+  return { id, subjectUserId: "u1", chatId: "chat_1", direct: false, kind: "preference", content, importance: 0.8, createdAt: 1, updatedAt: 1, lastRecalledAt: null };
 }
 
 const input = {
@@ -58,7 +68,7 @@ test("handled todo stops the pipeline early", async () => {
   assert.equal(out.todo?.handled, true);
   assert.equal(out.schedule, null);
   assert.equal(out.memoryContext, null);
-  assert.deepEqual(d.calls, []);
+  assert.deepEqual(d.calls, ["recall"]);
 });
 
 test("handled schedule stops before todo list and memory", async () => {
@@ -67,13 +77,80 @@ test("handled schedule stops before todo list and memory", async () => {
   assert.equal(out.todo?.handled, false);
   assert.equal(out.schedule?.handled, true);
   assert.equal(out.todoList, null);
-  assert.deepEqual(d.calls, ["todo"]);
+  assert.deepEqual(d.calls, ["recall", "todo"]);
+});
+
+function signals(route: TurnRoute): TurnPrepareDeps["classifyTurn"] {
+  return async () => ({ signals: { route, routeConfident: true, currentInfo: false, searchFollowUp: false, socialOnly: false }, relevantMemoryIds: new Set<number>() });
+}
+
+test("confident chat route skips todo and schedule interpreters", async () => {
+  const d = deps({ classifyTurn: signals("chat") });
+  const out = await prepareTurn({ ...input, question: "어제 헬스장에서 운동했어" }, d);
+  assert.deepEqual(d.calls, ["recall", "list", "memory"]);
+  assert.equal(out.todo, null);
+  assert.equal(out.signals?.route, "chat");
+});
+
+test("confident todo route passes the decided action to the interpreter", async () => {
+  let received: string | undefined;
+  const d = deps({
+    classifyTurn: signals("todo_complete"),
+    interpretTodo: async (_userId, _text, action) => {
+      received = action;
+      return { handled: true };
+    },
+  });
+  await prepareTurn(input, d);
+  assert.equal(received, "complete");
+});
+
+test("confident schedule route skips the todo interpreter", async () => {
+  const d = deps({ classifyTurn: signals("schedule_add") });
+  await prepareTurn(input, d);
+  assert.deepEqual(d.calls, ["recall", "schedule", "list", "memory"]);
+});
+
+test("low confidence route falls back to rule interpreters", async () => {
+  const d = deps({ classifyTurn: async () => ({ signals: { route: "chat", routeConfident: false, currentInfo: false, searchFollowUp: false, socialOnly: false }, relevantMemoryIds: new Set<number>() }) });
+  await prepareTurn(input, d);
+  assert.deepEqual(d.calls, ["recall", "todo", "schedule", "list", "memory"]);
+});
+
+test("classifier receives the previous user message from recent turns", async () => {
+  let previous: string | undefined;
+  const d = deps({
+    classifyTurn: async (params) => {
+      previous = params.previousUserMessage;
+      return undefined;
+    },
+  });
+  await prepareTurn({ ...input, conversationId: "conv_1" }, d);
+  assert.equal(previous, "이전 질문");
+});
+
+test("memory candidates are judged in the classifier call and only relevant ones are rendered", async () => {
+  let offered: number[] = [];
+  let rendered: number[] = [];
+  const d = deps({
+    classifyTurn: async (params) => {
+      offered = (params.memories ?? []).map((item) => item.id);
+      return { signals: { route: "chat", routeConfident: true, currentInfo: false, searchFollowUp: false, socialOnly: false }, relevantMemoryIds: new Set([7]) };
+    },
+    renderMemory: async (params) => {
+      rendered = [...(params.relevantIds ?? [])];
+      return "memory";
+    },
+  });
+  await prepareTurn({ ...input, question: "떡볶이 어때?", memoryQueryText: "떡볶이 어때?" }, d);
+  assert.deepEqual(offered, [7]);
+  assert.deepEqual(rendered, [7]);
 });
 
 test("recent turns are loaded only for conversations", async () => {
   const d = deps();
   const out = await prepareTurn({ ...input, conversationId: "conv_1" }, d);
-  assert.deepEqual(d.calls, ["todo", "schedule", "list", "memory", "turns"]);
+  assert.deepEqual(d.calls, ["turns", "recall", "todo", "schedule", "list", "memory"]);
   assert.equal(out.recentTurns.length, 2);
   assert.equal(out.recentTurns[1].epoch, 0);
 });
@@ -81,7 +158,7 @@ test("recent turns are loaded only for conversations", async () => {
 test("plain questions collect todo context and memory", async () => {
   const d = deps();
   const out = await prepareTurn(input, d);
-  assert.deepEqual(d.calls, ["todo", "schedule", "list", "memory"]);
+  assert.deepEqual(d.calls, ["recall", "todo", "schedule", "list", "memory"]);
   assert.deepEqual(out.recentTurns, []);
   assert.deepEqual(out.todoList, { items: [{ id: 1 }], context: "- 할 일" });
   assert.equal(out.memoryContext, "memory_context:\n- 기억");
@@ -93,7 +170,7 @@ test("stage failures are reported without aborting the turn", async () => {
     interpretTodo: async () => {
       throw new Error("todo down");
     },
-    prepareMemory: async () => {
+    recallMemory: async () => {
       throw new Error("sqlite locked");
     },
   });
@@ -166,10 +243,4 @@ test("CLI preparation honors metadata from stdin without environment overrides",
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
-
-test("memory context sentinel becomes null", () => {
-  assert.equal(normalizeMemoryContext("memory_context: none"), null);
-  assert.equal(normalizeMemoryContext("  "), null);
-  assert.equal(normalizeMemoryContext("memory_context:\n- a"), "memory_context:\n- a");
 });

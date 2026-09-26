@@ -1,26 +1,15 @@
 import type { Settings } from "../config/settings.js";
 import { runAskCommand } from "./commands/ask.js";
 import {
-  runMemoryAssistantCommand,
-  runMemoryDeleteFactCommand,
   runMemoryExchangeCommand,
-  runMemoryListFactsCommand,
-  runMemoryMigrateJsonCommand,
-  runMemoryPrepareCommand,
+  runMemoryForgetCommand,
+  runMemoryListCommand,
   runMemoryResetAllCommand,
   runMemoryResetUserCommand,
-  runMemoryUpdateFactCommand,
 } from "./commands/memory.js";
 import { runScheduleInterpretCommand } from "./commands/schedule.js";
 import { runServeCommand } from "./commands/serve.js";
-import {
-  runTodoAddCommand,
-  runTodoCompleteCommand,
-  runTodoDeleteCommand,
-  runTodoInterpretCommand,
-  runTodoListCommand,
-  runTodoUpdateCommand,
-} from "./commands/todo.js";
+import { runTodoListCommand } from "./commands/todo.js";
 import { runTokensCommand } from "./commands/tokens.js";
 import { runTurnPrepareCommand } from "./commands/turn.js";
 
@@ -35,21 +24,12 @@ export const COMMANDS = {
   tokens: (args) => runTokensCommand(args),
   "turn-prepare": () => runTurnPrepareCommand(),
   serve: (args, context) => runServeCommand(args, context),
-  "memory-prepare": (args) => runMemoryPrepareCommand(args),
-  "memory-assistant": (args) => runMemoryAssistantCommand(args),
-  "memory-exchange": (args) => runMemoryExchangeCommand(args),
+  "memory-exchange": (args, context) => runMemoryExchangeCommand(args, context.loadSettings()),
+  "memory-list": (args) => runMemoryListCommand(args),
+  "memory-forget": (args) => runMemoryForgetCommand(args),
   "memory-reset-user": (args) => runMemoryResetUserCommand(args),
   "memory-reset-all": () => runMemoryResetAllCommand(),
-  "memory-list-facts": (args) => runMemoryListFactsCommand(args),
-  "memory-delete-fact": (args) => runMemoryDeleteFactCommand(args),
-  "memory-update-fact": (args) => runMemoryUpdateFactCommand(args),
-  "memory-migrate-json": (args) => runMemoryMigrateJsonCommand(args),
   "todo-list": (args) => runTodoListCommand(args),
-  "todo-add": (args) => runTodoAddCommand(args),
-  "todo-complete": (args) => runTodoCompleteCommand(args),
-  "todo-update": (args) => runTodoUpdateCommand(args),
-  "todo-delete": (args) => runTodoDeleteCommand(args),
-  "todo-interpret": (args) => runTodoInterpretCommand(args),
   "schedule-interpret": (args) => runScheduleInterpretCommand(args),
 } satisfies Record<string, CommandHandler>;
 

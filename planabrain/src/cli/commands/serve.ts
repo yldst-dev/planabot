@@ -8,11 +8,12 @@ import type { AddressInfo } from "node:net";
 
 import type { Settings } from "../../config/settings.js";
 import { ProviderApiError, toStructuredError } from "../../integrations/providerError.js";
-import { normalizeWireMessages } from "../../memoryflow/state-normalize.js";
+import { normalizeWireMessages } from "../../memory/database.js";
+import { forgetMemory, listMemories, rememberExchange, resetUserMemory, type ExchangeInput } from "../../memory/service.js";
 import type { RecentTurnInput } from "../../chat/webSearchAnswer.js";
 import { runAsk, type AskInput } from "../../application/turnService.js";
-import { rememberExchangeTurn } from "../../application/rememberExchange.js";
 import { prepareTurn, parseTurnPrepareInput } from "../../application/prepareTurn.js";
+import { parseTurnSignals } from "../../decision/turnSignals.js";
 import type { CommandContext } from "../registry.js";
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -138,8 +139,25 @@ async function handleRequest(
       }
       case "/v1/memory-exchange": {
         const input = validatedParse(parseExchangeInput, raw);
-        const result = await rememberExchangeTurn(input, options.settings);
+        const result = await rememberExchange(input, { settings: options.settings, background: true });
         writeJson(response, 200, { ok: true, result });
+        return;
+      }
+      case "/v1/memory-list": {
+        const input = validatedParse(parseMemoryScopeInput, raw);
+        const memories = listMemories(input.userId, input.chatId).map(({ id, kind, content }) => ({ id, kind, content }));
+        writeJson(response, 200, { memories });
+        return;
+      }
+      case "/v1/memory-forget": {
+        const input = validatedParse(parseMemoryScopeInput, raw);
+        if (!input.memoryId) throw new ProviderApiError({ kind: "invalid_request", apiMessage: "기억 번호가 필요합니다." });
+        writeJson(response, 200, { removed: forgetMemory(input.userId, input.chatId, input.memoryId) });
+        return;
+      }
+      case "/v1/memory-reset": {
+        const userId = validatedParse((body) => readRequiredString(parseObject(body).userId, "userId"), raw);
+        writeJson(response, 200, { userId, removed: resetUserMemory(userId) });
         return;
       }
       default:
@@ -168,9 +186,9 @@ export function parseAskInput(raw: string): AskInput {
     currentTurnText: readOptionalString(record.currentTurnText),
     memoryContext: readOptionalString(record.memoryContext),
     image,
-    memoryEnabled: typeof record.memoryEnabled === "boolean" ? record.memoryEnabled : undefined,
     recentTurns: parseRecentTurns(record.recentTurns),
     continuousChat: typeof record.continuousChat === "boolean" ? record.continuousChat : undefined,
+    signals: parseTurnSignals(record.signals),
   };
 }
 
@@ -205,16 +223,17 @@ function parseRecentTurns(value: unknown): RecentTurnInput[] | undefined {
   return turns;
 }
 
-export function parseExchangeInput(raw: string): {
-  userId: string;
-  requestId?: string;
-  chatId: string;
-  conversationId?: string;
-  userText: string;
-  assistantText: string;
-  wireMessages?: Array<{ role: "user" | "assistant"; content: string; }>;
-  epoch?: number;
-} {
+export function parseMemoryScopeInput(raw: string): { userId: string; chatId: string; memoryId?: number; } {
+  const record = parseObject(raw);
+  const memoryId = typeof record.memoryId === "number" && Number.isSafeInteger(record.memoryId) && record.memoryId > 0 ? record.memoryId : undefined;
+  return {
+    userId: readRequiredString(record.userId, "userId"),
+    chatId: readRequiredString(record.chatScope ?? record.chatId, "chatScope"),
+    ...(memoryId ? { memoryId } : {}),
+  };
+}
+
+export function parseExchangeInput(raw: string): ExchangeInput {
   const record = parseObject(raw);
   const wireMessages = normalizeWireMessages(record.wireMessages);
   const epoch =

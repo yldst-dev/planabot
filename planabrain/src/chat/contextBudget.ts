@@ -1,6 +1,6 @@
 import { estimateTokenCount } from "tokenx";
 import type { ChatMessage } from "../integrations/chat.js";
-import { estimateTokens } from "../memoryflow/token-estimator.js";
+import { estimateTokens } from "../runtime/tokens.js";
 import { ExecutionLimitError } from "../runtime/execution.js";
 
 export const MAX_CONTEXT_TOKENS = 24_000;

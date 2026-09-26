@@ -8,7 +8,6 @@ import {
   isBlockedAddress,
   parseWebFetchUrl,
 } from "./webFetch.js";
-import { WebToolPolicy } from "./webToolPolicy.js";
 
 test("extractUrls removes punctuation, duplicates URLs, and limits results", () => {
   const text = [
@@ -155,26 +154,4 @@ test("extractReadableContent preserves article header text", () => {
 
   assert.match(result.content, /기사 제목/);
   assert.match(result.content, /기사 요약/);
-});
-
-test("WebToolPolicy only allows current-turn and search-result URLs", () => {
-  const policy = new WebToolPolicy("확인 https://allowed.example/document");
-
-  assert.equal(policy.allowsFetch("https://allowed.example/document"), true);
-  assert.equal(policy.allowsFetch("https://blocked.example/secret"), false);
-  policy.addSearchResult({
-    results: [{ url: "https://search.example/result" }],
-  });
-  assert.equal(policy.allowsFetch("https://search.example/result"), true);
-  assert.equal(policy.allowsFetch("http://127.0.0.1/"), false);
-  assert.equal(policy.allowedUrlCount, 2);
-});
-
-test("WebToolPolicy enforces a hard tool-call limit", () => {
-  const policy = new WebToolPolicy("");
-
-  for (let index = 0; index < 8; index += 1) {
-    assert.equal(policy.tryStartToolCall(), true);
-  }
-  assert.equal(policy.tryStartToolCall(), false);
 });

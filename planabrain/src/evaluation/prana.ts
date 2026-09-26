@@ -61,14 +61,12 @@ async function main(): Promise<void> {
     pipeline: { type: "boolean", default: false },
     holdout: { type: "boolean", default: false },
     model: { type: "string" },
-    provider: { type: "string" },
     env: { type: "string", default: "../.env" },
     "baseline-prompt": { type: "string" },
     output: { type: "string" },
     limit: { type: "string", default: "10" },
     repeats: { type: "string", default: "1" },
     thinking: { type: "string" },
-    "top-p": { type: "string" },
     "history-turns": { type: "string", default: "0" },
   } });
   const positive = (raw: string, max: number): number => {
@@ -103,12 +101,9 @@ async function main(): Promise<void> {
   if (!values.live) return;
   config({ path: values.env });
   const loaded = loadSettings();
-  if (!loaded.openRouterApiKey || !loaded.openRouterBaseUrl) throw new Error("OpenRouter 연결 설정이 없습니다.");
   const mode = values.thinking ?? loaded.chatThinkingMode;
   if (!["default", "off", "minimal", "low", "medium", "high"].includes(mode)) throw new Error("지원하지 않는 추론 설정입니다.");
-  const topP = values["top-p"] === undefined ? loaded.openRouterTopP : Number(values["top-p"]);
-  if (topP !== undefined && (!Number.isFinite(topP) || topP < 0 || topP > 1)) throw new Error("top_p는 0부터 1까지 지정하십시오.");
-  const settings: Settings = { ...loaded, aiProvider: "openrouter", chatModel: values.model ?? loaded.chatModel, chatThinkingMode: mode as Settings["chatThinkingMode"], openRouterTopP: topP, openRouterProviderOrder: values.provider ? [values.provider] : loaded.openRouterProviderOrder, systemPrompt: LIVE_DEFAULT_SYSTEM_PROMPT, deliveryRewriteEnabled: true, continuousChat: true, memoryEnabled: false, openRouterWebSearchEnabled: false, webFetchEnabled: false, intimacyEnabled: false, chatMaxOutputTokens: 2048 };
+  const settings: Settings = { ...loaded, chatModel: values.model ?? loaded.chatModel, chatThinkingMode: mode as Settings["chatThinkingMode"], systemPrompt: LIVE_DEFAULT_SYSTEM_PROMPT, deliveryRewriteEnabled: true, continuousChat: true, ollamaWebSearchEnabled: false, webFetchEnabled: false, intimacyEnabled: false };
   let failures = 0;
   for (let repeat = 0; repeat < repeats; repeat += 1) {
     for (const entry of cases.slice(0, limit)) {
@@ -119,10 +114,10 @@ async function main(): Promise<void> {
           await runExecution("style-evaluation", async () => {
             const result = values.pipeline
               ? await answerTurn({ settings, question: entry.question, recentTurns: history, workingTurnLimit: 40 }).then((turn) => ({ content: turn.answer, finishReason: undefined }))
-              : await invokeChatWithMetadata({ settings, enableSearchTool: false, maxContinuations: 0, messages: buildTurnMessages({ systemContent: variant.prompt, history: buildReplay(history).messages, referenceContext: null, memoryContext: null, linkContext: null, searchContext: null, currentTurnText: entry.question }) });
+              : await invokeChatWithMetadata({ settings, maxContinuations: 0, messages: buildTurnMessages({ systemContent: variant.prompt, history: buildReplay(history).messages, referenceContext: null, memoryContext: null, linkContext: null, searchContext: null, currentTurnText: entry.question }) });
             const execution = currentExecution();
             const answer = normalizeDeliveryText(result.content);
-            output({ variant: variant.name, id: entry.id, repeat, model: settings.chatModel, thinking: mode, topP: topP ?? 0.7, providerOrder: settings.openRouterProviderOrder, durationMs: Date.now() - startedAt, rawAnswer: result.content, answer, rawChecks: styleChecks(result.content, entry.short, entry.id), checks: styleChecks(answer, entry.short, entry.id), finishReason: result.finishReason, calls: execution?.calls, inputTokens: execution?.inputTokens, outputTokens: execution?.outputTokens, cachedInputTokens: execution?.cachedInputTokens, reasoningTokens: execution?.reasoningTokens, providerResponses: execution?.providerResponses, humanReview: { korean: null, character: null, correctness: null } });
+            output({ variant: variant.name, id: entry.id, repeat, model: settings.chatModel, thinking: mode, durationMs: Date.now() - startedAt, rawAnswer: result.content, answer, rawChecks: styleChecks(result.content, entry.short, entry.id), checks: styleChecks(answer, entry.short, entry.id), finishReason: result.finishReason, calls: execution?.calls, inputTokens: execution?.inputTokens, outputTokens: execution?.outputTokens, cachedInputTokens: execution?.cachedInputTokens, reasoningTokens: execution?.reasoningTokens, providerResponses: execution?.providerResponses, humanReview: { korean: null, character: null, correctness: null } });
           }, { maxCalls: values.pipeline ? 2 : 1, maxTools: 0 });
         } catch (error) {
           failures += 1;

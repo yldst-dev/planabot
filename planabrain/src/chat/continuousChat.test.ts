@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { Settings } from "../config/settings.js";
+import { testSettings } from "../testing/settings.js";
+import { codexStream, installFetch, jsonResponse, type CapturedRequest } from "../testing/codex.js";
 import { buildChatSystemPrompt } from "./replay.js";
 import {
   answerTurn,
@@ -13,80 +15,28 @@ import {
 } from "./webSearchAnswer.js";
 
 function createSettings(overrides: Partial<Settings> = {}): Settings {
-  return {
-    aiProvider: "openrouter",
-    openRouterApiKey: "gateway-key",
-    openRouterBaseUrl: "http://gateway.example/v1",
-    openRouterWebSearchEnabled: true,
-    openRouterWebSearchBackend: "ollama",
-    openRouterWebSearchMaxResults: 5,
-    openRouterWebSearchMaxTotalResults: 15,
-    openRouterWebSearchContextSize: "medium",
-    cerebrasWebSearchEnabled: false,
-    modelStudioWebSearchEnabled: false,
-    ollamaApiKeys: ["ollama-key"],
-    ollamaSearchHost: "https://ollama.example",
-    ollamaWebSearchEnabled: false,
-    ollamaWebFetchEnabled: false,
-    ollamaWebSearchMaxResults: 3,
-    ollamaToolMaxIterations: 4,
-    webFetchEnabled: false,
-    webFetchTimeoutMs: 1000,
-    webFetchMaxBytes: 100000,
-    webFetchMaxChars: 12000,
-    webFetchMaxTotalChars: 18000,
-    chatModel: "gemini-3.7-flash",
-    deliveryRewriteEnabled: false,
-    chatThinkingMode: "off",
-    indexPath: ".planabrain/index.json",
-    systemPrompt: "테스트 시스템",
-    personaProfile: "live",
-    intimacyEnabled: false,
-    continuousChat: true,
-    searchQueryRewriteEnabled: true,
-    memoryEnabled: false,
-    memoryMaxMessages: 0,
-    memoryDir: ".planabrain/memory",
-    ...overrides,
-  } as Settings;
+  return testSettings(overrides);
 }
 
-type Recorded = { url: string; body: Record<string, unknown>; };
+type InputItem = { role: string; content: string; };
 
-function installFetch(handlers: {
+function installGateway(handlers: {
   rewrite?: string;
   search?: unknown;
   answer: string;
-}): { requests: Recorded[]; restore: () => void; } {
-  const original = globalThis.fetch;
-  const requests: Recorded[] = [];
+}): ReturnType<typeof installFetch> {
   let chatCalls = 0;
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input.toString();
-    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-    requests.push({ url, body });
-    if (url.endsWith("/api/web_search")) {
-      return new Response(JSON.stringify(handlers.search ?? { results: [] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+  return installFetch((request) => {
+    if (request.url.endsWith("/api/web_search")) {
+      return jsonResponse(handlers.search ?? { results: [] });
     }
     chatCalls += 1;
-    const content =
-      chatCalls === 1 && handlers.rewrite !== undefined ? handlers.rewrite : handlers.answer;
-    return new Response(
-      JSON.stringify({
-        choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }],
-      }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
-  }) as typeof fetch;
-  return {
-    requests,
-    restore: () => {
-      globalThis.fetch = original;
-    },
-  };
+    return codexStream(chatCalls === 1 && handlers.rewrite !== undefined ? handlers.rewrite : handlers.answer);
+  });
+}
+
+function inputOf(request: CapturedRequest | undefined): InputItem[] {
+  return (request?.body.input ?? []) as InputItem[];
 }
 
 const searchResults = {
@@ -112,7 +62,7 @@ test("continuous mode replays canonical turns and records the delivered answer",
       ],
     },
   ];
-  const mock = installFetch({ answer: "잘 지냈습니다." });
+  const mock = installGateway({ answer: "잘 지냈습니다." });
   try {
     const result = await answerTurn({
       question: "잘 지냈어?",
@@ -123,16 +73,15 @@ test("continuous mode replays canonical turns and records the delivered answer",
       memoryContext: "memory_context:\n- 선생님은 커피를 좋아함",
     });
     assert.equal(mock.requests.length, 1);
-    const messages = mock.requests[0].body.messages as Array<{ role: string; content: string; }>;
-    assert.equal(messages[0].role, "system");
-    assert.equal(messages[0].content, buildChatSystemPrompt(settings));
-    assert.deepEqual(messages.slice(1, 3), [
+    assert.equal(mock.requests[0]?.body.instructions, buildChatSystemPrompt(settings));
+    const input = inputOf(mock.requests[0]);
+    assert.deepEqual(input.slice(0, 2), [
       { role: "user", content: "안녕" },
       { role: "assistant", content: "안녕하세요." },
     ]);
-    assert.equal(messages.length, 5);
-    assert.match(messages[3].content, /PAST_MEMORY_DATA_BEGIN/u);
-    assert.equal(messages[4].content, "잘 지냈어?");
+    assert.equal(input.length, 4);
+    assert.match(input[2]!.content, /PAST_MEMORY_DATA_BEGIN/u);
+    assert.equal(input[3]!.content, "잘 지냈어?");
     assert.equal(result.answer, "잘 지냈습니다.");
     assert.ok(result.transcript);
     assert.equal(result.transcript?.epoch, 0);
@@ -147,7 +96,7 @@ test("continuous mode replays canonical turns and records the delivered answer",
 
 test("standalone search skips query rewriting and keeps only selected sources", async () => {
   const settings = createSettings({ auxModel: "fast-model" });
-  const mock = installFetch({
+  const mock = installGateway({
     search: searchResults,
     answer: "확인 완료.\n선생님.\nTETRAPOD 2026은 주최 측 사정으로 취소됐습니다.\n출처번호: 1",
   });
@@ -161,11 +110,10 @@ test("standalone search skips query rewriting and keeps only selected sources", 
     });
     const search = mock.requests.find((r) => r.url.endsWith("/api/web_search"));
     assert.equal(search?.body.query, "테트라포트 2026이 취소됐다는데 진짜인지");
-    const chats = mock.requests.filter((r) => r.url.endsWith("/chat/completions"));
+    const chats = mock.codexRequests();
     assert.equal(chats.length, 1);
-    assert.equal(chats[0].body.model, settings.chatModel);
-    const finalMessages = chats[0].body.messages as Array<{ role: string; content: string; }>;
-    assert.ok(finalMessages.some((message) => message.content.includes("[웹 검색 결과]")));
+    assert.equal(chats[0]?.body.model, settings.chatModel);
+    assert.ok(inputOf(chats[0]).some((message) => message.content.includes("[웹 검색 결과]")));
     assert.doesNotMatch(result.answer, /출처번호/u);
     assert.match(result.answer, /출처: \[TETRAPOD 2026 취소 공지\]\(https:\/\/fest\.example\/notice\)/u);
     assert.doesNotMatch(result.answer, /other\.example/u);
@@ -176,7 +124,7 @@ test("standalone search skips query rewriting and keeps only selected sources", 
 
 test("short corrections after a search question trigger a contextual search", async () => {
   const settings = createSettings();
-  const mock = installFetch({
+  const mock = installGateway({
     rewrite: "{\"query\": \"TETRAPOD 2026 취소\"}",
     search: searchResults,
     answer: "확인 완료.\n선생님.\n취소가 맞습니다.\n출처번호: 1",
@@ -215,7 +163,7 @@ test("canonical replay drops the oldest pair without discarding recent context",
       ],
     },
   ];
-  const mock = installFetch({ answer: "다음 답변" });
+  const mock = installGateway({ answer: "다음 답변" });
   try {
     const kept = await answerTurn({
       question: "q2",
@@ -226,7 +174,7 @@ test("canonical replay drops the oldest pair without discarding recent context",
       workingTurnLimit: 4,
     });
     assert.equal(kept.transcript?.epoch, 0);
-    assert.equal((mock.requests[0].body.messages as unknown[]).length, 4);
+    assert.equal(inputOf(mock.requests[0]).length, 3);
     const reset = await answerTurn({
       question: "q3",
       currentTurnText: "q3",
@@ -236,21 +184,14 @@ test("canonical replay drops the oldest pair without discarding recent context",
       workingTurnLimit: 4,
     });
     assert.equal(reset.transcript?.epoch, 0);
-    assert.equal((mock.requests[1].body.messages as unknown[]).length, 4);
-    assert.equal((mock.requests[1].body.messages as Array<{ content: string }>)[1].content, "q2");
+    assert.equal(inputOf(mock.requests[1]).length, 3);
+    assert.equal(inputOf(mock.requests[1])[0]?.content, "q2");
   } finally {
     mock.restore();
   }
 });
 
-test("a huge replay starts a new epoch instead of resending history", () => {
-  const big = "가".repeat(30_000);
-  const replay = buildReplay([
-    { role: "user", text: "q1", epoch: 3, wireMessages: undefined },
-    { role: "assistant", text: "a1", epoch: 3, wireMessages: [{ role: "user", content: big }, { role: "assistant", content: big }] },
-  ], true);
-  assert.equal(replay.epoch, 3);
-  assert.equal(replay.messages.length, 2);
+test("replay keeps only the latest epoch", () => {
   const older = buildReplay([
     { role: "user", text: "old", epoch: 1 },
     { role: "assistant", text: "old answer", epoch: 1 },
@@ -285,18 +226,4 @@ test("follow-up detection and query parsing", () => {
   assert.equal(parseRewrittenQuery("{\"query\": \"대전 날씨\"}"), "대전 날씨");
   assert.equal(parseRewrittenQuery("설명 {\"query\": null} 끝"), null);
   assert.equal(parseRewrittenQuery("no json"), undefined);
-});
-
-test("geminiweb continuous prompt forces native search without tools", () => {
-  const prompt = buildChatSystemPrompt(
-    createSettings({
-      aiProvider: "geminiweb",
-      geminiWebApiKey: "sk-gemini-test",
-      geminiWebBaseUrl: "http://10.0.0.5:8083/v1",
-      ollamaWebSearchEnabled: true,
-    }),
-  );
-  assert.match(prompt, /반드시 웹 검색으로 최신 정보를 확인/u);
-  assert.doesNotMatch(prompt, /web_search 도구를 먼저 호출/u);
-  assert.doesNotMatch(prompt, /웹 검색 도구를 사용할 수 없습니다/u);
 });

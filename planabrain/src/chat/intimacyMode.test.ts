@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { Settings } from "../config/settings.js";
+import { testSettings } from "../testing/settings.js";
 import { INTIMACY_UNAVAILABLE_REPLY } from "../config/persona/index.js";
 import {
   isPolicyRefusal,
   isSafetyFinishReason,
   isSafetyInvocationError,
   looksUserInitiatedIntimacy,
-  providerHasCredentials,
   replaceSystemContent,
   resolveIntimacyRetrySettings,
 } from "./intimacyMode.js";
@@ -83,28 +82,12 @@ test("detects blocked-prompt errors from providers", () => {
   assert.equal(isSafetyInvocationError(new Error("rate limited")), false);
 });
 
-test("retry settings switch provider only when credentials exist", () => {
-  const settings = {
-    aiProvider: "google",
-    chatModel: "gemini-3-flash-preview",
-    chatThinkingMode: "high",
-    googleApiKey: "google-key",
-    ollamaApiKeys: [],
-    intimacyFallbackProvider: "ollama",
-    intimacyFallbackModel: "gemma4:31b-cloud",
-  } as unknown as Settings;
-  const sameProvider = resolveIntimacyRetrySettings(settings);
-  assert.equal(sameProvider.aiProvider, "google");
-  assert.equal(sameProvider.chatModel, "gemini-3-flash-preview");
-  assert.equal(sameProvider.chatThinkingMode, "off");
-
-  const withOllama = resolveIntimacyRetrySettings({
-    ...settings,
-    ollamaApiKeys: ["ollama-key"],
-  });
-  assert.equal(withOllama.aiProvider, "ollama");
-  assert.equal(withOllama.chatModel, "gemma4:31b-cloud");
-  assert.equal(providerHasCredentials(withOllama, "ollama"), true);
+test("retry settings use the fallback model with thinking off", () => {
+  const settings = testSettings({ chatModel: "gpt-6-luna", chatThinkingMode: "high" });
+  const same = resolveIntimacyRetrySettings(settings);
+  assert.equal(same.chatModel, "gpt-6-luna");
+  assert.equal(same.chatThinkingMode, "off");
+  assert.equal(resolveIntimacyRetrySettings({ ...settings, intimacyFallbackModel: "gpt-5.5" }).chatModel, "gpt-5.5");
 });
 
 test("replaceSystemContent updates the first system message", () => {

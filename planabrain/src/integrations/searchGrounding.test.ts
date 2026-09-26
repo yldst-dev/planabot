@@ -3,102 +3,34 @@ import test from "node:test";
 
 import { finalizeAnswerForDelivery } from "../chat/deliveryRewrite.js";
 import {
-  answerWithWebSearch,
+  answerTurn,
   isCurrentInformationRequest,
   isExplicitSearchRequest,
   isInformationRequestForm,
 } from "../chat/webSearchAnswer.js";
 import type { Settings } from "../config/settings.js";
-import {
-  invokeChatWithMetadata,
-  parseOpenRouterCitations,
-} from "./chat.js";
+import { testSettings } from "../testing/settings.js";
+import { codexStream, installFetch, jsonResponse } from "../testing/codex.js";
+import { parseWebSearchCitations } from "./chat.js";
 
-function createSettings(
-  overrides: Partial<Settings> = {},
-): Settings {
-  return {
-    aiProvider: "openrouter",
-    openRouterApiKey: "test-key",
-    openRouterBaseUrl: "https://openrouter.example/api/v1",
-    cerebrasWebSearchEnabled: false,
-    modelStudioWebSearchEnabled: false,
-    openRouterWebSearchEnabled: true,
-    openRouterWebSearchBackend: "plugin",
-    openRouterWebSearchMaxResults: 5,
-    openRouterWebSearchMaxTotalResults: 15,
-    openRouterWebSearchContextSize: "medium",
-    ollamaApiKeys: [],
-    ollamaWebSearchEnabled: false,
-    ollamaWebFetchEnabled: false,
-    ollamaWebSearchMaxResults: 5,
-    ollamaToolMaxIterations: 4,
-    webFetchEnabled: false,
-    webFetchTimeoutMs: 1000,
-    webFetchMaxBytes: 100000,
-    webFetchMaxChars: 12000,
-    webFetchMaxTotalChars: 18000,
-    chatModel: "google/gemini-3-flash-preview",
-    deliveryRewriteEnabled: false,
-    chatThinkingMode: "off",
-    indexPath: ".planabrain/index.json",
-    systemPrompt: "테스트 시스템",
-    personaProfile: "live",
-    intimacyEnabled: true,
-    continuousChat: false,
-    searchQueryRewriteEnabled: false,
-    memoryEnabled: false,
-    memoryMaxMessages: 0,
-    memoryDir: ".planabrain/memory",
-    ...overrides,
-  };
+function createSettings(overrides: Partial<Settings> = {}): Settings {
+  return testSettings({ intimacyEnabled: true, continuousChat: false, searchQueryRewriteEnabled: false, ...overrides });
 }
 
-function installFetchQueue(
-  bodies: unknown[],
-  requests: Array<{ input: string; init?: RequestInit; }> = [],
-): () => void {
-  const original = globalThis.fetch;
-  let index = 0;
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    requests.push({ input: String(input), init });
-    const body = bodies[index];
-    index += 1;
-    return new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  }) as typeof fetch;
-  return () => {
-    globalThis.fetch = original;
-  };
+function installGateway(search: unknown, answer: string): ReturnType<typeof installFetch> {
+  return installFetch((request) =>
+    request.url.endsWith("/api/web_search") ? jsonResponse(search) : codexStream(answer),
+  );
 }
 
-test("parses, sanitizes, and deduplicates OpenRouter URL citations", () => {
-  const citations = parseOpenRouterCitations([
-    {
-      type: "url_citation",
-      url_citation: {
-        url: "https://example.com/report?token=secret#part",
-        title: "  Example   Report ",
-        content: "  supporting   evidence ",
-      },
-    },
-    {
-      type: "url_citation",
-      url_citation: {
-        url: "https://example.com/report",
-        title: "Duplicate",
-      },
-    },
-    {
-      type: "url_citation",
-      url_citation: {
-        url: "http://example.com/insecure",
-        title: "Insecure",
-      },
-    },
-  ]);
+test("parses, sanitizes, and deduplicates web search citations", () => {
+  const citations = parseWebSearchCitations([{
+    results: [
+      { url: "https://example.com/report?token=secret#part", title: "  Example   Report ", content: "  supporting   evidence " },
+      { url: "https://example.com/report", title: "Duplicate" },
+      { url: "http://example.com/insecure", title: "Insecure" },
+    ],
+  }]);
 
   assert.deepEqual(citations, [
     {
@@ -109,310 +41,10 @@ test("parses, sanitizes, and deduplicates OpenRouter URL citations", () => {
   ]);
 });
 
-test("merges citations and search usage across continuations", async () => {
-  const restore = installFetchQueue([
-    {
-      choices: [
-        {
-          finish_reason: "length",
-          message: {
-            content: "첫 문장입니다.",
-            annotations: [
-              {
-                type: "url_citation",
-                url_citation: {
-                  url: "https://first.example/report",
-                  title: "First",
-                  content: "first evidence",
-                },
-              },
-            ],
-          },
-        },
-      ],
-      usage: { server_tool_use: { web_search_requests: 1 } },
-    },
-    {
-      choices: [
-        {
-          finish_reason: "stop",
-          message: {
-            content: "둘째 문장입니다.",
-            annotations: [
-              {
-                type: "url_citation",
-                url_citation: {
-                  url: "https://first.example/report#duplicate",
-                  title: "First duplicate",
-                },
-              },
-              {
-                type: "url_citation",
-                url_citation: {
-                  url: "https://second.example/report",
-                  title: "Second",
-                },
-              },
-            ],
-          },
-        },
-      ],
-    },
-  ]);
-
-  try {
-    const result = await invokeChatWithMetadata({
-      settings: createSettings(),
-      enableSearchTool: true,
-      messages: [{ role: "user", content: "최신 정보를 알려줘" }],
-    });
-
-    assert.match(result.content, /첫 문장입니다/u);
-    assert.match(result.content, /둘째 문장입니다/u);
-    assert.equal(result.searchUsed, true);
-    assert.deepEqual(
-      result.citations.map((citation) => citation.url),
-      [
-        "https://first.example/report",
-        "https://second.example/report",
-      ],
-    );
-    assert.equal(result.citations[0]?.evidence, "first evidence");
-  } finally {
-    restore();
-  }
-});
-
-function createToolLoopSettings(overrides: Partial<Settings> = {}): Settings {
-  return createSettings({
-    aiProvider: "modelstudio",
-    modelStudioApiKey: "test-key",
-    modelStudioBaseUrl: "https://modelstudio.example/compatible-mode/v1",
-    modelStudioWebSearchEnabled: true,
-    openRouterWebSearchEnabled: false,
-    ollamaApiKeys: ["ollama-key"],
-    ollamaSearchHost: "https://ollama.example",
-    chatModel: "qwen-plus",
-    ...overrides,
-  });
-}
-
-function searchToolCallResponse(query: string): unknown {
-  return {
-    choices: [
-      {
-        finish_reason: "tool_calls",
-        message: {
-          role: "assistant",
-          content: "",
-          tool_calls: [
-            {
-              id: "call_1",
-              type: "function",
-              function: {
-                name: "web_search",
-                arguments: JSON.stringify({ query }),
-              },
-            },
-          ],
-        },
-      },
-    ],
-  };
-}
-
-function finalAnswerResponse(content: string): unknown {
-  return {
-    choices: [{ finish_reason: "stop", message: { content } }],
-  };
-}
-
-test("modelstudio promotes tool search results to citations", async () => {
-  const requests: Array<{ input: string; init?: RequestInit; }> = [];
-  const restore = installFetchQueue(
-    [
-      searchToolCallResponse("오늘 아침 IT 뉴스"),
-      {
-        results: [
-          {
-            title: "  IT 뉴스   헤드라인 ",
-            url: "https://news.example/it",
-            content: "  오늘 아침   발표된 소식 ",
-          },
-          { url: "https://news.example/it#dup" },
-          { title: "안전하지 않음", url: "http://insecure.example/it" },
-          { title: "두 번째", url: "https://news.example/two" },
-        ],
-      },
-      finalAnswerResponse("선생님.\n오늘 아침 IT 뉴스입니다."),
-    ],
-    requests,
-  );
-
-  try {
-    const result = await invokeChatWithMetadata({
-      settings: createToolLoopSettings(),
-      enableSearchTool: true,
-      messages: [{ role: "user", content: "오늘 아침 IT뉴스 찾아봐줘" }],
-    });
-
-    assert.equal(result.searchUsed, true);
-    assert.deepEqual(result.citations, [
-      {
-        url: "https://news.example/it",
-        title: "IT 뉴스 헤드라인",
-        evidence: "오늘 아침 발표된 소식",
-      },
-      {
-        url: "https://news.example/two",
-        title: "두 번째",
-      },
-    ]);
-    assert.match(result.content, /오늘 아침 IT 뉴스입니다/u);
-    assert.equal(
-      requests[1]?.input,
-      "https://ollama.example/api/web_search",
-    );
-  } finally {
-    restore();
-  }
-});
-
-test("modelstudio reports searchUsed with no citations when the search is empty", async () => {
-  const restore = installFetchQueue([
-    searchToolCallResponse("오늘 아침 IT 뉴스"),
-    { results: [] },
-    finalAnswerResponse("선생님.\n찾지 못했습니다."),
-  ]);
-
-  try {
-    const result = await invokeChatWithMetadata({
-      settings: createToolLoopSettings(),
-      enableSearchTool: true,
-      messages: [{ role: "user", content: "오늘 아침 IT뉴스 찾아봐줘" }],
-    });
-
-    assert.equal(result.searchUsed, true);
-    assert.deepEqual(result.citations, []);
-  } finally {
-    restore();
-  }
-});
-
-test("modelstudio leaves searchUsed false when no tool runs", async () => {
-  const restore = installFetchQueue([
-    finalAnswerResponse("선생님.\n같이 이야기하겠습니다."),
-  ]);
-
-  try {
-    const result = await invokeChatWithMetadata({
-      settings: createToolLoopSettings(),
-      enableSearchTool: true,
-      messages: [{ role: "user", content: "심심해" }],
-    });
-
-    assert.equal(result.searchUsed, false);
-    assert.deepEqual(result.citations, []);
-  } finally {
-    restore();
-  }
-});
-
-test("cerebras promotes tool search results to citations", async () => {
-  const restore = installFetchQueue([
-    searchToolCallResponse("오늘 아침 IT 뉴스"),
-    { results: [{ title: "헤드라인", url: "https://news.example/it" }] },
-    finalAnswerResponse("선생님.\n오늘 아침 IT 뉴스입니다."),
-  ]);
-
-  try {
-    const result = await invokeChatWithMetadata({
-      settings: createToolLoopSettings({
-        aiProvider: "cerebras",
-        cerebrasApiKey: "test-key",
-        cerebrasBaseUrl: "https://cerebras.example/v1",
-        cerebrasWebSearchEnabled: true,
-      }),
-      enableSearchTool: true,
-      messages: [{ role: "user", content: "오늘 아침 IT뉴스 찾아봐줘" }],
-    });
-
-    assert.equal(result.searchUsed, true);
-    assert.deepEqual(
-      result.citations.map((citation) => citation.url),
-      ["https://news.example/it"],
-    );
-  } finally {
-    restore();
-  }
-});
-
-test("modelstudio answers a current-information request with verified sources", async () => {
-  const restore = installFetchQueue([
-    searchToolCallResponse("오늘 아침 IT 뉴스"),
-    {
-      results: [
-        { title: "IT 뉴스", url: "https://news.example/it", content: "소식" },
-      ],
-    },
-    finalAnswerResponse("선생님.\n오늘 아침 IT 뉴스입니다."),
-  ]);
-
-  try {
-    const answer = await answerWithWebSearch({
-      question:
-        "메타정보:\n현재 시각: 2026-07-24 (금) 02:08:00 KST\n\n사용자 질문:\n오늘 아침 IT뉴스 찾아봐줘",
-      currentTurnText: "오늘 아침 IT뉴스 찾아봐줘",
-      settings: createToolLoopSettings(),
-    });
-
-    assert.doesNotMatch(answer, /확인 불가/u);
-    assert.match(answer, /오늘 아침 IT 뉴스입니다/u);
-    assert.match(answer, /출처: \[IT 뉴스\]\(https:\/\/news\.example\/it\)/u);
-  } finally {
-    restore();
-  }
-});
-
-test("modelstudio still fails closed when the search returns nothing", async () => {
-  const restore = installFetchQueue([
-    searchToolCallResponse("오늘 아침 IT 뉴스"),
-    { results: [] },
-    finalAnswerResponse("선생님.\n오늘 아침 IT 뉴스입니다."),
-  ]);
-
-  try {
-    const answer = await answerWithWebSearch({
-      question:
-        "메타정보:\n현재 시각: 2026-07-24 (금) 02:08:00 KST\n\n사용자 질문:\n오늘 아침 IT뉴스 찾아봐줘",
-      currentTurnText: "오늘 아침 IT뉴스 찾아봐줘",
-      settings: createToolLoopSettings(),
-    });
-
-    assert.match(answer, /확인 불가/u);
-  } finally {
-    restore();
-  }
-});
-
 test("uses only currentTurnText for the current-information gate", async () => {
-  const requests: Array<{ input: string; init?: RequestInit; }> = [];
-  const restore = installFetchQueue(
-    [
-      {
-        choices: [
-          {
-            finish_reason: "stop",
-            message: { content: "같이 이야기하겠습니다.\n선생님." },
-          },
-        ],
-      },
-    ],
-    requests,
-  );
-
+  const mock = installGateway({ results: [] }, "같이 이야기하겠습니다.\n선생님.");
   try {
-    const answer = await answerWithWebSearch({
+    const { answer } = await answerTurn({
       question:
         "메모리 컨텍스트:\n과거 질문: 삿포로 날씨와 환율\n\n메타정보:\n현재 시각: 2026-07-24 (금) 02:08:00 KST\n\n사용자 질문:\n심심해",
       currentTurnText: "심심해",
@@ -421,44 +53,19 @@ test("uses only currentTurnText for the current-information gate", async () => {
     });
 
     assert.match(answer, /같이 이야기하겠습니다/u);
-    const payload = JSON.parse(String(requests[0]?.init?.body)) as Record<
-      string,
-      unknown
-    >;
-    assert.equal(Array.isArray(payload.tools), true);
-    const messages = payload.messages as Array<Record<string, unknown>>;
-    assert.equal(messages.at(-1)?.content, "심심해");
-    assert.equal(
-      messages.some((message) =>
-        String(message.content).includes("[PAST_MEMORY_DATA_BEGIN]"),
-      ),
-      true,
-    );
+    assert.equal(mock.requests.some((request) => request.url.endsWith("/api/web_search")), false);
+    const input = mock.codexRequests()[0]?.body.input as Array<{ content: string; }>;
+    assert.equal(input.at(-1)?.content, "심심해");
+    assert.equal(input.some((message) => message.content.includes("[PAST_MEMORY_DATA_BEGIN]")), true);
   } finally {
-    restore();
+    mock.restore();
   }
 });
 
 test("fails closed when a current-information request has no verified citation", async () => {
-  const requests: Array<{ input: string; init?: RequestInit; }> = [];
-  const restore = installFetchQueue(
-    [
-      {
-        choices: [
-          {
-            finish_reason: "stop",
-            message: {
-              content: "현재 환율은 1달러에 1,500원입니다.\n출처: Example",
-            },
-          },
-        ],
-      },
-    ],
-    requests,
-  );
-
+  const mock = installGateway({ results: [] }, "현재 환율은 1달러에 1,500원입니다.\n출처: Example");
   try {
-    const answer = await answerWithWebSearch({
+    const { answer } = await answerTurn({
       question:
         "메타정보:\n현재 시각: 2026-07-24 (금) 02:08:00 KST\n\n사용자 질문:\n오늘 원달러 환율 알려줘",
       currentTurnText: "오늘 원달러 환율 알려줘",
@@ -467,34 +74,16 @@ test("fails closed when a current-information request has no verified citation",
 
     assert.match(answer, /확인 불가/u);
     assert.match(answer, /추측해서 답하지 않겠습니다/u);
-    const payload = JSON.parse(String(requests[0]?.init?.body)) as Record<
-      string,
-      unknown
-    >;
-    assert.equal(Array.isArray(payload.tools), true);
+    assert.ok(mock.requests.some((request) => request.url.endsWith("/api/web_search")));
   } finally {
-    restore();
+    mock.restore();
   }
 });
 
-test("explicit search request requires evidence even when the tool was attached", async () => {
-  const requests: Array<{ input: string; init?: RequestInit; }> = [];
-  const restore = installFetchQueue(
-    [
-      {
-        choices: [
-          {
-            finish_reason: "stop",
-            message: { content: "해당 회사를 확인했습니다." },
-          },
-        ],
-      },
-    ],
-    requests,
-  );
-
+test("explicit search request requires evidence even when search ran", async () => {
+  const mock = installGateway({ results: [] }, "해당 회사를 확인했습니다.");
   try {
-    const answer = await answerWithWebSearch({
+    const { answer } = await answerTurn({
       question:
         "메타정보:\n현재 시각: 2026-07-24 (금) 02:08:00 KST\n\n사용자 질문:\n이 회사에 대해 검색해줘",
       currentTurnText: "이 회사에 대해 검색해줘",
@@ -503,44 +92,18 @@ test("explicit search request requires evidence even when the tool was attached"
 
     assert.match(answer, /확인 불가/u);
     assert.doesNotMatch(answer, /해당 회사를 확인했습니다/u);
-    const payload = JSON.parse(String(requests[0]?.init?.body)) as Record<
-      string,
-      unknown
-    >;
-    assert.equal(Array.isArray(payload.tools), true);
   } finally {
-    restore();
+    mock.restore();
   }
 });
 
 test("replaces model-authored sources with verified HTTPS citation URLs", async () => {
-  const restore = installFetchQueue([
-    {
-      choices: [
-        {
-          finish_reason: "stop",
-          message: {
-            content:
-              "확인한 현재 환율입니다.\n출처:\nhttps://fake.example/rates",
-            annotations: [
-              {
-                type: "url_citation",
-                url_citation: {
-                  url: "https://verified.example/rates",
-                  title: "Verified",
-                  content: "rate evidence",
-                },
-              },
-            ],
-          },
-        },
-      ],
-      usage: { server_tool_use: { web_search_requests: 1 } },
-    },
-  ]);
-
+  const mock = installGateway(
+    { results: [{ url: "https://verified.example/rates", title: "Verified", content: "rate evidence" }] },
+    "확인한 현재 환율입니다.\n출처:\nhttps://fake.example/rates",
+  );
   try {
-    const answer = await answerWithWebSearch({
+    const { answer } = await answerTurn({
       question:
         "메타정보:\n현재 시각: 2026-07-24 (금) 02:08:00 KST\n\n사용자 질문:\n오늘 원달러 환율 알려줘",
       currentTurnText: "오늘 원달러 환율 알려줘",
@@ -550,7 +113,7 @@ test("replaces model-authored sources with verified HTTPS citation URLs", async 
     assert.doesNotMatch(answer, /fake\.example/u);
     assert.match(answer, /출처: \[Verified\]\(https:\/\/verified\.example\/rates\)/u);
   } finally {
-    restore();
+    mock.restore();
   }
 });
 
@@ -740,7 +303,7 @@ test("long-range weather policy returns before model invocation", async () => {
   }) as typeof fetch;
 
   try {
-    const answer = await answerWithWebSearch({
+    const { answer } = await answerTurn({
       question:
         "메타정보:\n현재 시각: 2026-07-24 (금) 02:08:00 KST\n\n사용자 질문:\n삿포로의 2026년 8월 말 날씨를 알려줘",
       currentTurnText: "삿포로의 2026년 8월 말 날씨를 알려줘",

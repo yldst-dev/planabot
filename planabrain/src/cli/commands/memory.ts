@@ -1,215 +1,72 @@
-import { rememberExchangeTurn } from "../../application/rememberExchange.js";
-import { resetScopedUserMemory } from "../../memory/userMemoryStore.js";
-import { resolveDataPath } from "../../config/paths.js";
 import { readFile } from "node:fs/promises";
 
-import { migrateJsonMemoryToSqlite } from "../../memoryflow/migrate-json.js";
-import { LocalMemoryEngine } from "../../memoryflow/memory-engine.js";
-import type { ScopeKind } from "../../memoryflow/types.js";
+import type { Settings } from "../../config/settings.js";
+import { normalizeWireMessages } from "../../memory/database.js";
+import { forgetMemory, listMemories, rememberExchange, resetAllMemory, resetUserMemory } from "../../memory/service.js";
 
-export async function runMemoryPrepareCommand(args: string[]): Promise<void> {
-  const [userId, chatId, ...parts] = args;
-  ensure(Boolean(userId && chatId), "Usage: planabrain memory-prepare <userId> <chatId> <text> [tokenBudget]");
-  const conversationId = readConversationId();
+const EXCHANGE_USAGE = "Usage: planabrain memory-exchange <userId> <chatId> <userText> <assistantText>";
 
-  const { textParts, budget } = splitTextAndBudget(parts);
-  const text = await resolveTextFromArgs(
-    textParts,
-    "Usage: planabrain memory-prepare <userId> <chatId> <text> [tokenBudget]"
-  );
-
-  const engine = new LocalMemoryEngine();
-  try {
-    const prepared = await engine.preparePromptInput({
-      userId: String(userId),
-      chatId: String(chatId),
-      conversationId,
-      userText: text,
-      tokenBudget: budget
-    });
-    process.stdout.write(`${JSON.stringify(prepared)}\n`);
-  } finally {
-    engine.close();
-  }
-}
-
-export async function runMemoryAssistantCommand(args: string[]): Promise<void> {
-  const [userId, chatId, ...parts] = args;
-  ensure(Boolean(userId && chatId), "Usage: planabrain memory-assistant <userId> <chatId> <text>");
-  const conversationId = readConversationId();
-  const text = await resolveTextFromArgs(
-    parts,
-    "Usage: planabrain memory-assistant <userId> <chatId> <text>"
-  );
-
-  const engine = new LocalMemoryEngine();
-  try {
-    const result = await engine.rememberAssistantTurn({
-      userId: String(userId),
-      chatId: String(chatId),
-      conversationId,
-      assistantText: text
-    });
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-  } finally {
-    engine.close();
-  }
-}
-
-export async function runMemoryExchangeCommand(args: string[]): Promise<void> {
+export async function runMemoryExchangeCommand(args: string[], settings: Settings): Promise<void> {
   const [userId, chatId, userTextArg, assistantTextArg, ...rest] = args;
-  ensure(Boolean(userId && chatId), "Usage: planabrain memory-exchange <userId> <chatId> <userText> <assistantText>");
-  ensure(rest.length === 0, "Usage: planabrain memory-exchange <userId> <chatId> <userText> <assistantText>");
-  const conversationId = readConversationId();
-  const userText = await resolveExchangeText(
-    userTextArg,
-    "PLANABRAIN_LOCAL_MEMORY_USER_TEXT_FILE",
-    "Usage: planabrain memory-exchange <userId> <chatId> <userText> <assistantText>"
+  ensure(Boolean(userId && chatId) && rest.length === 0, EXCHANGE_USAGE);
+  const userText = await resolveExchangeText(userTextArg, "PLANABRAIN_LOCAL_MEMORY_USER_TEXT_FILE");
+  const assistantText = await resolveExchangeText(assistantTextArg, "PLANABRAIN_LOCAL_MEMORY_ASSISTANT_TEXT_FILE");
+  const transcript = readTranscript(process.env.PLANABRAIN_TRANSCRIPT_JSON);
+  const result = await rememberExchange(
+    {
+      userId: String(userId),
+      chatId: String(chatId),
+      requestId: process.env.PLANABRAIN_REQUEST_ID?.trim() || undefined,
+      conversationId: process.env.PLANABRAIN_CONVERSATION_ID?.trim() || undefined,
+      userText,
+      assistantText,
+      ...transcript,
+    },
+    { settings, background: false },
   );
-  const assistantText = await resolveExchangeText(
-    assistantTextArg,
-    "PLANABRAIN_LOCAL_MEMORY_ASSISTANT_TEXT_FILE",
-    "Usage: planabrain memory-exchange <userId> <chatId> <userText> <assistantText>"
-  );
+  process.stdout.write(`${JSON.stringify({ ok: true, result })}\n`);
+}
 
-  const transcript = process.env.PLANABRAIN_TRANSCRIPT_JSON ? JSON.parse(process.env.PLANABRAIN_TRANSCRIPT_JSON) as { wireMessages?: Array<{ role: "user" | "assistant"; content: string; }>; epoch?: number; } : undefined;
-  const result = await rememberExchangeTurn({
-    userId: String(userId),
-    requestId: process.env.PLANABRAIN_REQUEST_ID,
-    wireMessages: transcript?.wireMessages,
-    epoch: transcript?.epoch,
-    chatId: String(chatId),
-    conversationId,
-    userText,
-    assistantText,
-  });
-  process.stdout.write(`${JSON.stringify(result)}\n`);
+export async function runMemoryListCommand(args: string[]): Promise<void> {
+  const [userId, chatId] = args;
+  ensure(Boolean(userId && chatId), "Usage: planabrain memory-list <userId> <chatId>");
+  const memories = listMemories(String(userId), String(chatId)).map(({ id, kind, content }) => ({ id, kind, content }));
+  process.stdout.write(`${JSON.stringify({ memories })}\n`);
+}
+
+export async function runMemoryForgetCommand(args: string[]): Promise<void> {
+  const [userId, chatId, rawId] = args;
+  const id = Number.parseInt(String(rawId ?? ""), 10);
+  ensure(Boolean(userId && chatId) && Number.isSafeInteger(id) && id > 0, "Usage: planabrain memory-forget <userId> <chatId> <memoryId>");
+  process.stdout.write(`${JSON.stringify({ removed: forgetMemory(String(userId), String(chatId), id) })}\n`);
 }
 
 export async function runMemoryResetUserCommand(args: string[]): Promise<void> {
   const [userId] = args;
   ensure(Boolean(userId), "Usage: planabrain memory-reset-user <userId>");
-
-  const engine = new LocalMemoryEngine();
-  try {
-    const result = await engine.resetUser(String(userId));
-    const scopedRemoved = await resetScopedUserMemory(String(userId), resolveDataPath(process.env.PLANABRAIN_MEMORY_DIR ?? ".planabrain/memory"));
-    result.removed = result.removed || scopedRemoved;
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-  } finally {
-    engine.close();
-  }
+  process.stdout.write(`${JSON.stringify({ userId, removed: resetUserMemory(String(userId)) })}\n`);
 }
 
 export async function runMemoryResetAllCommand(): Promise<void> {
-  const engine = new LocalMemoryEngine();
+  process.stdout.write(`${JSON.stringify({ removed: resetAllMemory() })}\n`);
+}
+
+function readTranscript(raw: string | undefined): { wireMessages?: ReturnType<typeof normalizeWireMessages>; epoch?: number; } {
+  if (!raw?.trim()) return {};
   try {
-    const result = await engine.resetAll();
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-  } finally {
-    engine.close();
+    const parsed = JSON.parse(raw) as { wireMessages?: unknown; epoch?: unknown; };
+    const wireMessages = normalizeWireMessages(parsed.wireMessages);
+    const epoch = typeof parsed.epoch === "number" && Number.isFinite(parsed.epoch) && parsed.epoch >= 0 ? parsed.epoch : undefined;
+    return { ...(wireMessages ? { wireMessages } : {}), ...(epoch === undefined ? {} : { epoch }) };
+  } catch {
+    return {};
   }
 }
 
-export async function runMemoryListFactsCommand(args: string[]): Promise<void> {
-  const parsed = parseScopedMemoryArgs(
-    args,
-    "Usage: planabrain memory-list-facts <userId> <chatId> [user|group|conversation]"
-  );
-  const engine = new LocalMemoryEngine();
-  try {
-    const result = await engine.listSemanticFacts(parsed);
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-  } finally {
-    engine.close();
-  }
-}
-
-export async function runMemoryDeleteFactCommand(args: string[]): Promise<void> {
-  const parsed = parseFactMutationArgs(
-    args,
-    "Usage: planabrain memory-delete-fact <userId> <chatId> <factId> [user|group|conversation]"
-  );
-  const engine = new LocalMemoryEngine();
-  try {
-    const result = await engine.deleteSemanticFact(parsed);
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-  } finally {
-    engine.close();
-  }
-}
-
-export async function runMemoryUpdateFactCommand(args: string[]): Promise<void> {
-  const parsed = parseFactUpdateArgs(
-    args,
-    "Usage: planabrain memory-update-fact <userId> <chatId> <factId> <value> [user|group|conversation]"
-  );
-  const engine = new LocalMemoryEngine();
-  try {
-    const result = await engine.updateSemanticFact(parsed);
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-  } finally {
-    engine.close();
-  }
-}
-
-export async function runMemoryMigrateJsonCommand(args: string[]): Promise<void> {
-  const [sourceDir] = args;
-  const result = await migrateJsonMemoryToSqlite({
-    sourceDir: sourceDir ? String(sourceDir) : undefined
-  });
-  process.stdout.write(`${JSON.stringify(result)}\n`);
-}
-
-function splitTextAndBudget(parts: string[]): {
-  textParts: string[];
-  budget: number | undefined;
-} {
-  const maybeBudget = parts.at(-1);
-  const parsed = Number.parseInt(String(maybeBudget), 10);
-  if (Number.isFinite(parsed) && parsed > 0) {
-    return {
-      textParts: parts.slice(0, -1),
-      budget: parsed
-    };
-  }
-  return {
-    textParts: parts,
-    budget: undefined
-  };
-}
-
-async function resolveTextFromArgs(parts: string[], usage: string): Promise<string> {
-  let text = parts.join(" ").trim();
-  if (text) {
-    return text;
-  }
-
-  const textFile = process.env.PLANABRAIN_LOCAL_MEMORY_TEXT_FILE;
-  if (textFile) {
-    try {
-      text = (await readFile(textFile, "utf8")).trim();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`메모리 텍스트 파일 읽기 실패: ${message}`);
-    }
-  }
-
-  ensure(Boolean(text), usage);
-  return text;
-}
-
-async function resolveExchangeText(
-  arg: string | undefined,
-  fileEnv: string,
-  usage: string
-): Promise<string> {
+async function resolveExchangeText(arg: string | undefined, fileEnv: string): Promise<string> {
   let text = String(arg ?? "").trim();
-  if (text) {
-    return text;
-  }
   const textFile = process.env[fileEnv];
-  if (textFile) {
+  if (!text && textFile) {
     try {
       text = (await readFile(textFile, "utf8")).trim();
     } catch (error) {
@@ -217,7 +74,7 @@ async function resolveExchangeText(
       throw new Error(`메모리 교환 텍스트 파일 읽기 실패: ${message}`);
     }
   }
-  ensure(Boolean(text), usage);
+  ensure(Boolean(text), EXCHANGE_USAGE);
   return text;
 }
 
@@ -225,100 +82,4 @@ function ensure(condition: boolean, message: string): void {
   if (!condition) {
     throw new Error(message);
   }
-}
-
-function readConversationId(): string | undefined {
-  const value = process.env.PLANABRAIN_CONVERSATION_ID?.trim();
-  return value ? value : undefined;
-}
-
-function parseScopedMemoryArgs(
-  args: string[],
-  usage: string
-): {
-  userId: string;
-  chatId: string;
-  scopeKind: ScopeKind;
-  conversationId?: string;
-} {
-  const [userId, chatId, ...rest] = args;
-  ensure(Boolean(userId && chatId), usage);
-  const scopeKind = parseScopeKind(rest.at(-1));
-  if (scopeKind) {
-    rest.pop();
-  }
-  return {
-    userId: String(userId),
-    chatId: String(chatId),
-    scopeKind: scopeKind ?? "user",
-    conversationId: scopeKind === "conversation" ? readConversationId() : undefined
-  };
-}
-
-function parseFactMutationArgs(
-  args: string[],
-  usage: string
-): {
-  userId: string;
-  chatId: string;
-  factId: string;
-  scopeKind: ScopeKind;
-  conversationId?: string;
-} {
-  const [userId, chatId, factId, ...rest] = args;
-  ensure(Boolean(userId && chatId && factId), usage);
-  const scopeKind = parseScopeKind(rest.at(-1));
-  if (scopeKind) {
-    rest.pop();
-  }
-  return {
-    userId: String(userId),
-    chatId: String(chatId),
-    factId: String(factId),
-    scopeKind: scopeKind ?? "user",
-    conversationId: scopeKind === "conversation" ? readConversationId() : undefined
-  };
-}
-
-function parseFactUpdateArgs(
-  args: string[],
-  usage: string
-): {
-  userId: string;
-  chatId: string;
-  factId: string;
-  value: string;
-  scopeKind: ScopeKind;
-  conversationId?: string;
-} {
-  const [userId, chatId, factId, ...rest] = args;
-  ensure(Boolean(userId && chatId && factId && rest.length > 0), usage);
-  const scopeKind = parseScopeKind(rest.at(-1));
-  if (scopeKind) {
-    rest.pop();
-  }
-  const value = rest.join(" ").trim();
-  ensure(Boolean(value), usage);
-  return {
-    userId: String(userId),
-    chatId: String(chatId),
-    factId: String(factId),
-    value,
-    scopeKind: scopeKind ?? "user",
-    conversationId: scopeKind === "conversation" ? readConversationId() : undefined
-  };
-}
-
-function parseScopeKind(raw: string | undefined): ScopeKind | undefined {
-  const value = String(raw ?? "").trim().toLowerCase();
-  if (value === "group") {
-    return "group";
-  }
-  if (value === "conversation") {
-    return "conversation";
-  }
-  if (value === "user") {
-    return "user";
-  }
-  return undefined;
 }

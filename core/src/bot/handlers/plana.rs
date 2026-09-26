@@ -222,6 +222,7 @@ where
         &ask_context,
         image_input,
         &prepared.recent_turns,
+        prepared.signals.as_ref(),
     );
     tokio::pin!(ask_fut);
     let remaining = Duration::from_millis((deadline_ms - crate::schedule::now_ms()).max(1) as u64);

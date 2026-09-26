@@ -2,9 +2,10 @@ import path from "node:path";
 import { open, realpath } from "node:fs/promises";
 import type { Settings } from "../config/settings.js";
 import type { InputImage } from "../integrations/chat.js";
-import { loadConfig as loadMemoryConfig } from "../memoryflow/config.js";
+import { loadMemoryConfig } from "../memory/config.js";
 import { answerTurn, type RecentTurnInput, type TurnAnswer } from "../chat/webSearchAnswer.js";
 import { runExecution } from "../runtime/execution.js";
+import type { TurnSignals } from "../decision/turnSignals.js";
 import { serial } from "../runtime/serial.js";
 
 export type AskInput = {
@@ -16,9 +17,9 @@ export type AskInput = {
   currentTurnText?: string;
   memoryContext?: string;
   image?: { path: string; mimeType?: string; };
-  memoryEnabled?: boolean;
   recentTurns?: RecentTurnInput[];
   continuousChat?: boolean;
+  signals?: TurnSignals;
 };
 
 export async function runAsk(input: AskInput, settings: Settings, imageRoot?: string): Promise<TurnAnswer> {
@@ -33,12 +34,10 @@ async function executeAsk(input: AskInput, settings: Settings, imageRoot?: strin
   const linkSourceText = input.currentTurnText?.trim() || question;
   const memoryContext = input.memoryContext?.trim() || undefined;
   const images = await resolveImages(input.image, imageRoot);
-  const effectiveSettings =
-    input.memoryEnabled === false ? { ...settings, memoryEnabled: false } : settings;
   return answerTurn({
     question,
     currentTurnText: linkSourceText,
-    settings: effectiveSettings,
+    settings,
     userId: input.userId,
     chatScope: input.chatScope ?? "cli",
     conversationId: input.conversationId ?? input.userId,
@@ -47,7 +46,8 @@ async function executeAsk(input: AskInput, settings: Settings, imageRoot?: strin
     memoryContext,
     recentTurns: input.recentTurns,
     continuousChat: input.continuousChat,
-    workingTurnLimit: loadMemoryConfig().maxWorkingTurns,
+    signals: input.signals,
+    workingTurnLimit: loadMemoryConfig().maxConversationTurns,
   });
 }
 

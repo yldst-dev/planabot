@@ -1,35 +1,5 @@
-import { type WebCitation, type ChatInvocationResult } from "./contracts.js";
+import { type WebCitation } from "./contracts.js";
 import { asRecord } from "./value.js";
-import { WebToolPolicy } from "./webToolPolicy.js";
-
-export function parseOpenRouterCitations(value: unknown): WebCitation[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const citations: WebCitation[] = [];
-  for (const item of value) {
-    const annotation = asRecord(item);
-    if (annotation?.type !== "url_citation") {
-      continue;
-    }
-    const nested = asRecord(annotation.url_citation) ?? annotation;
-    const url = normalizeCitationUrl(nested.url);
-    if (!url) {
-      continue;
-    }
-    const title = normalizeCitationText(nested.title, 300);
-    const evidence = normalizeCitationText(
-      nested.content ?? nested.text ?? nested.quote,
-      4000,
-    );
-    citations.push({
-      url,
-      ...(title ? { title } : {}),
-      ...(evidence ? { evidence } : {}),
-    });
-  }
-  return mergeWebCitations(citations);
-}
 
 export function parseWebSearchCitations(
   results: ReadonlyArray<unknown>,
@@ -63,23 +33,6 @@ export function parseWebSearchCitations(
   return mergeWebCitations(citations);
 }
 
-export function withWebToolCitations(
-  result: ChatInvocationResult,
-  policy: WebToolPolicy,
-): ChatInvocationResult {
-  if (!policy.searchExecuted) {
-    return result;
-  }
-  return {
-    ...result,
-    citations: mergeWebCitations(
-      result.citations ?? [],
-      parseWebSearchCitations(policy.searchResults),
-    ),
-    searchUsed: true,
-  };
-}
-
 export function mergeWebCitations(
   ...groups: ReadonlyArray<ReadonlyArray<WebCitation>>
 ): WebCitation[] {
@@ -103,18 +56,6 @@ export function mergeWebCitations(
     }
   }
   return Array.from(merged.values());
-}
-
-export function hasOpenRouterSearchUsage(record: Record<string, unknown> | null): boolean {
-  const usage = asRecord(record?.usage);
-  const serverToolUse = asRecord(usage?.server_tool_use ?? usage?.serverToolUse);
-  const count =
-    typeof serverToolUse?.web_search_requests === "number"
-      ? serverToolUse.web_search_requests
-      : typeof serverToolUse?.webSearchRequests === "number"
-        ? serverToolUse.webSearchRequests
-        : 0;
-  return Number.isFinite(count) && count > 0;
 }
 
 export function normalizeCitationUrl(value: unknown): string | null {

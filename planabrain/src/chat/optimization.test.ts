@@ -5,9 +5,9 @@ import { fitContextMessages, contextTokens } from "./contextBudget.js";
 import { buildReplay } from "./replay.js";
 import { normalizeDeliveryText, finalizeAnswerForDelivery } from "./deliveryRewrite.js";
 import { invokeChatWithMetadata } from "../integrations/chat.js";
-import { buildOpenRouterReasoning, invokeOpenRouterChat } from "../integrations/providers/openAI.js";
 import { testSettings } from "../testing/settings.js";
-import { currentExecution, runExecution } from "../runtime/execution.js";
+import { codexStream, installFetch } from "../testing/codex.js";
+import { runExecution } from "../runtime/execution.js";
 import type { ChatMessage } from "../integrations/contracts.js";
 
 const parts = {
@@ -29,7 +29,7 @@ test("budgeting protects current evidence and reference after dropping old pairs
   });
   assert.deepEqual(messages.map((message) => message.content), ["시스템 규칙", "답장한 원문", "현재 검색 근거", "현재 질문"]);
   assert.throws(() => buildTurnMessages({ ...parts, searchContext: "가".repeat(25_000) }), /너무 깁니다/u);
-  assert.throws(() => fitContextMessages([{ role: "user", content: "질문" }, { role: "tool", content: "가".repeat(25_000) }]), /너무 깁니다/u);
+  assert.throws(() => fitContextMessages([{ role: "user", content: "질문" }, { role: "developer", content: "가".repeat(25_000) }]), /너무 깁니다/u);
 });
 
 test("memory deduplication preserves other speakers and facts when history was evicted", () => {
@@ -51,9 +51,8 @@ test("canonical replay avoids accumulated evidence and preserves delivered wordi
     { role: "assistant" as const, text: "선생님.\n안녕하세요.", epoch: 1, wireMessages: [{ role: "user" as const, content: "검색 본문".repeat(1000) }, { role: "assistant" as const, content: "잘못된 원문" }] },
   ];
   const canonical = buildReplay(turns);
-  const native = buildReplay(turns, true);
   assert.deepEqual(canonical.messages.map((message) => message.content), ["안녕", "선생님.\n안녕하세요."]);
-  assert.ok(contextTokens(canonical.messages) < contextTokens(native.messages) / 10);
+  assert.ok(contextTokens(canonical.messages) < contextTokens(turns[1]?.wireMessages?.map((wire) => ({ role: wire.role, content: wire.content })) ?? []) / 10);
 });
 
 test("delivery formatting is idempotent and preserves numbers and sentence meaning", () => {
@@ -64,45 +63,15 @@ test("delivery formatting is idempotent and preserves numbers and sentence meani
   assert.equal(normalizeDeliveryText(formatted), formatted);
 });
 
-test("GLM reasoning stays enabled and OpenRouter preserves configured sampling and routing", async () => {
-  const settings = testSettings({ chatModel: "z-ai/glm-5.3-flash", openRouterTemperature: 0.8, openRouterTopP: 0.95, openRouterProviderOrder: ["deepinfra/fp4"], openRouterWebSearchEnabled: false });
-  assert.deepEqual(buildOpenRouterReasoning(settings), { effort: "low", exclude: true });
-  assert.deepEqual(buildOpenRouterReasoning({ ...settings, chatThinkingMode: "high" }), { effort: "high", exclude: true });
-  assert.equal(buildOpenRouterReasoning({ ...settings, chatThinkingMode: "default" }), undefined);
-  assert.equal(buildOpenRouterReasoning({ ...settings, chatModel: "other-model" }), undefined);
-  const original = globalThis.fetch;
-  globalThis.fetch = (async (_input, init) => {
-    const body = JSON.parse(String(init?.body));
-    assert.equal(body.temperature, 0.8);
-    assert.equal(body.top_p, 0.95);
-    assert.deepEqual(body.provider, { order: ["deepinfra/fp4"], allow_fallbacks: false });
-    assert.deepEqual(body.reasoning, { effort: "low", exclude: true });
-    return new Response(JSON.stringify({ model: "z-ai/glm-5.3-flash", provider: "DeepInfra", choices: [{ message: { content: "선생님.\n좋은 밤입니다." }, finish_reason: "stop" }], usage: { prompt_tokens: 100, completion_tokens: 30, prompt_tokens_details: { cached_tokens: 80 }, completion_tokens_details: { reasoning_tokens: 10 } } }));
-  }) as typeof fetch;
-  try {
-    await runExecution("openrouter-test", async () => {
-      await invokeOpenRouterChat(settings, [{ role: "user", content: "안녕" }], false);
-      assert.equal(currentExecution()?.cachedInputTokens, 80);
-      assert.equal(currentExecution()?.reasoningTokens, 10);
-      assert.deepEqual(currentExecution()?.providerResponses, [{ model: "z-ai/glm-5.3-flash", provider: "DeepInfra" }]);
-    });
-  } finally { globalThis.fetch = original; }
-});
-
 test("continuations record the complete sanitized answer instead of its last fragment", async () => {
-  const original = globalThis.fetch;
-  let calls = 0;
-  globalThis.fetch = (async () => {
-    calls += 1;
-    return new Response(JSON.stringify({ choices: [{ message: { content: calls === 1 ? "첫 문장." : "다음 문장." }, finish_reason: calls === 1 ? "length" : "stop" }] }));
-  }) as typeof fetch;
+  const mock = installFetch((_request, index) => codexStream(index === 1 ? "첫 문장." : "다음 문장.", { incomplete: index === 1 }));
   try {
     const result = await invokeChatWithMetadata({ settings: testSettings(), messages: [{ role: "user", content: "설명해줘" }] });
-    assert.equal(calls, 2);
+    assert.equal(mock.requests.length, 2);
     assert.equal(result.wireMessages.at(-1)?.content, result.content);
     assert.match(result.content, /첫 문장/u);
     assert.match(result.content, /다음 문장/u);
-  } finally { globalThis.fetch = original; }
+  } finally { mock.restore(); }
 });
 
 test("short answers and verified sources do not trigger an auxiliary rewrite", async () => {
@@ -151,30 +120,21 @@ test("style checks flag the reported greeting failure and enforce requested sent
   assert.equal(styleChecks("선생님.\n파일은 519MB이며 재생 시간은 23분 42초입니다.\n업로드는 완료되지 않았습니다.", false, "numbers").requestedSentences, false);
 });
 
-test("only plain social turns use low GLM reasoning and skip unrelated long-term context", async () => {
+test("only plain social turns skip unrelated long-term context", async () => {
   const { answerTurn } = await import("./webSearchAnswer.js");
   const { isSimpleSocialTurn } = await import("./queryPolicy.js");
   assert.equal(isSimpleSocialTurn("프라나야 좋은 밤이야"), true);
   assert.equal(isSimpleSocialTurn("프라나, 있어?"), true);
   assert.equal(isSimpleSocialTurn("고마워. 그런데 환율도 알려줘"), false);
-  const original = globalThis.fetch;
-  const requests: Array<Record<string, unknown>> = [];
-  globalThis.fetch = (async (_input, init) => {
-    requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-    return new Response(JSON.stringify({ choices: [{ message: { content: "선생님.\n좋은 밤입니다." }, finish_reason: "stop" }] }));
-  }) as typeof fetch;
+  const mock = installFetch(() => codexStream("선생님.\n좋은 밤입니다."));
   try {
-    const settings = testSettings({ chatModel: "z-ai/glm-5.3-flash", chatThinkingMode: "default", chatMaxOutputTokens: 2048, deliveryRewriteEnabled: true, openRouterWebSearchEnabled: false });
+    const settings = testSettings({ deliveryRewriteEnabled: true, ollamaWebSearchEnabled: false });
     await answerTurn({ settings, question: "프라나야 좋은 밤이야", memoryContext: "이전 여행 기록" });
-    assert.deepEqual(requests[0].reasoning, { effort: "low", exclude: true });
-    assert.equal(requests[0].max_tokens, 2048);
-    assert.doesNotMatch(JSON.stringify(requests[0].messages), /이전 여행 기록/u);
-    await answerTurn({ settings: { ...settings, chatThinkingMode: "high" }, question: "좋은 밤이야" });
-    assert.deepEqual(requests[1].reasoning, { effort: "high", exclude: true });
-    await answerTurn({ settings, question: "반복문을 설명해줘" });
-    assert.equal(requests[2].reasoning, undefined);
-    assert.equal(requests.length, 3);
-  } finally { globalThis.fetch = original; }
+    assert.doesNotMatch(JSON.stringify(mock.requests[0]?.body.input), /이전 여행 기록/u);
+    await answerTurn({ settings, question: "반복문을 설명해줘", memoryContext: "이전 여행 기록" });
+    assert.match(JSON.stringify(mock.requests[1]?.body.input), /이전 여행 기록/u);
+    assert.equal(mock.requests.length, 2);
+  } finally { mock.restore(); }
 });
 
 test("memory deduplication does not confuse equal text from different roles", () => {

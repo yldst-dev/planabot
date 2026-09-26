@@ -6,7 +6,6 @@ import {
   type ChatInvocationMetadata,
   type ChatInvocationParams,
   type ChatMessage,
-  providerHasCredentials as chatProviderHasCredentials,
 } from "../integrations/chat.js";
 
 const INTIMACY_LEXICON =
@@ -23,8 +22,6 @@ const PRESENCE_BREAK =
 
 const SECURITY_REFUSAL_FORM =
   /^불가\.\s*선생님\.\s*해당 정보는 제공할 수 없습니다/u;
-
-const INTIMACY_OPENROUTER_IGNORE = ["Z.AI", "GMICloud", "StreamLake", "Wafer"];
 
 export function looksUserInitiatedIntimacy(
   currentTurn: string,
@@ -85,26 +82,10 @@ export function isSafetyInvocationError(error: unknown): boolean {
   );
 }
 
-export function providerHasCredentials(
-  settings: Settings,
-  provider: Settings["aiProvider"],
-): boolean {
-  return chatProviderHasCredentials(settings, provider);
-}
-
 export function resolveIntimacyRetrySettings(settings: Settings): Settings {
-  const fallbackProvider =
-    settings.intimacyFallbackProvider ?? settings.aiProvider;
-  const fallbackModel = settings.intimacyFallbackModel ?? settings.chatModel;
-  const provider = providerHasCredentials(settings, fallbackProvider)
-    ? fallbackProvider
-    : settings.aiProvider;
-  const model =
-    provider === fallbackProvider ? fallbackModel : settings.chatModel;
   return {
     ...settings,
-    aiProvider: provider,
-    chatModel: model,
+    chatModel: settings.intimacyFallbackModel ?? settings.chatModel,
     chatThinkingMode: "off",
   };
 }
@@ -127,35 +108,12 @@ export function replaceSystemContent(
   return [{ role: "system", content: systemContent }, ...messages];
 }
 
-function withIntimacyOpenRouterRouting(settings: Settings): Settings {
-  if (settings.aiProvider !== "openrouter") {
-    return settings;
-  }
-  const existing = settings.openRouterIgnoreProviders ?? [];
-  const merged = [
-    ...existing,
-    ...INTIMACY_OPENROUTER_IGNORE.filter((name) => !existing.includes(name)),
-  ];
-  return {
-    ...settings,
-    chatThinkingMode: "low",
-    openRouterIgnoreProviders: merged,
-  };
-}
-
 export async function invokeChatWithIntimacyRecovery(
   params: ChatInvocationParams & { intimacyActive: boolean; },
 ): Promise<ChatInvocationMetadata> {
-  const routedSettings =
-    params.settings.intimacyEnabled && params.intimacyActive
-      ? withIntimacyOpenRouterRouting(params.settings)
-      : params.settings;
   let first: ChatInvocationMetadata;
   try {
-    first = await invokeChatWithMetadata({
-      ...params,
-      settings: routedSettings,
-    });
+    first = await invokeChatWithMetadata(params);
   } catch (error) {
     if (!params.settings.intimacyEnabled || !params.intimacyActive || !isSafetyInvocationError(error)) {
       throw error;
@@ -177,9 +135,7 @@ export async function invokeChatWithIntimacyRecovery(
   ) {
     return first;
   }
-  const retrySettings = withIntimacyOpenRouterRouting(
-    resolveIntimacyRetrySettings(routedSettings),
-  );
+  const retrySettings = resolveIntimacyRetrySettings(params.settings);
   const retryPrompt = buildSystemPrompt(params.settings, {
     searchEnabled: false,
     intimacyActive: true,
@@ -188,7 +144,6 @@ export async function invokeChatWithIntimacyRecovery(
   try {
     const retry = await invokeChatWithMetadata({
       settings: retrySettings,
-      enableSearchTool: false,
       messages: replaceSystemContent(params.messages, retryPrompt),
     });
     if (

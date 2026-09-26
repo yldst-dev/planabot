@@ -1,17 +1,13 @@
-import { type AnswerTurnParams, type TurnAnswer, type PreparedSearch, type TurnTranscript } from "./types.js";
+import { type AnswerTurnParams, type TurnAnswer, type PreparedSearch } from "./types.js";
 import { normalizeCurrentTurnText, isCurrentInformationRequest, isExplicitSearchRequest, isSearchFollowUp, resolveSearchQuery, isSimpleSocialTurn } from "./queryPolicy.js";
 import { normalizeQuestionForMemory, buildCurrentTurnReference, buildMemoryContextMessage, buildTurnMessages } from "./promptContext.js";
 import { buildLongRangeWeatherReply } from "./weatherPolicy.js";
-import { loadUserMemory, appendUserMemory } from "../memory/userMemoryStore.js";
 import { looksUserInitiatedIntimacy, invokeChatWithIntimacyRecovery } from "./intimacyMode.js";
-import { isSearchToolAvailable, usesPreSearchContext, usesNativeWebSearch, performPreSearch, ProviderRateLimitError, type ChatInvocationMetadata, type ChatMessage, mergeWebCitations } from "../integrations/chat.js";
-import { DEFAULT_DELIVERY_MAX_TOKENS, finalizeAnswerForDelivery, removeModelSourceLines } from "./deliveryRewrite.js";
-import { type Settings } from "../config/settings.js";
+import { usesPreSearchContext, performPreSearch, ProviderRateLimitError, type ChatInvocationMetadata, type ChatMessage, mergeWebCitations } from "../integrations/chat.js";
+import { finalizeAnswerForDelivery } from "./deliveryRewrite.js";
 import { buildLinkContext } from "./linkContext.js";
-import { buildReplay, buildChatSystemPrompt, composeContinuousUserMessage, exceedsReplayLimits } from "./replay.js";
-import { contextTokens, MAX_CONTEXT_TOKENS } from "./contextBudget.js";
+import { buildReplay, buildChatSystemPrompt } from "./replay.js";
 import { applySourceSelection } from "./sourceSelection.js";
-import { requiresGlmReasoning } from "../integrations/providers/options.js";
 import { checkExecution } from "../runtime/execution.js";
 
 export const CURRENT_INFORMATION_UNAVAILABLE = [
@@ -20,11 +16,6 @@ export const CURRENT_INFORMATION_UNAVAILABLE = [
   "최신 정보를 검색 결과와 출처로 확인하지 못했습니다.",
   "추측해서 답하지 않겠습니다.",
 ].join("\n");
-
-export async function answerWithWebSearch(params: AnswerTurnParams): Promise<string> {
-  const result = await answerTurn(params);
-  return result.answer;
-}
 
 export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> {
   const currentTurnText =
@@ -40,46 +31,30 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
     return { answer: longRangeWeatherReply };
   }
   const continuous = params.continuousChat ?? params.settings.continuousChat;
-  const userId = params.userId ?? "default";
-  const history =
-    !continuous && params.settings.memoryEnabled && params.settings.memoryMaxMessages > 0
-      ? await loadUserMemory({
-        memoryDir: params.settings.memoryDir,
-        userId,
-        chatScope: params.chatScope,
-        conversationId: params.conversationId,
-        maxMessages: params.settings.memoryMaxMessages
-      })
-      : [];
   const recentTurns = params.recentTurns ?? [];
-  const priorUserTexts = continuous
-    ? recentTurns.filter((turn) => turn.role === "user").map((turn) => turn.text)
-    : history.filter((message) => message.role === "human").map((message) => message.content);
-  const priorTexts = continuous
-    ? recentTurns.map((turn) => turn.text)
-    : history.map((message) => message.content);
+  const priorUserTexts = recentTurns.filter((turn) => turn.role === "user").map((turn) => turn.text);
+  const priorTexts = recentTurns.map((turn) => turn.text);
 
-  const currentInfoRequired = isCurrentInformationRequest(currentTurnText);
+  const signals = params.signals;
+  const currentInfoRequired = signals ? signals.currentInfo : isCurrentInformationRequest(currentTurnText);
   const intimacyActive =
     params.settings.intimacyEnabled &&
     looksUserInitiatedIntimacy(currentTurnText, priorTexts);
   const explicitSearch = isExplicitSearchRequest(currentTurnText);
-  const searchFollowUp =
-    !currentInfoRequired &&
-    !explicitSearch &&
-    isSearchFollowUp(priorUserTexts.at(-1), currentTurnText);
-  const nativeSearch = usesNativeWebSearch(params.settings);
-  const searchToolEnabled =
-    !nativeSearch &&
-    isSearchToolAvailable(params.settings) &&
+  const followUpSignal = signals
+    ? signals.searchFollowUp
+    : isSearchFollowUp(priorUserTexts.at(-1), currentTurnText);
+  const searchFollowUp = !currentInfoRequired && !explicitSearch && followUpSignal;
+  const searchEnabled =
+    usesPreSearchContext(params.settings) &&
     !(intimacyActive && !explicitSearch && !currentInfoRequired && !searchFollowUp);
-  const preSearchMode = searchToolEnabled && usesPreSearchContext(params.settings);
   const wantsPreSearch =
-    preSearchMode && (currentInfoRequired || explicitSearch || searchFollowUp);
+    searchEnabled && (currentInfoRequired || explicitSearch || searchFollowUp);
   const startedAt = Date.now();
   const searchTask: Promise<PreparedSearch> = wantsPreSearch
     ? resolveSearchQuery(params.settings, priorUserTexts, currentTurnText, {
       forceQuery: currentInfoRequired || explicitSearch,
+      followUp: followUpSignal,
     }).then(async (query) => ({
       query,
       context: query ? await performPreSearch(params.settings, query) : null,
@@ -87,23 +62,8 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
     : Promise.resolve({ query: undefined, context: null });
   const deliveryEnabled =
     params.settings.deliveryRewriteEnabled && !intimacyActive;
-  const deliveryLimit =
-    params.settings.deliveryMaxOutputTokens ?? DEFAULT_DELIVERY_MAX_TOKENS;
-  let generationSettings: Settings =
-    params.settings.deliveryRewriteEnabled && (continuous || deliveryEnabled) && !(params.settings.aiProvider === "openrouter" && requiresGlmReasoning(params.settings.chatModel))
-      ? {
-        ...params.settings,
-        chatMaxOutputTokens: Math.min(
-          params.settings.chatMaxOutputTokens ?? deliveryLimit,
-          Math.round(deliveryLimit * 1.1),
-        ),
-      }
-      : params.settings;
-
-  const simpleSocialTurn = isSimpleSocialTurn(currentTurnText) && !params.images?.length;
-  if (simpleSocialTurn && params.settings.aiProvider === "openrouter" && requiresGlmReasoning(params.settings.chatModel) && params.settings.chatThinkingMode === "default") {
-    generationSettings = { ...generationSettings, chatThinkingMode: "low" };
-  }
+  const simpleSocialTurn =
+    (signals ? signals.socialOnly : isSimpleSocialTurn(currentTurnText)) && !params.images?.length;
 
   let search: PreparedSearch;
   let linkContext: Awaited<ReturnType<typeof buildLinkContext>>;
@@ -130,65 +90,28 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   let epoch = 0;
   try {
     const systemContent = buildChatSystemPrompt(params.settings, {
-      searchEnabled: nativeSearch || searchToolEnabled,
+      searchEnabled,
       intimacyActive,
     });
-    if (continuous && nativeSearch) {
-      const replay = buildReplay(recentTurns, true);
-      epoch = replay.epoch;
-      const userContent = composeContinuousUserMessage({
-        referenceContext,
+    const replay = continuous
+      ? buildReplay(recentTurns, Math.min(38, Math.max(0, (params.workingTurnLimit ?? 40) - 2)))
+      : { messages: recentTurns.map((turn): ChatMessage => ({ role: turn.role, content: turn.text })), epoch: 0 };
+    epoch = replay.epoch;
+    invocation = await invokeChatWithIntimacyRecovery({
+      settings: params.settings,
+      maxContinuations: deliveryEnabled && !searchEnabled ? 0 : 1,
+      intimacyActive,
+      messages: buildTurnMessages({
+        systemContent,
+        history: replay.messages,
         memoryContext,
+        referenceContext,
         linkContext: linkContext?.content ?? null,
         searchContext: preSearch?.context ?? null,
         currentTurnText,
-      });
-      const messages: ChatMessage[] = exceedsReplayLimits(
-        replay,
-        userContent.length,
-        params.workingTurnLimit,
-      ) || contextTokens([{ role: "system", content: systemContent }, ...replay.messages, { role: "user", content: userContent, images: params.images }]) > MAX_CONTEXT_TOKENS
-        ? []
-        : replay.messages;
-      if (messages.length !== replay.messages.length) {
-        epoch = replay.epoch + 1;
-      }
-      invocation = await invokeChatWithIntimacyRecovery({
-        settings: generationSettings,
-        preserveReplay: true,
-        maxContinuations: 1,
-        enableSearchTool: searchToolEnabled && !preSearchMode,
-        webFetchUrlSource: currentTurnText,
-        intimacyActive,
-        messages: [
-          { role: "system", content: systemContent },
-          ...messages,
-          { role: "user", content: userContent, images: params.images },
-        ],
-      });
-    } else {
-      const replay = continuous
-        ? buildReplay(recentTurns, false, Math.min(38, Math.max(0, (params.workingTurnLimit ?? 40) - 2)))
-        : { messages: history.map((message): ChatMessage => ({ role: message.role === "ai" ? "assistant" : "user", content: message.content })), epoch: 0 };
-      epoch = replay.epoch;
-      invocation = await invokeChatWithIntimacyRecovery({
-        settings: generationSettings,
-        enableSearchTool: searchToolEnabled && !preSearchMode,
-        maxContinuations: deliveryEnabled && !searchToolEnabled ? 0 : 1,
-        webFetchUrlSource: currentTurnText,
-        intimacyActive,
-        messages: buildTurnMessages({
-          systemContent,
-          history: replay.messages,
-          memoryContext,
-          referenceContext,
-          linkContext: linkContext?.content ?? null,
-          searchContext: preSearch?.context ?? null,
-          currentTurnText,
-          images: params.images,
-        }),
-      });
-    }
+        images: params.images,
+      }),
+    });
   } catch (error) {
     if (error instanceof ProviderRateLimitError) {
       return { answer: error.message };
@@ -201,12 +124,7 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   }
   const answeredAt = Date.now();
   const selected = applySourceSelection(invocation.content, invocation.citations);
-  const transcript: TurnTranscript | undefined =
-    continuous && invocation.wireMessages.length > 0
-      ? { wireMessages: invocation.wireMessages, epoch }
-      : undefined;
   if (
-    !nativeSearch &&
     (currentInfoRequired || explicitSearch || searchFollowUp) &&
     (!invocation.searchUsed || selected.citations.length === 0)
   ) {
@@ -228,29 +146,12 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
     })),
   });
   logTurnTiming(startedAt, preparedAt, answeredAt, Date.now());
-  const memoryQuestion = currentTurnText;
-
-  if (!continuous && params.settings.memoryEnabled && params.settings.memoryMaxMessages > 0) {
-    await appendUserMemory({
-      memoryDir: params.settings.memoryDir,
-      userId,
-      chatScope: params.chatScope,
-      conversationId: params.conversationId,
-      maxMessages: params.settings.memoryMaxMessages,
-      messages: [
-        { role: "human", content: memoryQuestion, at: Date.now() },
-        { role: "ai", content: answer, at: Date.now() }
-      ]
-    });
-  }
 
   return {
     answer,
-    transcript: continuous && !nativeSearch
+    transcript: continuous
       ? { wireMessages: [{ role: "user", content: currentTurnText }, { role: "assistant", content: answer }], epoch }
-      : transcript && (removeModelSourceLines(answer).replace(/\s/gu, "") !== invocation.wireMessages.at(-1)?.content.replace(/\s/gu, "") || Boolean(params.images?.length))
-        ? { wireMessages: [], epoch: epoch + 1 }
-        : transcript
+      : undefined,
   };
 }
 
@@ -266,6 +167,6 @@ export function logTurnTiming(
 }
 
 export { type RecentTurnInput, type TurnTranscript, type TurnAnswer, type AnswerTurnParams, type Replay } from "./types.js";
-export { buildChatSystemPrompt, composeContinuousUserMessage, exceedsReplayLimits, buildReplay } from "./replay.js";
+export { buildChatSystemPrompt, buildReplay } from "./replay.js";
 export { isSearchFollowUp, resolveSearchQuery, parseRewrittenQuery, isExplicitSearchRequest, isInformationRequestForm, isCurrentInformationRequest, normalizeCurrentTurnText } from "./queryPolicy.js";
 export { applySourceSelection } from "./sourceSelection.js";

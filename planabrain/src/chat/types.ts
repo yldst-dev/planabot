@@ -1,3 +1,4 @@
+import type { TurnSignals } from "../decision/turnSignals.js";
 import { type WireMessage, type InputImage, type PreSearchContext, type ChatMessage } from "../integrations/chat.js";
 import { type Settings } from "../config/settings.js";
 
@@ -33,6 +34,7 @@ export type AnswerTurnParams = {
   recentTurns?: RecentTurnInput[];
   continuousChat?: boolean;
   workingTurnLimit?: number;
+  signals?: TurnSignals;
 };
 
 export type PreparedSearch = {
@@ -43,5 +45,4 @@ export type PreparedSearch = {
 export type Replay = {
   messages: ChatMessage[];
   epoch: number;
-  turnCount: number;
 };

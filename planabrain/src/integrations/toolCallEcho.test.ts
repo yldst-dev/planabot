@@ -33,9 +33,10 @@ test("keeps ordinary sentences that mention search", () => {
   assert.equal(stripToolCallEcho(raw), raw);
 });
 
-test("only instructs tool usage when the search tool is attached", () => {
+test("search-enabled prompts rely on provided results instead of tool calls", () => {
   const enabled = buildSystemPrompt(promptSettings, { searchEnabled: true });
-  assert.match(enabled, /web_search 도구를 먼저 호출/u);
+  assert.match(enabled, /\[웹 검색 결과\]/u);
+  assert.doesNotMatch(enabled, /web_search 도구를 먼저 호출/u);
 
   const disabled = buildSystemPrompt(promptSettings, { searchEnabled: false });
   assert.doesNotMatch(disabled, /web_search 도구를 먼저 호출/u);
@@ -45,14 +46,4 @@ test("only instructs tool usage when the search tool is attached", () => {
 test("defaults to the search-disabled rules", () => {
   const fallback = buildSystemPrompt(promptSettings);
   assert.doesNotMatch(fallback, /web_search 도구를 먼저 호출/u);
-});
-
-test("native search mode forces web search without tool-call language", () => {
-  const native = buildSystemPrompt(promptSettings, {
-    searchEnabled: true,
-    searchMode: "native",
-  });
-  assert.match(native, /반드시 웹 검색으로 최신 정보를 확인/u);
-  assert.doesNotMatch(native, /web_search 도구를 먼저 호출/u);
-  assert.doesNotMatch(native, /웹 검색 도구를 사용할 수 없습니다/u);
 });

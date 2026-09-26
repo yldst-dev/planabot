@@ -13,6 +13,10 @@ pub(crate) enum Command {
     Token,
     #[command(description = "내 대화 메모리 초기화")]
     MemoryReset,
+    #[command(description = "저장된 기억 확인")]
+    Memory,
+    #[command(description = "기억 하나 삭제 (/forget 번호)")]
+    Forget,
     #[command(description = "오늘 할 일 확인")]
     Todo,
     #[command(description = "일정 확인 또는 등록")]

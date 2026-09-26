@@ -16,7 +16,6 @@ planabrain/dist
 *.swp
 .DS_Store
 .planabrain
-sub2api
 .tmp
 .playwright-mcp
 hiromi/downloads
