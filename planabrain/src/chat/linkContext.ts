@@ -1,12 +1,13 @@
 import { type Settings } from "../config/settings.js";
 import { type WebCitation, mergeWebCitations } from "../integrations/chat.js";
 import { extractUrls, canFetchUrls, fetchWebPage } from "../integrations/webFetch.js";
+import { isImageUrl } from "./imageLinks.js";
 
 export async function buildLinkContext(
   settings: Settings,
   question: string,
 ): Promise<{ content: string; citations: WebCitation[]; } | null> {
-  const urls = extractUrls(question);
+  const urls = extractUrls(question, 10).filter((url) => !isImageUrl(url)).slice(0, 3);
   if (urls.length === 0) {
     return null;
   }

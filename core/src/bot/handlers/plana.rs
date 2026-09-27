@@ -6,11 +6,12 @@ use chrono::{Datelike, FixedOffset, Timelike, Weekday};
 use log::{error, warn};
 use once_cell::sync::Lazy;
 use teloxide::prelude::*;
-use teloxide::types::{FileId, Message, ReactionType};
+use teloxide::types::{Message, ReactionType};
 use teloxide::utils::html;
+use tokio::time;
 use tokio::time::Duration;
-use tokio::{fs, time};
 
+use super::super::media::{self, ImageSource};
 use super::super::telegram::{
     SendOptions, send_reply_html_with_fallback, send_reply_markdown_with_fallback,
     send_reply_with_fallback,
@@ -22,14 +23,39 @@ use crate::time::kst_now;
 
 pub(super) const PLANABRAIN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(180);
 
+const MEDIA_GROUP_SETTLE: Duration = Duration::from_millis(1500);
+
 pub(super) const ADMIN_NOTICE_MIN_INTERVAL: Duration = Duration::from_secs(600);
 
 pub(super) static ADMIN_NOTICE_LAST_SENT: Lazy<
     Mutex<HashMap<planabrain::PlanabrainErrorKind, Instant>>,
 > = Lazy::new(|| Mutex::new(HashMap::new()));
 
-#[allow(clippy::collapsible_if)]
 pub(crate) async fn handle_plana_message<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
+where
+    B: Requester + teloxide::net::Download + Send + Sync + 'static,
+    <B as Requester>::Err: std::error::Error + Send + Sync + 'static,
+    B::SendChatAction: Send,
+    B::SetMessageReaction: Send,
+    B::EditMessageText: Send,
+{
+    if msg.media_group_id().is_none() {
+        return run_plana_turn(bot, msg, state).await;
+    }
+    if !state.claim_media_group_turn(&msg) {
+        return Ok(());
+    }
+    tokio::spawn(async move {
+        time::sleep(MEDIA_GROUP_SETTLE).await;
+        if let Err(err) = run_plana_turn(bot, msg, state).await {
+            error!("앨범 질문 처리 실패: {:?}", err);
+        }
+    });
+    Ok(())
+}
+
+#[allow(clippy::collapsible_if)]
+async fn run_plana_turn<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
 where
     B: Requester + teloxide::net::Download + Send + Sync + 'static,
     <B as Requester>::Err: std::error::Error + Send + Sync + 'static,
@@ -46,7 +72,7 @@ where
 
     state.record_group_chat(&msg).await;
 
-    let Some(text) = extract_message_text(&msg) else {
+    let Some(text) = extract_message_text(&msg).or_else(|| media_reply_text(&msg, &state)) else {
         return Ok(());
     };
     let current_turn_text = text.trim().to_string();
@@ -92,7 +118,18 @@ where
     }
 
     let conversation_scope_id = state.planabrain_conversation_scope_id(&msg);
-    let question = question.trim().to_string();
+    let (image_sources, remembered_images) = turn_image_sources(&msg, &state);
+    let question = match question.trim() {
+        "" if !image_sources.is_empty() => {
+            media::media_label(&msg).unwrap_or_else(|| "(이미지)".to_string())
+        }
+        trimmed => trimmed.to_string(),
+    };
+    let memory_turn_text = if memory_turn_text.is_empty() {
+        question.clone()
+    } else {
+        memory_turn_text
+    };
     let question = build_planabrain_question(&question, &msg, &state);
     if question.trim().is_empty() {
         let sent = send_reply_markdown_with_fallback(
@@ -147,6 +184,7 @@ where
         now_ms: crate::schedule::now_ms(),
         memory_enabled: local_memory_enabled,
         token_budget: planabrain::resolve_local_memory_token_budget(),
+        has_image: !image_sources.is_empty(),
     })
     .await
     {
@@ -196,16 +234,22 @@ where
         _ => question,
     };
 
-    let image_input = if let Some(user) = msg.from.as_ref() {
-        let user_id = i64::try_from(user.id.0).unwrap_or(i64::MAX);
-        if state.allow_image_request(user_id).await {
-            build_image_input(&bot, &msg).await
-        } else {
-            None
-        }
+    let images = if image_sources.is_empty() {
+        media::TurnImages::default()
     } else {
-        None
+        let limiter_key = msg
+            .from
+            .as_ref()
+            .and_then(|user| i64::try_from(user.id.0).ok())
+            .unwrap_or(msg.chat.id.0);
+        let allowed = remembered_images || state.allow_image_request(limiter_key).await;
+        media::load_turn_images(&bot, image_sources, allowed).await
     };
+    let image_input = planabrain::TurnImageInput {
+        inputs: images.inputs,
+        notice: images.notice,
+    };
+    let seen_images = images.sources;
     let now = kst_now().await;
     let question = format_question_with_metadata(&question, now, &msg);
     let ask_context = planabrain::AskContext {
@@ -220,7 +264,7 @@ where
         &current_turn_text,
         prepared.memory_context.as_deref(),
         &ask_context,
-        image_input,
+        &image_input,
         &prepared.recent_turns,
         prepared.signals.as_ref(),
     );
@@ -255,8 +299,9 @@ where
             let answer = outcome.answer.trim().to_string();
             let reply = planabrain::truncate_message(&answer, 4000);
             let sent = deliver_planabrain_answer(&bot, &msg, reply).await?;
+            let memory_turn_text = with_image_marker(&memory_turn_text, seen_images.len());
             state
-                .record_planabrain_reply(&sent, &conversation_scope_id)
+                .record_planabrain_reply_with_images(&sent, &conversation_scope_id, seen_images)
                 .await;
             if !memory_turn_text.is_empty() {
                 if let Err(err) = planabrain::remember_planabrain_exchange(
@@ -477,10 +522,50 @@ pub(crate) fn is_plana_trigger(msg: &Message, state: &AppState) -> bool {
     }
 
     if text.trim().is_empty() {
-        return false;
+        return media_reply_text(msg, state).is_some();
     }
 
     state.is_reply_to_planabrain(msg)
+}
+
+fn media_reply_text(msg: &Message, state: &AppState) -> Option<String> {
+    if !state.is_reply_to_planabrain(msg) {
+        return None;
+    }
+    media::extract_image_source(msg)?;
+    media::media_label(msg)
+}
+
+fn turn_image_sources(msg: &Message, state: &AppState) -> (Vec<ImageSource>, bool) {
+    let own = message_image_sources(msg, state);
+    if !own.is_empty() {
+        return (own, false);
+    }
+    let Some(reply) = msg.reply_to_message() else {
+        return (Vec::new(), false);
+    };
+    let remembered = state.planabrain_reply_images(msg);
+    if !remembered.is_empty() {
+        return (remembered, true);
+    }
+    let mut sources = message_image_sources(reply, state);
+    sources.truncate(media::MAX_TURN_IMAGES);
+    (sources, false)
+}
+
+fn message_image_sources(msg: &Message, state: &AppState) -> Vec<ImageSource> {
+    let grouped = state.media_group_images(msg);
+    if !grouped.is_empty() {
+        return grouped;
+    }
+    media::extract_image_source(msg).into_iter().collect()
+}
+
+fn with_image_marker(text: &str, count: usize) -> String {
+    if count == 0 || text.is_empty() {
+        return text.to_string();
+    }
+    format!("{text}\n(이미지 {count}장 첨부)")
 }
 
 pub(super) async fn add_heart_reaction<B>(bot: &B, msg: &Message)
@@ -623,140 +708,6 @@ pub(super) fn build_planabrain_question(question: &str, msg: &Message, state: &A
         return format!("{label}:\n{context}");
     }
     format!("{label}:\n{context}\n\n질문:\n{question}")
-}
-
-pub(super) struct ImageSource {
-    file_id: FileId,
-    mime_type: String,
-}
-
-pub(super) async fn build_image_input<B>(bot: &B, msg: &Message) -> Option<planabrain::ImageInput>
-where
-    B: Requester + teloxide::net::Download + ?Sized,
-{
-    let source = extract_image_source_from_message_or_reply(msg)?;
-    download_image_file(bot, &source)
-        .await
-        .map(|path| planabrain::ImageInput {
-            path,
-            mime_type: source.mime_type,
-        })
-}
-
-pub(super) fn extract_image_source_from_message_or_reply(msg: &Message) -> Option<ImageSource> {
-    if let Some(source) = extract_image_source(msg) {
-        return Some(source);
-    }
-    msg.reply_to_message().and_then(extract_image_source)
-}
-
-pub(super) fn extract_image_source(msg: &Message) -> Option<ImageSource> {
-    if let Some(photos) = msg.photo() {
-        let mut best = None;
-        let mut best_size = 0;
-        for photo in photos {
-            let size = photo.file.size;
-            if size >= best_size {
-                best_size = size;
-                best = Some(photo.file.id.clone());
-            }
-        }
-        let file_id = best?;
-        return Some(ImageSource {
-            file_id,
-            mime_type: "image/jpeg".to_string(),
-        });
-    }
-
-    if let Some((document, mime_type)) = msg.document().and_then(|document| {
-        document
-            .mime_type
-            .as_ref()
-            .map(|mime| mime.essence_str())
-            .filter(|mime| mime.starts_with("image/"))
-            .map(|mime| (document, mime.to_string()))
-    }) {
-        return Some(ImageSource {
-            file_id: document.file.id.clone(),
-            mime_type,
-        });
-    }
-
-    None
-}
-
-pub(super) async fn download_image_file<B>(
-    bot: &B,
-    source: &ImageSource,
-) -> Option<std::path::PathBuf>
-where
-    B: Requester + teloxide::net::Download + ?Sized,
-{
-    const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
-    let file = match bot.get_file(source.file_id.clone()).await {
-        Ok(file) => file,
-        Err(err) => {
-            warn!("이미지 파일 조회 실패: {}", err);
-            return None;
-        }
-    };
-    if file.size as u64 > MAX_IMAGE_BYTES {
-        warn!("이미지 파일 크기 초과: {}", file.size);
-        return None;
-    }
-
-    let current_dir = match std::env::current_dir() {
-        Ok(path) => path,
-        Err(err) => {
-            warn!("현재 작업 디렉터리 조회 실패: {}", err);
-            return None;
-        }
-    };
-    let data_root = std::env::var("PLANABRAIN_DATA_DIR")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| current_dir.join(value))
-        .unwrap_or(current_dir);
-    let dir = data_root.join(".planabot/planabrain_images");
-    if let Err(err) = fs::create_dir_all(&dir).await {
-        warn!("이미지 임시 디렉터리 생성 실패: {}", err);
-        return None;
-    }
-
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let filename = format!("image_{timestamp}.tmp");
-    let path = dir.join(filename);
-    let mut output = match fs::File::create(&path).await {
-        Ok(file) => file,
-        Err(err) => {
-            warn!("이미지 임시 파일 생성 실패: {}", err);
-            return None;
-        }
-    };
-
-    if bot.download_file(&file.path, &mut output).await.is_err() {
-        warn!("이미지 다운로드 실패");
-        let _ = fs::remove_file(&path).await;
-        return None;
-    }
-
-    let bytes = match fs::read(&path).await {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            warn!("이미지 임시 파일 읽기 실패: {}", err);
-            let _ = fs::remove_file(&path).await;
-            return None;
-        }
-    };
-    if bytes.len() as u64 > MAX_IMAGE_BYTES {
-        warn!("이미지 파일 크기 초과: {}", bytes.len());
-        let _ = fs::remove_file(&path).await;
-        return None;
-    }
-    Some(path)
 }
 
 #[cfg(test)]

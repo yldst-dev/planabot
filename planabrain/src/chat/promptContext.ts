@@ -60,8 +60,11 @@ export function buildTurnMessages(parts: {
   searchContext: string | null;
   currentTurnText: string;
   images?: InputImage[];
+  imageNotice?: string;
+  imageTokens?: number;
 }): ChatMessage[] {
   const contexts: ChatMessage[] = [];
+  if (parts.imageNotice) contexts.push({ role: "user", content: buildImageNotice(parts.imageNotice), contextKind: "reference" });
   if (parts.memoryContext) contexts.push({ role: "user", content: parts.memoryContext, contextKind: "memory" });
   if (parts.referenceContext) contexts.push({ role: "user", content: parts.referenceContext, contextKind: "reference" });
   if (parts.linkContext) contexts.push({ role: "user", content: parts.linkContext, contextKind: "evidence" });
@@ -71,7 +74,7 @@ export function buildTurnMessages(parts: {
     ...parts.history.map((message) => ({ ...message, contextKind: "history" as const })),
     ...contexts,
     { role: "user", content: parts.currentTurnText, images: parts.images, contextKind: "current" },
-  ]);
+  ], false, parts.imageTokens);
   const history = new Set(messages.filter((message) => message.contextKind === "history").map((message) => `${message.role}:${memoryKey(message.content)}`));
   return messages.flatMap((message) => {
     if (message.contextKind !== "memory") return [message];
@@ -81,6 +84,16 @@ export function buildTurnMessages(parts: {
     }).join("\n");
     return [{ ...message, content }];
   });
+}
+
+export function buildImageNotice(notice: string): string {
+  return [
+    "[IMAGE_STATUS]",
+    "사용자가 보낸 이미지 가운데 일부 또는 전부를 받지 못했습니다.",
+    notice,
+    "받지 못한 이미지의 내용은 추측하지 않습니다. 이유를 한 줄로 짧게 알리고, 받은 이미지와 글로 된 질문에만 답합니다.",
+    "[IMAGE_STATUS_END]",
+  ].join("\n");
 }
 
 function memoryKey(content: string): string {

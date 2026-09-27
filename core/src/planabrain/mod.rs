@@ -70,6 +70,12 @@ pub(crate) struct ImageInput {
     pub mime_type: String,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct TurnImageInput {
+    pub inputs: Vec<ImageInput>,
+    pub notice: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PlanabrainErrorKind {
@@ -131,6 +137,8 @@ pub(crate) struct TurnPrepareInput {
     pub memory_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<u32>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub has_image: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,8 +160,10 @@ struct AskRequest<'a> {
     current_turn_text: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     memory_context: Option<&'a str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    images: Vec<AskImage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    image: Option<AskImage>,
+    image_notice: Option<&'a str>,
     #[serde(skip_serializing_if = "<[serde_json::Value]>::is_empty")]
     recent_turns: &'a [serde_json::Value],
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -360,7 +370,7 @@ pub(crate) async fn run_planabrain_ask(
     current_turn_text: &str,
     memory_context: Option<&str>,
     context: &AskContext<'_>,
-    image_input: Option<ImageInput>,
+    images: &TurnImageInput,
     recent_turns: &[serde_json::Value],
     signals: Option<&serde_json::Value>,
 ) -> Result<AskOutcome> {
@@ -368,16 +378,20 @@ pub(crate) async fn run_planabrain_ask(
         return Err(anyhow!("planabrain 비활성화"));
     }
 
-    let _image_cleanup = ImageCleanup(image_input.as_ref().map(|image| image.path.clone()));
+    let _image_cleanup = ImageCleanup(
+        images
+            .inputs
+            .iter()
+            .map(|image| image.path.clone())
+            .collect(),
+    );
     let request = AskRequest {
         context,
         question,
         current_turn_text,
         memory_context,
-        image: image_input.as_ref().map(|image| AskImage {
-            path: absolute_path(&image.path).to_string_lossy().into_owned(),
-            mime_type: image.mime_type.clone(),
-        }),
+        images: ask_images(&images.inputs),
+        image_notice: images.notice.as_deref(),
         recent_turns,
         signals,
     };
@@ -385,21 +399,13 @@ pub(crate) async fn run_planabrain_ask(
         server::post_json::<_, AskResponse>("/v1/ask", &request, PLANABRAIN_ASK_TIMEOUT).await;
     match served {
         Ok(Some(response)) => {
-            if let Some(image) = image_input.as_ref() {
-                let _ = std::fs::remove_file(&image.path);
-            }
             return Ok(AskOutcome {
                 answer: response.answer,
                 transcript: response.transcript,
             });
         }
         Ok(None) => {}
-        Err(err) => {
-            if let Some(image) = image_input.as_ref() {
-                let _ = std::fs::remove_file(&image.path);
-            }
-            return Err(err);
-        }
+        Err(err) => return Err(err),
     }
 
     let mut prepared = prepare_planabrain_ask(
@@ -407,7 +413,7 @@ pub(crate) async fn run_planabrain_ask(
         current_turn_text,
         memory_context,
         context,
-        image_input,
+        images,
         recent_turns,
         signals,
     )?;
@@ -422,6 +428,16 @@ pub(crate) async fn run_planabrain_ask(
         answer: response.answer,
         transcript: response.transcript,
     })
+}
+
+fn ask_images(inputs: &[ImageInput]) -> Vec<AskImage> {
+    inputs
+        .iter()
+        .map(|image| AskImage {
+            path: absolute_path(&image.path).to_string_lossy().into_owned(),
+            mime_type: image.mime_type.clone(),
+        })
+        .collect()
 }
 
 fn absolute_path(path: &Path) -> PathBuf {
@@ -758,11 +774,11 @@ static ALLOWED_USER_IDS: Lazy<HashSet<i64>> = Lazy::new(|| {
         .collect()
 });
 
-struct ImageCleanup(Option<PathBuf>);
+struct ImageCleanup(Vec<PathBuf>);
 
 impl Drop for ImageCleanup {
     fn drop(&mut self) {
-        if let Some(path) = self.0.as_ref() {
+        for path in &self.0 {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -771,19 +787,14 @@ impl Drop for ImageCleanup {
 struct PreparedPlanabrainAsk {
     command: Option<ProcessCommand>,
     question_file: Option<PathBuf>,
-    image_file: Option<PathBuf>,
     recent_turns_file: Option<PathBuf>,
 }
 
 impl Drop for PreparedPlanabrainAsk {
     fn drop(&mut self) {
-        for path in [
-            self.question_file.as_ref(),
-            self.image_file.as_ref(),
-            self.recent_turns_file.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
+        for path in [self.question_file.as_ref(), self.recent_turns_file.as_ref()]
+            .into_iter()
+            .flatten()
         {
             let _ = std::fs::remove_file(path);
         }
@@ -795,7 +806,7 @@ fn prepare_planabrain_ask(
     current_turn_text: &str,
     memory_context: Option<&str>,
     context: &AskContext<'_>,
-    image_input: Option<ImageInput>,
+    images: &TurnImageInput,
     recent_turns: &[serde_json::Value],
     signals: Option<&serde_json::Value>,
 ) -> Result<PreparedPlanabrainAsk> {
@@ -816,24 +827,24 @@ fn prepare_planabrain_ask(
         .env("PLANABRAIN_OUTPUT_JSON", "1")
         .env("PLANABRAIN_CURRENT_TURN_TEXT", current_turn_text)
         .env_remove("PLANABRAIN_MEMORY_CONTEXT")
-        .env_remove("PLANABRAIN_TURN_SIGNALS");
+        .env_remove("PLANABRAIN_TURN_SIGNALS")
+        .env_remove("PLANABRAIN_IMAGE_FILE")
+        .env_remove("PLANABRAIN_IMAGE_FILES")
+        .env_remove("PLANABRAIN_IMAGE_NOTICE");
     if let Some(signals) = signals {
         command.env("PLANABRAIN_TURN_SIGNALS", signals.to_string());
     }
     if let Some(memory_context) = memory_context {
         command.env("PLANABRAIN_MEMORY_CONTEXT", memory_context);
     }
-    if let Some(image_input) = image_input.as_ref() {
-        let image_path = if image_input.path.is_absolute() {
-            image_input.path.clone()
-        } else {
-            std::env::current_dir()
-                .map(|cwd| cwd.join(&image_input.path))
-                .unwrap_or_else(|_| image_input.path.clone())
-        };
-        command
-            .env("PLANABRAIN_IMAGE_FILE", image_path)
-            .env("PLANABRAIN_IMAGE_MIME_TYPE", &image_input.mime_type);
+    if !images.inputs.is_empty() {
+        command.env(
+            "PLANABRAIN_IMAGE_FILES",
+            serde_json::to_string(&ask_images(&images.inputs))?,
+        );
+    }
+    if let Some(notice) = images.notice.as_deref() {
+        command.env("PLANABRAIN_IMAGE_NOTICE", notice);
     }
     let mut recent_turns_file = None;
     if !recent_turns.is_empty() {
@@ -868,7 +879,6 @@ fn prepare_planabrain_ask(
     Ok(PreparedPlanabrainAsk {
         command: Some(command),
         question_file,
-        image_file: image_input.map(|input| input.path),
         recent_turns_file,
     })
 }
@@ -1101,6 +1111,7 @@ mod tests {
             now_ms: 5,
             memory_enabled: false,
             token_budget: None,
+            has_image: false,
         };
         let json = serde_json::to_string(&input).expect("serialize");
         assert!(json.contains("\"userId\":\"u1\""));
@@ -1108,6 +1119,13 @@ mod tests {
         assert!(json.contains("\"nowMs\":5"));
         assert!(!json.contains("conversationId"));
         assert!(!json.contains("tokenBudget"));
+        assert!(!json.contains("hasImage"));
+        let with_image = serde_json::to_string(&TurnPrepareInput {
+            has_image: true,
+            ..input
+        })
+        .expect("serialize");
+        assert!(with_image.contains("\"hasImage\":true"));
     }
 
     #[tokio::test]
@@ -1124,6 +1142,7 @@ mod tests {
             now_ms: crate::schedule::now_ms(),
             memory_enabled: false,
             token_budget: None,
+            has_image: false,
         };
         let prepared = prepare_turn(&input).await.expect("turn-prepare");
         eprintln!("prepared: {prepared:?}");

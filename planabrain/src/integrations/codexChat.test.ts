@@ -105,6 +105,24 @@ test("fast mode adds the priority service tier only when enabled", async () => {
   });
 });
 
+test("image detail is attached to every image only when configured", async () => {
+  await withGateway((res) => streamChunks(res, HAPPY_EVENTS), async (baseUrl, requests) => {
+    const base = { codexApiKey: "cg_test", codexBaseUrl: baseUrl, continuousChat: false };
+    const messages = [{ role: "user" as const, content: "", images: [{ data: "AAAA", mimeType: "image/webp" }, { data: "BBBB", mimeType: "image/png" }] }];
+    await invokeChatWithMetadata({ settings: testSettings({ ...base, codexImageDetail: "low" }), maxContinuations: 0, messages });
+    await invokeChatWithMetadata({ settings: testSettings(base), maxContinuations: 0, messages });
+    const content = (index: number) => (requests[index]?.body.input as Array<{ content: unknown; }>)[0]?.content;
+    assert.deepEqual(content(0), [
+      { type: "input_image", image_url: "data:image/webp;base64,AAAA", detail: "low" },
+      { type: "input_image", image_url: "data:image/png;base64,BBBB", detail: "low" },
+    ]);
+    assert.deepEqual(content(1), [
+      { type: "input_image", image_url: "data:image/webp;base64,AAAA" },
+      { type: "input_image", image_url: "data:image/png;base64,BBBB" },
+    ]);
+  });
+});
+
 test("codex falls back to the joined deltas and always sends instructions", async () => {
   const events = sse([
     { type: "response.output_text.delta", delta: "조각 " },

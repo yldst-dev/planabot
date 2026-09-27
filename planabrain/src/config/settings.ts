@@ -4,6 +4,7 @@ export type Settings = {
   codexApiKey: string;
   codexBaseUrl: string;
   codexFast: boolean;
+  codexImageDetail?: CodexImageDetail;
   ollamaApiKeys: string[];
   ollamaSearchHost?: string;
   ollamaWebSearchEnabled: boolean;
@@ -25,6 +26,10 @@ export type Settings = {
   intimacyFallbackModel?: string;
   auxModel?: string;
 };
+
+export const CODEX_IMAGE_DETAILS = ["low", "high", "auto"] as const;
+
+export type CodexImageDetail = (typeof CODEX_IMAGE_DETAILS)[number];
 
 export const DEFAULT_CODEX_MODEL = "gpt-6-astra";
 
@@ -51,6 +56,7 @@ export function loadSettings(): Settings {
       "PLANABRAIN_CODEX_BASE_URL",
     ),
     codexFast: parseBooleanEnv("PLANABRAIN_CODEX_FAST", false),
+    codexImageDetail: parseImageDetailEnv("PLANABRAIN_CODEX_IMAGE_DETAIL"),
     ollamaApiKeys,
     ollamaSearchHost: ollamaApiKeys.length > 0 ? resolveOllamaSearchHost() : undefined,
     ollamaWebSearchEnabled: parseBooleanEnv("PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH", false),
@@ -156,6 +162,17 @@ function parseBoundedPositiveIntEnv(key: string, defaultValue: number, minValue:
     throw new Error(`${key} must be between ${minValue} and ${maxValue}`);
   }
   return value;
+}
+
+function parseImageDetailEnv(key: string): CodexImageDetail | undefined {
+  const normalized = process.env[key]?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if ((CODEX_IMAGE_DETAILS as readonly string[]).includes(normalized)) {
+    return normalized as CodexImageDetail;
+  }
+  throw new Error(`${key} must be one of: ${CODEX_IMAGE_DETAILS.join(", ")}`);
 }
 
 function parseThinkingModeEnv(key: string): Settings["chatThinkingMode"] {

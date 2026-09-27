@@ -103,6 +103,20 @@ test("jev is used whenever its key exists unless another provider is chosen", ()
   });
 });
 
+test("an attached image is part of the judged state", async () => {
+  const mock = mockFetch(() => answers({
+    route: { type: "choice", choice: "chat", confidence: 0.9 },
+    current_info: { type: "noul", noul: 0.1 },
+    social: { type: "noul", noul: 0.05 },
+  }));
+  try {
+    await classifyTurn({ message: "이거 뭐야?", hasImage: true }, config);
+    await classifyTurn({ message: "이거 뭐야?" }, config);
+    assert.deepEqual(mock.requests[0].body.state, { last_user_message: "이거 뭐야?", image_attached: true });
+    assert.deepEqual(mock.requests[1].body.state, { last_user_message: "이거 뭐야?" });
+  } finally { mock.restore(); }
+});
+
 test("codex takes over decisions when jev is not configured", () => {
   const settings = () => testSettings();
   assert.equal(loadDecisionEvaluator({ OPENROUTER_API_KEY: "key" }, settings)?.name, "jev");

@@ -17,6 +17,7 @@ export type TurnPrepareInput = {
   nowMs?: number;
   memoryEnabled?: boolean;
   tokenBudget?: number;
+  hasImage?: boolean;
 };
 
 export type RecentTurn = {
@@ -102,6 +103,7 @@ async function executePrepareTurn(input: TurnPrepareInput, deps: TurnPrepareDeps
     classification = await deps.classifyTurn({
       message: query,
       previousUserMessage: recentTurns.filter((turn) => turn.role === "user").at(-1)?.text,
+      hasImage: input.hasImage === true,
       memories: recall.candidates.map((memory) => ({ id: memory.id, content: memory.content })),
     });
   } catch (error) {
@@ -206,6 +208,7 @@ export function parseTurnPrepareInput(raw: string): TurnPrepareInput {
     nowMs: readOptionalNumber(record.nowMs),
     memoryEnabled: typeof record.memoryEnabled === "boolean" ? record.memoryEnabled : undefined,
     tokenBudget: readOptionalNumber(record.tokenBudget),
+    hasImage: record.hasImage === true,
   };
 }
 

@@ -272,6 +272,13 @@ pub(crate) const FIELDS: &[Field] = &[
         Kind::Bool,
     ),
     select(
+        "PLANABRAIN_CODEX_IMAGE_DETAIL",
+        "codex",
+        "이미지 해상도",
+        "low면 이미지 입력 토큰이 약 절반으로 줄고 간단한 글자는 그대로 읽습니다. 비우면 모델 기본값을 씁니다.",
+        &["low", "high", "auto"],
+    ),
+    select(
         "PLANABRAIN_CHAT_THINKING_MODE",
         "model",
         "사고 수준",

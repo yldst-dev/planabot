@@ -248,6 +248,7 @@ mod tests {
             now_ms: 1_788_800_000_000,
             memory_enabled: false,
             token_budget: None,
+            has_image: false,
         };
         let started = std::time::Instant::now();
         let output: Option<crate::planabrain::TurnPrepareOutput> =

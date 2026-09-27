@@ -132,3 +132,49 @@ test("greetings do not trigger a pre-search", async () => {
     mock.restore();
   }
 });
+
+test("image questions that need search describe the image first and search by its name", async () => {
+  const mock = installFetch((request) => {
+    if (request.url.endsWith("/api/web_search")) {
+      return jsonResponse({ results: [{ title: "플라나 텀블러 가격", url: "https://shop.example/plana", content: "플라나 텀블러 500ml는 19,000원입니다." }] });
+    }
+    const instructions = String(request.body.instructions ?? "");
+    if (instructions.includes("이미지 요약기")) return codexStream("플라나 텀블러 500ml, 흰색 로고");
+    if (instructions.includes("웹 검색어 생성기")) return codexStream("{\"query\": \"플라나 텀블러 500ml 가격\"}");
+    return codexStream("확인 완료.\n선생님.\n19,000원입니다.\n\n출처: [1]");
+  });
+  try {
+    await answerTurn({
+      question: "이거 얼마야?",
+      currentTurnText: "이거 얼마야?",
+      settings: createSettings({ searchQueryRewriteEnabled: true, deliveryRewriteEnabled: false }),
+      images: [{ data: "AAAA", mimeType: "image/png" }],
+      signals: { route: "chat", routeConfident: true, currentInfo: true, searchFollowUp: false, socialOnly: false },
+    });
+    const search = mock.requests.find((request) => request.url.endsWith("/api/web_search"));
+    assert.equal(search?.body.query, "플라나 텀블러 500ml 가격");
+    const rewrite = mock.codexRequests().find((request) => String(request.body.instructions).includes("웹 검색어 생성기"));
+    assert.match(JSON.stringify(rewrite?.body.input), /이미지 내용: 플라나 텀블러 500ml/u);
+    const summary = mock.codexRequests().find((request) => String(request.body.instructions).includes("이미지 요약기"));
+    assert.match(JSON.stringify(summary?.body.input), /input_image/u);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("image questions without search never pay for an image summary", async () => {
+  const mock = installFetch(() => codexStream("빨간 원입니다."));
+  try {
+    await answerTurn({
+      question: "이거 뭐야?",
+      currentTurnText: "이거 뭐야?",
+      settings: createSettings({ deliveryRewriteEnabled: false }),
+      images: [{ data: "AAAA", mimeType: "image/png" }],
+      signals: { route: "chat", routeConfident: true, currentInfo: false, searchFollowUp: false, socialOnly: false },
+    });
+    assert.equal(mock.codexRequests().length, 1);
+    assert.equal(mock.requests.some((request) => request.url.endsWith("/api/web_search")), false);
+  } finally {
+    mock.restore();
+  }
+});

@@ -1,6 +1,7 @@
 mod commands;
 mod gallery;
 mod handlers;
+mod media;
 mod state;
 mod telegram;
 
@@ -67,6 +68,7 @@ where
     let handler = dptree::entry()
         .branch(
             Update::filter_message()
+                .inspect(|msg: Message, state: AppState| state.record_media_group(&msg))
                 .branch(
                     filter_command::<commands::Command, _>()
                         .endpoint(handlers::handle_command::<B>),

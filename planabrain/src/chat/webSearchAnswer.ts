@@ -1,11 +1,12 @@
 import { type AnswerTurnParams, type TurnAnswer, type PreparedSearch } from "./types.js";
-import { normalizeCurrentTurnText, isCurrentInformationRequest, isExplicitSearchRequest, isSearchFollowUp, resolveSearchQuery, isSimpleSocialTurn } from "./queryPolicy.js";
+import { normalizeCurrentTurnText, isCurrentInformationRequest, isExplicitSearchRequest, isSearchFollowUp, resolveSearchQuery, isSimpleSocialTurn, describeImagesForSearch } from "./queryPolicy.js";
 import { normalizeQuestionForMemory, buildCurrentTurnReference, buildMemoryContextMessage, buildTurnMessages } from "./promptContext.js";
 import { buildLongRangeWeatherReply } from "./weatherPolicy.js";
 import { looksUserInitiatedIntimacy, invokeChatWithIntimacyRecovery } from "./intimacyMode.js";
 import { usesPreSearchContext, performPreSearch, ProviderRateLimitError, type ChatInvocationMetadata, type ChatMessage, mergeWebCitations } from "../integrations/chat.js";
 import { finalizeAnswerForDelivery } from "./deliveryRewrite.js";
 import { buildLinkContext } from "./linkContext.js";
+import { imageTokenEstimate } from "./contextBudget.js";
 import { buildReplay, buildChatSystemPrompt } from "./replay.js";
 import { applySourceSelection } from "./sourceSelection.js";
 import { checkExecution } from "../runtime/execution.js";
@@ -52,13 +53,16 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
     searchEnabled && (currentInfoRequired || explicitSearch || searchFollowUp);
   const startedAt = Date.now();
   const searchTask: Promise<PreparedSearch> = wantsPreSearch
-    ? resolveSearchQuery(params.settings, priorUserTexts, currentTurnText, {
-      forceQuery: currentInfoRequired || explicitSearch,
-      followUp: followUpSignal,
-    }).then(async (query) => ({
-      query,
-      context: query ? await performPreSearch(params.settings, query) : null,
-    }))
+    ? (params.images?.length ? describeImagesForSearch(params.settings, params.images, currentTurnText) : Promise.resolve(undefined))
+      .then((imageSummary) => resolveSearchQuery(params.settings, priorUserTexts, currentTurnText, {
+        forceQuery: currentInfoRequired || explicitSearch,
+        followUp: followUpSignal,
+        imageSummary,
+      }))
+      .then(async (query) => ({
+        query,
+        context: query ? await performPreSearch(params.settings, query) : null,
+      }))
     : Promise.resolve({ query: undefined, context: null });
   const deliveryEnabled =
     params.settings.deliveryRewriteEnabled && !intimacyActive;
@@ -110,6 +114,8 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
         searchContext: preSearch?.context ?? null,
         currentTurnText,
         images: params.images,
+        imageNotice: params.imageNotice,
+        imageTokens: imageTokenEstimate(params.settings.codexImageDetail),
       }),
     });
   } catch (error) {

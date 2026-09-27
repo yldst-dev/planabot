@@ -4,18 +4,24 @@ import { estimateTokens } from "../runtime/tokens.js";
 import { ExecutionLimitError } from "../runtime/execution.js";
 
 export const MAX_CONTEXT_TOKENS = 24_000;
+export const DEFAULT_IMAGE_TOKENS = 4096;
+const LOW_DETAIL_IMAGE_TOKENS = 256;
 
-export function messageTokens(message: ChatMessage): number {
-  return 8 + Math.max(estimateTokens(message.content), estimateTokenCount(message.content), Math.ceil(message.content.length / 4)) + (message.images?.length ?? 0) * 4096;
+export function imageTokenEstimate(detail: string | undefined): number {
+  return detail === "low" ? LOW_DETAIL_IMAGE_TOKENS : DEFAULT_IMAGE_TOKENS;
 }
 
-export function contextTokens(messages: ChatMessage[]): number {
-  return messages.reduce((total, message) => total + messageTokens(message), 0);
+export function messageTokens(message: ChatMessage, imageTokens = DEFAULT_IMAGE_TOKENS): number {
+  return 8 + Math.max(estimateTokens(message.content), estimateTokenCount(message.content), Math.ceil(message.content.length / 4)) + (message.images?.length ?? 0) * imageTokens;
 }
 
-export function fitContextMessages(messages: ChatMessage[], preserveReplay = false): ChatMessage[] {
+export function contextTokens(messages: ChatMessage[], imageTokens = DEFAULT_IMAGE_TOKENS): number {
+  return messages.reduce((total, message) => total + messageTokens(message, imageTokens), 0);
+}
+
+export function fitContextMessages(messages: ChatMessage[], preserveReplay = false, imageTokens = DEFAULT_IMAGE_TOKENS): ChatMessage[] {
   const result = [...messages];
-  const sizes = result.map(messageTokens);
+  const sizes = result.map((message) => messageTokens(message, imageTokens));
   let total = sizes.reduce((sum, size) => sum + size, 0);
   const lastUser = [...result].reverse().find((message) => message.role === "user");
   const removable = (message: ChatMessage): boolean =>

@@ -21,6 +21,9 @@ const ALLOWED_CONTENT_TYPES = new Set([
   "text/markdown",
   "text/plain",
 ]);
+const IMAGE_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const PAGE_ACCEPT = "text/html,application/xhtml+xml,text/plain,text/markdown,application/json;q=0.9,*/*;q=0.1";
+const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/gif;q=0.9";
 const BLOCKED_HOST_SUFFIXES = [
   ".home",
   ".internal",
@@ -41,6 +44,18 @@ export type WebFetchResult = {
 type RawPage = {
   status: number;
   headers: IncomingHttpHeaders;
+  body: Buffer;
+};
+
+type ResourceKind = {
+  allowedTypes: Set<string>;
+  accept: string;
+  maxBytes: number;
+};
+
+export type WebImageResult = {
+  finalUrl: string;
+  contentType: string;
   body: Buffer;
 };
 
@@ -80,8 +95,50 @@ export async function fetchWebPage(
   settings: Settings,
   rawUrl: string,
 ): Promise<WebFetchResult> {
-  checkExecution();
   const sourceUrl = parseWebFetchUrl(rawUrl).toString();
+  const { finalUrl, response, contentType } = await fetchPublicResource(settings, sourceUrl, {
+    allowedTypes: ALLOWED_CONTENT_TYPES,
+    accept: PAGE_ACCEPT,
+    maxBytes: settings.webFetchMaxBytes,
+  });
+  const decoded = decodeWebBody(
+    response.body,
+    response.headers["content-type"],
+    contentType,
+  );
+  const extracted = extractReadableContent(decoded, contentType);
+  const content = truncateText(extracted.content, settings.webFetchMaxChars);
+  if (!content) {
+    throw new Error("웹페이지에서 읽을 수 있는 본문을 찾지 못했습니다.");
+  }
+  return {
+    sourceUrl,
+    finalUrl,
+    title: truncateText(extracted.title, 300),
+    content,
+    contentType,
+  };
+}
+
+export async function fetchWebImage(
+  settings: Settings,
+  rawUrl: string,
+  maxBytes: number,
+): Promise<WebImageResult> {
+  const { finalUrl, response, contentType } = await fetchPublicResource(settings, parseWebFetchUrl(rawUrl).toString(), {
+    allowedTypes: IMAGE_CONTENT_TYPES,
+    accept: IMAGE_ACCEPT,
+    maxBytes,
+  });
+  return { finalUrl, contentType, body: response.body };
+}
+
+async function fetchPublicResource(
+  settings: Settings,
+  sourceUrl: string,
+  kind: ResourceKind,
+): Promise<{ finalUrl: string; response: RawPage; contentType: string; }> {
+  checkExecution();
   let currentUrl = sourceUrl;
   const visited = new Set<string>();
   const deadline = Math.min(Date.now() + settings.webFetchTimeoutMs, currentExecution()?.deadlineMs ?? Infinity);
@@ -101,7 +158,7 @@ export async function fetchWebPage(
       url,
       addresses,
       deadline,
-      maxBytes: settings.webFetchMaxBytes,
+      kind,
     });
 
     if (REDIRECT_STATUSES.has(response.status)) {
@@ -125,26 +182,10 @@ export async function fetchWebPage(
     }
 
     const contentType = normalizeContentType(response.headers["content-type"]);
-    if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
+    if (!kind.allowedTypes.has(contentType)) {
       throw new Error("지원하지 않는 웹페이지 형식입니다.");
     }
-    const decoded = decodeWebBody(
-      response.body,
-      response.headers["content-type"],
-      contentType,
-    );
-    const extracted = extractReadableContent(decoded, contentType);
-    const content = truncateText(extracted.content, settings.webFetchMaxChars);
-    if (!content) {
-      throw new Error("웹페이지에서 읽을 수 있는 본문을 찾지 못했습니다.");
-    }
-    return {
-      sourceUrl,
-      finalUrl: currentUrl,
-      title: truncateText(extracted.title, 300),
-      content,
-      contentType,
-    };
+    return { finalUrl: currentUrl, response, contentType };
   }
 
   throw new Error("웹페이지를 가져오지 못했습니다.");
@@ -270,7 +311,7 @@ async function requestFromPublicAddress(params: {
   url: URL;
   addresses: string[];
   deadline: number;
-  maxBytes: number;
+  kind: ResourceKind;
 }): Promise<RawPage> {
   let lastError: unknown;
   for (const address of params.addresses) {
@@ -279,7 +320,7 @@ async function requestFromPublicAddress(params: {
         url: params.url,
         address,
         timeoutMs: remainingTime(params.deadline),
-        maxBytes: params.maxBytes,
+        kind: params.kind,
       });
     } catch (error) {
       if (error instanceof NonRetryableWebFetchError) {
@@ -295,8 +336,9 @@ function requestPinnedPage(params: {
   url: URL;
   address: string;
   timeoutMs: number;
-  maxBytes: number;
+  kind: ResourceKind;
 }): Promise<RawPage> {
+  const { allowedTypes, maxBytes } = params.kind;
   return new Promise((resolve, reject) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -327,8 +369,7 @@ function requestPinnedPage(params: {
       rejectUnauthorized: true,
       agent: false,
       headers: {
-        accept:
-          "text/html,application/xhtml+xml,text/plain,text/markdown,application/json;q=0.9,*/*;q=0.1",
+        accept: params.kind.accept,
         "accept-encoding": "identity",
         "user-agent": USER_AGENT,
         host: params.url.host,
@@ -348,7 +389,7 @@ function requestPinnedPage(params: {
         return;
       }
       const contentType = normalizeContentType(response.headers["content-type"]);
-      if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
+      if (!allowedTypes.has(contentType)) {
         rejectOnce(new NonRetryableWebFetchError("지원하지 않는 웹페이지 형식입니다."));
         response.destroy();
         return;
@@ -369,7 +410,7 @@ function requestPinnedPage(params: {
         response.destroy();
         return;
       }
-      if (contentLength > params.maxBytes) {
+      if (contentLength > maxBytes) {
         rejectOnce(new NonRetryableWebFetchError("웹페이지 응답 크기가 제한을 초과했습니다."));
         response.destroy();
         return;
@@ -383,7 +424,7 @@ function requestPinnedPage(params: {
         }
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         totalBytes += buffer.length;
-        if (totalBytes > params.maxBytes) {
+        if (totalBytes > maxBytes) {
           rejectOnce(new NonRetryableWebFetchError("웹페이지 응답 크기가 제한을 초과했습니다."));
           response.destroy();
           return;

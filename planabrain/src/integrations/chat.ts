@@ -1,5 +1,5 @@
 import { type ChatMessage, type ChatInvocationParams, type ChatInvocationMetadata, type WebCitation, type WireMessage } from "./contracts.js";
-import { fitContextMessages } from "../chat/contextBudget.js";
+import { fitContextMessages, imageTokenEstimate } from "../chat/contextBudget.js";
 import { runPreSearch } from "./search.js";
 import { sanitizeAssistantOutput } from "../chat/sanitizeOutput.js";
 import { normalizeContinuationArtifacts, mergeContinuationContent, shouldContinueChat } from "./continuation.js";
@@ -30,7 +30,8 @@ export async function invokeChat(params: ChatInvocationParams): Promise<string> 
 export async function invokeChatWithMetadata(
   params: ChatInvocationParams,
 ): Promise<ChatInvocationMetadata> {
-  let workingMessages = params.preSearchQuery ? fitContextMessages(params.messages) : params.messages;
+  const imageTokens = imageTokenEstimate(params.settings.codexImageDetail);
+  let workingMessages = params.preSearchQuery ? fitContextMessages(params.messages, false, imageTokens) : params.messages;
   let combined = "";
   let citations: WebCitation[] = [];
   let searchUsed = false;
@@ -47,7 +48,7 @@ export async function invokeChatWithMetadata(
     citations = preSearch.citations;
     searchUsed = true;
   }
-  workingMessages = fitContextMessages(workingMessages);
+  workingMessages = fitContextMessages(workingMessages, false, imageTokens);
   const continuationMessages = [...workingMessages];
   const wireInput = workingMessages.slice(Math.max(0, workingMessages.map((message) => message.role).lastIndexOf("user")));
   const finish = (finishReason: string | undefined): ChatInvocationMetadata => {
@@ -85,7 +86,7 @@ export async function invokeChatWithMetadata(
         content:
           "방금 답변한 마지막 문장 다음부터만 이어서 남은 정보를 적어 주십시오. 이미 쓴 서두는 반복하지 말고, 출처 줄, 메타 설명, 내부 판단은 쓰지 마십시오.",
       },
-    ], true);
+    ], true, imageTokens);
   }
 
   return finish(undefined);

@@ -177,6 +177,7 @@ export function parseAskInput(raw: string): AskInput {
   const question = readRequiredString(record.question, "question");
   const userId = readRequiredString(record.userId, "userId");
   const image = parseImage(record.image);
+  const images = Array.isArray(record.images) ? record.images.slice(0, 4).map(parseImage).filter((item) => item !== undefined) : undefined;
   return {
     question,
     userId,
@@ -186,6 +187,8 @@ export function parseAskInput(raw: string): AskInput {
     currentTurnText: readOptionalString(record.currentTurnText),
     memoryContext: readOptionalString(record.memoryContext),
     image,
+    images: images?.length ? images : undefined,
+    imageNotice: readOptionalString(record.imageNotice),
     recentTurns: parseRecentTurns(record.recentTurns),
     continuousChat: typeof record.continuousChat === "boolean" ? record.continuousChat : undefined,
     signals: parseTurnSignals(record.signals),

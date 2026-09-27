@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use teloxide::types::{ChatId, ChatKind, Message, MessageId, PublicChatKind, UserId};
 use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 
+use super::media::{ImageSource, MediaGroupCache, extract_image_source};
 use crate::hiromi_share::ShareClaim;
 use crate::hitomi::GalleryClient;
 use crate::persist::{read_json_or_default, write_json_atomic};
@@ -74,6 +75,8 @@ struct PlanabrainReplyRecord {
     conversation_scope_id: String,
     #[serde(default)]
     owner_user_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    images: Vec<ImageSource>,
 }
 
 #[derive(Clone)]
@@ -89,6 +92,7 @@ pub struct AppState {
     group_registry: Arc<RwLock<HashSet<ChatId>>>,
     group_registry_path: PathBuf,
     image_rate_limiter: Arc<Mutex<ImageRateLimiter>>,
+    media_groups: Arc<Mutex<MediaGroupCache>>,
     planabrain_semaphore: Arc<Semaphore>,
     planabrain_conversations: Arc<Mutex<HashMap<String, Weak<AsyncMutex<()>>>>>,
     pub(crate) schedule_store: ScheduleStore,
@@ -152,6 +156,7 @@ impl AppState {
             group_registry: Arc::new(RwLock::new(group_registry)),
             group_registry_path,
             image_rate_limiter: Arc::new(Mutex::new(image_rate_limiter)),
+            media_groups: Arc::new(Mutex::new(MediaGroupCache::default())),
             planabrain_semaphore: Arc::new(Semaphore::new(4)),
             planabrain_conversations: Arc::new(Mutex::new(HashMap::new())),
             schedule_store,
@@ -240,8 +245,57 @@ impl AppState {
     }
 
     pub(crate) async fn record_planabrain_reply(&self, msg: &Message, conversation_scope_id: &str) {
-        self.record_planabrain_reply_with_owner(msg, conversation_scope_id, None)
+        self.record_planabrain_reply_with_owner(msg, conversation_scope_id, None, Vec::new())
             .await;
+    }
+
+    pub(crate) async fn record_planabrain_reply_with_images(
+        &self,
+        msg: &Message,
+        conversation_scope_id: &str,
+        images: Vec<ImageSource>,
+    ) {
+        self.record_planabrain_reply_with_owner(msg, conversation_scope_id, None, images)
+            .await;
+    }
+
+    pub(crate) fn planabrain_reply_images(&self, msg: &Message) -> Vec<ImageSource> {
+        let Some(reply) = msg.reply_to_message() else {
+            return Vec::new();
+        };
+        self.planabrain_replies
+            .read()
+            .ok()
+            .and_then(|tracker| tracker.get(reply.chat.id, reply.id))
+            .map(|record| record.images)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn record_media_group(&self, msg: &Message) {
+        let Some(group) = msg.media_group_id() else {
+            return;
+        };
+        let Some(source) = extract_image_source(msg) else {
+            return;
+        };
+        let mut cache = self.media_groups.lock().unwrap_or_else(|e| e.into_inner());
+        cache.record(msg.chat.id.0, &group.0, msg.id.0, source);
+    }
+
+    pub(crate) fn media_group_images(&self, msg: &Message) -> Vec<ImageSource> {
+        let Some(group) = msg.media_group_id() else {
+            return Vec::new();
+        };
+        let cache = self.media_groups.lock().unwrap_or_else(|e| e.into_inner());
+        cache.images(msg.chat.id.0, &group.0)
+    }
+
+    pub(crate) fn claim_media_group_turn(&self, msg: &Message) -> bool {
+        let Some(group) = msg.media_group_id() else {
+            return true;
+        };
+        let mut cache = self.media_groups.lock().unwrap_or_else(|e| e.into_inner());
+        cache.claim(msg.chat.id.0, &group.0)
     }
 
     pub(crate) async fn record_planabrain_reply_for_user(
@@ -250,8 +304,13 @@ impl AppState {
         conversation_scope_id: &str,
         owner_user_id: u64,
     ) {
-        self.record_planabrain_reply_with_owner(msg, conversation_scope_id, Some(owner_user_id))
-            .await;
+        self.record_planabrain_reply_with_owner(
+            msg,
+            conversation_scope_id,
+            Some(owner_user_id),
+            Vec::new(),
+        )
+        .await;
     }
 
     async fn record_planabrain_reply_with_owner(
@@ -259,6 +318,7 @@ impl AppState {
         msg: &Message,
         conversation_scope_id: &str,
         owner_user_id: Option<u64>,
+        images: Vec<ImageSource>,
     ) {
         let _guard = self.write_lock.lock().await;
         let snapshot = {
@@ -271,6 +331,7 @@ impl AppState {
                 message_id: msg.id.0,
                 conversation_scope_id: conversation_scope_id.to_string(),
                 owner_user_id,
+                images,
             });
             tracker.records()
         };
@@ -478,8 +539,8 @@ async fn persist_planabrain_replies(
 #[cfg(test)]
 mod tests {
     use super::{
-        PlanabrainReplyRecord, PlanabrainReplyTracker, SHARE_CLAIM_TTL_MS, StoredShareClaim,
-        is_share_claim_live, load_share_claims,
+        ImageSource, PlanabrainReplyRecord, PlanabrainReplyTracker, SHARE_CLAIM_TTL_MS,
+        StoredShareClaim, is_share_claim_live, load_share_claims,
     };
     use crate::hiromi_share::ShareClaim;
 
@@ -537,6 +598,28 @@ mod tests {
     use teloxide::types::{ChatId, MessageId};
 
     #[test]
+    fn reply_records_keep_images_and_read_old_files_without_them() {
+        let record = PlanabrainReplyRecord {
+            chat_id: 1,
+            message_id: 2,
+            conversation_scope_id: "chat_1".to_string(),
+            owner_user_id: None,
+            images: vec![ImageSource {
+                file_id: "photo".to_string(),
+                mime_type: "image/jpeg".to_string(),
+            }],
+        };
+        let json = serde_json::to_string(&record).expect("serialize");
+        let restored: PlanabrainReplyRecord = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored.images, record.images);
+        let old: PlanabrainReplyRecord =
+            serde_json::from_str(r#"{"chat_id":1,"message_id":2}"#).expect("old record");
+        assert!(old.images.is_empty());
+        let plain = serde_json::to_string(&old).expect("serialize");
+        assert!(!plain.contains("images"));
+    }
+
+    #[test]
     fn tracker_returns_saved_conversation_scope() {
         let mut tracker = PlanabrainReplyTracker::new(10);
         tracker.insert(PlanabrainReplyRecord {
@@ -544,6 +627,7 @@ mod tests {
             message_id: 42,
             conversation_scope_id: "msg_40".to_string(),
             owner_user_id: None,
+            images: Vec::new(),
         });
 
         let record = tracker.get(ChatId(100), MessageId(42)).unwrap();

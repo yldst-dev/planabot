@@ -49,7 +49,7 @@ export function buildCodexPayload(settings: Settings, messages: ChatMessage[]): 
     .filter((message) => message.role !== "system" && message.role !== "developer")
     .map((message) => ({
       role: message.role === "assistant" ? "assistant" : "user",
-      content: toResponsesContent(message),
+      content: toResponsesContent(message, settings.codexImageDetail),
     }));
   const effort = resolveReasoningEffort(settings.chatThinkingMode);
   return {
@@ -63,13 +63,17 @@ export function buildCodexPayload(settings: Settings, messages: ChatMessage[]): 
   };
 }
 
-function toResponsesContent(message: ChatMessage): ResponsesInputItem["content"] {
+function toResponsesContent(message: ChatMessage, detail: Settings["codexImageDetail"]): ResponsesInputItem["content"] {
   if (!message.images?.length || message.role === "assistant") {
     return message.content;
   }
   return [
     ...(message.content.trim() ? [{ type: "input_text", text: message.content }] : []),
-    ...message.images.map((image) => ({ type: "input_image", image_url: `data:${image.mimeType};base64,${image.data}` })),
+    ...message.images.map((image) => ({
+      type: "input_image",
+      image_url: `data:${image.mimeType};base64,${image.data}`,
+      ...(detail ? { detail } : {}),
+    })),
   ];
 }
 

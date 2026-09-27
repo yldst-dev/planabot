@@ -29,6 +29,7 @@ export type AnswerTurnParams = {
   chatScope?: string;
   conversationId?: string;
   images?: InputImage[];
+  imageNotice?: string;
   linkSourceText?: string;
   memoryContext?: string;
   recentTurns?: RecentTurnInput[];

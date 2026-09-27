@@ -27,6 +27,7 @@ export type TurnSignals = {
 export type TurnClassificationInput = {
   message: string;
   previousUserMessage?: string;
+  hasImage?: boolean;
   memories?: Array<{ id: number; content: string; }>;
 };
 
@@ -62,7 +63,7 @@ const ROUTE_QUESTION: SystemOneQuestion = {
 const CURRENT_INFO_QUESTION: SystemOneQuestion = {
   type: "noul",
   instructions:
-    "마지막 사용자 메시지에 답하려면 날씨, 시세, 환율, 뉴스, 경기 결과, 운행 정보처럼 지금 시점의 외부 정보를 웹에서 확인해야 하는가? 그런 낱말이 감상이나 잡담에 나오기만 한 경우는 아니다.",
+    "마지막 사용자 메시지에 답하려면 날씨, 시세, 환율, 뉴스, 경기 결과, 운행 정보처럼 지금 시점의 외부 정보를 웹에서 확인해야 하는가? 그런 낱말이 감상이나 잡담에 나오기만 한 경우는 아니다. image_attached가 true면 이미지가 함께 왔다는 뜻이며, 이미지 속 내용을 설명하거나 읽거나 무엇인지 묻는 질문은 웹 확인이 필요 없다. 이미지 속 대상의 현재 가격, 판매처, 영업 여부, 최신 소식을 묻는 경우만 해당한다.",
 };
 
 const FOLLOW_UP_QUESTION: SystemOneQuestion = {
@@ -93,9 +94,11 @@ export async function classifyTurn(
     ...(previous ? { follow_up: FOLLOW_UP_QUESTION } : {}),
     ...Object.fromEntries((input.memories ?? []).map((memory) => [`memory_${memory.id}`, memoryQuestion(memory.content)])),
   };
-  const state = previous
-    ? { previous_user_message: previous, last_user_message: message }
-    : { last_user_message: message };
+  const state = {
+    ...(previous ? { previous_user_message: previous } : {}),
+    last_user_message: message,
+    ...(input.hasImage ? { image_attached: true } : {}),
+  };
   const startedAt = Date.now();
   try {
     const answers = await evaluator.evaluate(state, questions);

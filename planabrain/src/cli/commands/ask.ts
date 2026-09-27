@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { Settings } from "../../config/settings.js";
 import type { RecentTurnInput } from "../../chat/webSearchAnswer.js";
-import { runAsk } from "../../application/turnService.js";
+import { runAsk, type AskInput } from "../../application/turnService.js";
 import { parseTurnSignals } from "../../decision/turnSignals.js";
 export { runAsk, type AskInput } from "../../application/turnService.js";
 
@@ -23,6 +23,7 @@ export async function runAskCommand(args: string[], settings: Settings): Promise
   }
 
   const imageFile = process.env.PLANABRAIN_IMAGE_FILE?.trim();
+  const images = readImageFiles(process.env.PLANABRAIN_IMAGE_FILES);
   const result = await runAsk(
     {
       question,
@@ -35,12 +36,30 @@ export async function runAskCommand(args: string[], settings: Settings): Promise
       image: imageFile
         ? { path: imageFile, mimeType: process.env.PLANABRAIN_IMAGE_MIME_TYPE?.trim() }
         : undefined,
+      images,
+      imageNotice: process.env.PLANABRAIN_IMAGE_NOTICE?.trim() || undefined,
       recentTurns: await readRecentTurnsFile(process.env.PLANABRAIN_RECENT_TURNS_FILE),
       signals: readSignals(process.env.PLANABRAIN_TURN_SIGNALS),
     },
     settings,
   );
   process.stdout.write(`${process.env.PLANABRAIN_OUTPUT_JSON === "1" ? JSON.stringify(result) : result.answer}\n`);
+}
+
+function readImageFiles(raw: string | undefined): AskInput["images"] {
+  try {
+    const parsed = raw?.trim() ? JSON.parse(raw) as unknown : undefined;
+    if (!Array.isArray(parsed)) return undefined;
+    const files = parsed.slice(0, 4).flatMap((item) => {
+      const record = typeof item === "object" && item !== null ? item as Record<string, unknown> : {};
+      return typeof record.path === "string" && record.path.trim()
+        ? [{ path: record.path, ...(typeof record.mimeType === "string" ? { mimeType: record.mimeType } : {}) }]
+        : [];
+    });
+    return files.length ? files : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function readSignals(raw: string | undefined): ReturnType<typeof parseTurnSignals> {
