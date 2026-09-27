@@ -3,10 +3,11 @@ import { normalizeCurrentTurnText, isCurrentInformationRequest, isExplicitSearch
 import { normalizeQuestionForMemory, buildCurrentTurnReference, buildMemoryContextMessage, buildTurnMessages } from "./promptContext.js";
 import { buildLongRangeWeatherReply } from "./weatherPolicy.js";
 import { looksUserInitiatedIntimacy, invokeChatWithIntimacyRecovery } from "./intimacyMode.js";
-import { usesPreSearchContext, performPreSearch, ProviderRateLimitError, type ChatInvocationMetadata, type ChatMessage, mergeWebCitations } from "../integrations/chat.js";
+import { usesPreSearchContext, performPreSearch, ProviderRateLimitError, type ChatInvocationMetadata, type ChatMessage, type InputImage, mergeWebCitations } from "../integrations/chat.js";
 import { finalizeAnswerForDelivery } from "./deliveryRewrite.js";
 import { buildLinkContext } from "./linkContext.js";
 import { imageTokenEstimate } from "./contextBudget.js";
+import { MAX_TURN_IMAGES } from "./imageLinks.js";
 import { buildReplay, buildChatSystemPrompt } from "./replay.js";
 import { applySourceSelection } from "./sourceSelection.js";
 import { checkExecution } from "../runtime/execution.js";
@@ -74,7 +75,9 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   try {
     [search, linkContext] = await Promise.all([
       searchTask,
-      buildLinkContext(params.settings, currentTurnText),
+      buildLinkContext(params.settings, currentTurnText, {
+        maxPreviewImages: MAX_TURN_IMAGES - (params.images?.length ?? 0),
+      }),
     ]);
   } catch (error) {
     if (error instanceof ProviderRateLimitError) {
@@ -113,7 +116,7 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
         linkContext: linkContext?.content ?? null,
         searchContext: preSearch?.context ?? null,
         currentTurnText,
-        images: params.images,
+        images: turnImages(params.images, linkContext?.images),
         imageNotice: params.imageNotice,
         imageTokens: imageTokenEstimate(params.settings.codexImageDetail),
       }),
@@ -159,6 +162,11 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
       ? { wireMessages: [{ role: "user", content: currentTurnText }, { role: "assistant", content: answer }], epoch }
       : undefined,
   };
+}
+
+function turnImages(attached: InputImage[] | undefined, previews: InputImage[] | undefined): InputImage[] | undefined {
+  const images = [...(attached ?? []), ...(previews ?? [])];
+  return images.length ? images : undefined;
 }
 
 export function logTurnTiming(

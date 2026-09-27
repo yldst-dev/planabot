@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sniffImageType } from "./turnImages.js";
-import { extractImageUrls, isImageUrl } from "../chat/imageLinks.js";
+import { extractImageUrls, isImageUrl, sniffImageType, youtubeThumbnail } from "../chat/imageLinks.js";
 
 test("image types come from the file signature, not the name", () => {
   assert.equal(sniffImageType(Buffer.from([255, 216, 255, 224])), "image/jpeg");
@@ -22,4 +21,21 @@ test("only https links whose path ends in an image extension count as images", (
     ["https://x.example/1.png"],
   );
   assert.deepEqual(extractImageUrls("https://x.example/1.png", 0), []);
+});
+
+test("youtube links map straight to their thumbnail without loading the page", () => {
+  const thumb = "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg";
+  for (const url of [
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42",
+    "https://m.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://youtu.be/dQw4w9WgXcQ?si=abc",
+    "https://www.youtube.com/shorts/dQw4w9WgXcQ",
+    "https://youtube.com/live/dQw4w9WgXcQ",
+  ]) {
+    assert.equal(youtubeThumbnail(url), thumb, url);
+  }
+  assert.equal(youtubeThumbnail("https://www.youtube.com/@channel"), undefined);
+  assert.equal(youtubeThumbnail("https://www.youtube.com/watch?v=short"), undefined);
+  assert.equal(youtubeThumbnail("https://notyoutube.com/watch?v=dQw4w9WgXcQ"), undefined);
+  assert.equal(youtubeThumbnail("not a url"), undefined);
 });

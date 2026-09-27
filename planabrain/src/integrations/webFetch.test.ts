@@ -7,6 +7,7 @@ import {
   extractUrls,
   isBlockedAddress,
   parseWebFetchUrl,
+  resolvePreviewImage,
 } from "./webFetch.js";
 
 test("extractUrls removes punctuation, duplicates URLs, and limits results", () => {
@@ -154,4 +155,28 @@ test("extractReadableContent preserves article header text", () => {
 
   assert.match(result.content, /기사 제목/);
   assert.match(result.content, /기사 요약/);
+});
+
+test("link preview images come from og and twitter meta tags like Telegram previews", () => {
+  const html = [
+    "<html><head>",
+    "<meta property=\"og:description\" content=\"새 텀블러 출시\">",
+    "<meta property=\"og:image\" content=\"/images/tumbler.jpg?w=1200&amp;h=630\">",
+    "<meta name=\"twitter:image\" content=\"https://cdn.example.com/other.jpg\">",
+    "</head><body></body></html>",
+  ].join("");
+  const extracted = extractReadableContent(html, "text/html");
+  assert.equal(extracted.image, "/images/tumbler.jpg?w=1200&h=630");
+  assert.equal(extracted.content, "새 텀블러 출시");
+  assert.equal(resolvePreviewImage(extracted.image, "https://shop.example.com/p/1"), "https://shop.example.com/images/tumbler.jpg?w=1200&h=630");
+  assert.equal(extractReadableContent("<meta name=\"twitter:image:src\" content=\"https://x.example/a.png\">", "text/html").image, "https://x.example/a.png");
+  assert.equal(extractReadableContent("<p>본문</p>", "text/html").image, undefined);
+});
+
+test("preview images must resolve to https", () => {
+  assert.equal(resolvePreviewImage("http://cdn.example.com/a.jpg", "https://example.com/"), undefined);
+  assert.equal(resolvePreviewImage("//cdn.example.com/a.jpg", "https://example.com/"), "https://cdn.example.com/a.jpg");
+  assert.equal(resolvePreviewImage("javascript:alert(1)", "https://example.com/"), undefined);
+  assert.equal(resolvePreviewImage("", "https://example.com/"), undefined);
+  assert.equal(resolvePreviewImage(undefined, "https://example.com/"), undefined);
 });

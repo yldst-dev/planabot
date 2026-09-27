@@ -24,6 +24,13 @@ const ALLOWED_CONTENT_TYPES = new Set([
 const IMAGE_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const PAGE_ACCEPT = "text/html,application/xhtml+xml,text/plain,text/markdown,application/json;q=0.9,*/*;q=0.1";
 const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/gif;q=0.9";
+const PREVIEW_IMAGE_KEYS = new Set([
+  "og:image",
+  "og:image:secure_url",
+  "og:image:url",
+  "twitter:image",
+  "twitter:image:src",
+]);
 const BLOCKED_HOST_SUFFIXES = [
   ".home",
   ".internal",
@@ -39,6 +46,7 @@ export type WebFetchResult = {
   title: string;
   content: string;
   contentType: string;
+  imageUrl?: string;
 };
 
 type RawPage = {
@@ -108,7 +116,8 @@ export async function fetchWebPage(
   );
   const extracted = extractReadableContent(decoded, contentType);
   const content = truncateText(extracted.content, settings.webFetchMaxChars);
-  if (!content) {
+  const imageUrl = resolvePreviewImage(extracted.image, finalUrl);
+  if (!content && !imageUrl) {
     throw new Error("웹페이지에서 읽을 수 있는 본문을 찾지 못했습니다.");
   }
   return {
@@ -117,6 +126,7 @@ export async function fetchWebPage(
     title: truncateText(extracted.title, 300),
     content,
     contentType,
+    ...(imageUrl ? { imageUrl } : {}),
   };
 }
 
@@ -243,10 +253,23 @@ export function isBlockedAddress(address: string): boolean {
   );
 }
 
+export function resolvePreviewImage(raw: string | undefined, baseUrl: string): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed || trimmed.length > MAX_URL_LENGTH) {
+    return undefined;
+  }
+  try {
+    const url = new URL(trimmed, baseUrl);
+    return url.protocol === "https:" ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function extractReadableContent(
   input: string,
   contentType: string,
-): { title: string; content: string; } {
+): { title: string; content: string; image?: string; } {
   if (contentType === "application/json" || contentType === "application/ld+json") {
     try {
       const parsed = JSON.parse(input) as unknown;
@@ -274,11 +297,13 @@ export function extractReadableContent(
         : normalizedBody || normalizedGeneral;
   const content =
     normalizedDescription && !normalizedVisible.includes(normalizedDescription)
-      ? `${normalizedDescription}\n\n${normalizedVisible}`
+      ? [normalizedDescription, normalizedVisible].filter(Boolean).join("\n\n")
       : normalizedVisible;
+  const image = decodeHtmlEntities(extracted.image).trim();
   return {
     title: normalizeText(decodeHtmlEntities(extracted.title)),
     content,
+    ...(image ? { image } : {}),
   };
 }
 
@@ -593,6 +618,7 @@ function readMetaCharset(body: Buffer, contentType: string): string | undefined 
 type HtmlSections = {
   title: string;
   description: string;
+  image: string;
   article: string;
   main: string;
   body: string;
@@ -650,6 +676,7 @@ function extractHtmlSections(input: string): HtmlSections {
   const sections: Record<keyof HtmlSections, string[]> = {
     title: [],
     description: [],
+    image: [],
     article: [],
     main: [],
     body: [],
@@ -727,20 +754,17 @@ function extractHtmlSections(input: string): HtmlSections {
       }
       continue;
     }
-    if (
-      !closing &&
-      name === "meta" &&
-      rawTag.length <= MAX_HTML_TAG_CHARS &&
-      sections.description.length === 0
-    ) {
+    if (!closing && name === "meta" && rawTag.length <= MAX_HTML_TAG_CHARS) {
       const attributes = parseAttributes(rawTag);
       const key = (attributes.name ?? attributes.property ?? "").toLowerCase();
       if (
-        key === "description" ||
-        key === "og:description" ||
-        key === "twitter:description"
+        sections.description.length === 0 &&
+        (key === "description" || key === "og:description" || key === "twitter:description")
       ) {
         sections.description.push(attributes.content ?? "");
+      }
+      if (sections.image.length === 0 && PREVIEW_IMAGE_KEYS.has(key) && attributes.content) {
+        sections.image.push(attributes.content);
       }
     }
     if (closing) {
@@ -781,6 +805,7 @@ function extractHtmlSections(input: string): HtmlSections {
   return {
     title: sections.title.join(""),
     description: sections.description.join(""),
+    image: sections.image.join(""),
     article: sections.article.join(""),
     main: sections.main.join(""),
     body: sections.body.join(""),
