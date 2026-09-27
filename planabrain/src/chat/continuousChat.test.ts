@@ -214,8 +214,26 @@ test("source selection line filters citations and is removed from the answer", (
   assert.deepEqual(picked.citations.map((c) => c.url), ["https://b.example/2", "https://d.example/4"]);
   const none = applySourceSelection("본문\n출처번호: 없음", citations);
   assert.deepEqual(none.citations, []);
-  const fallback = applySourceSelection("본문만", citations);
-  assert.equal(fallback.citations.length, 3);
+  const inline = applySourceSelection("선생님. 그렇게 말씀해 주셔서 기쁩니다. 출처번호: 없음", citations);
+  assert.equal(inline.content, "선생님. 그렇게 말씀해 주셔서 기쁩니다.");
+  assert.deepEqual(inline.citations, []);
+  const inlinePick = applySourceSelection("대전은 맑습니다. 출처 번호: 3", citations);
+  assert.equal(inlinePick.content, "대전은 맑습니다.");
+  assert.deepEqual(inlinePick.citations.map((c) => c.url), ["https://c.example/3"]);
+  assert.deepEqual(applySourceSelection("본문만", citations).citations, []);
+});
+
+test("without a selection line only sources that share content with the answer are kept", () => {
+  const citations = [
+    { url: "https://sleep.example/1", title: "Zalza – 수면 음악 서비스", evidence: "수면사이클 기반 전문 수면 음악" },
+    { url: "https://weather.example/2", title: "대전 날씨", evidence: "대전은 맑고 낮 최고 28도입니다." },
+    { url: "https://wiki.example/3", title: "프라나야 빌라삼 - 요다위키", evidence: "호흡법" },
+  ];
+  assert.deepEqual(applySourceSelection("선생님.\n잘 자십시오.\n편안한 밤 보내시길 바랍니다.", citations).citations, []);
+  assert.deepEqual(
+    applySourceSelection("선생님.\n대전은 오늘 맑고 낮 최고 28도입니다.", citations).citations.map((c) => c.url),
+    ["https://weather.example/2"],
+  );
 });
 
 test("follow-up detection and query parsing", () => {

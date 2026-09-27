@@ -1,8 +1,11 @@
 import { type WebCitation } from "../integrations/chat.js";
+import { bigrams } from "../memory/recall.js";
 
 export const MAX_FALLBACK_CITATIONS = 3;
 
-export const SOURCE_SELECTION_LINE = /^\s*출처\s*번호\s*[:：]\s*(.+?)\s*$/u;
+const MIN_SHARED_BIGRAMS = 3;
+
+export const SOURCE_SELECTION_LINE = /^(.*?)\s*출처\s*번호\s*[:：]\s*(.+?)\s*$/u;
 
 export function applySourceSelection(
   content: string,
@@ -18,7 +21,10 @@ export function applySourceSelection(
       kept.push(line);
       continue;
     }
-    const body = match[1].trim();
+    if (match[1].trim()) {
+      kept.push(match[1].trimEnd());
+    }
+    const body = match[2].trim();
     if (/없음|none/iu.test(body)) {
       none = true;
       continue;
@@ -37,5 +43,20 @@ export function applySourceSelection(
       citations: selectedIndexes.map((n) => citations[n - 1]),
     };
   }
-  return { content: cleaned, citations: citations.slice(0, MAX_FALLBACK_CITATIONS) };
+  return { content: cleaned, citations: relevantCitations(cleaned, citations) };
+}
+
+function relevantCitations(answer: string, citations: WebCitation[]): WebCitation[] {
+  const answerGrams = bigrams(answer);
+  return citations
+    .filter((citation) => {
+      const sourceGrams = bigrams(`${citation.title ?? ""} ${citation.evidence ?? ""}`);
+      let shared = 0;
+      for (const gram of sourceGrams) {
+        if (answerGrams.has(gram)) shared += 1;
+        if (shared >= MIN_SHARED_BIGRAMS) return true;
+      }
+      return false;
+    })
+    .slice(0, MAX_FALLBACK_CITATIONS);
 }

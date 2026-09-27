@@ -178,3 +178,68 @@ test("image questions without search never pay for an image summary", async () =
     mock.restore();
   }
 });
+
+function judged(overrides: Partial<{ currentInfo: boolean; searchFollowUp: boolean; socialOnly: boolean; }>) {
+  return { route: "chat" as const, routeConfident: true, currentInfo: false, searchFollowUp: false, socialOnly: false, ...overrides };
+}
+
+function searchQueries(mock: ReturnType<typeof installFetch>): unknown[] {
+  return mock.requests.filter((request) => request.url.endsWith("/api/web_search")).map((request) => request.body.query);
+}
+
+test("social turns never search even when the judge also flags current info", async () => {
+  const mock = installGateway();
+  try {
+    const result = await answerTurn({
+      question: "잘자",
+      currentTurnText: "프라나야 잘자",
+      settings: createSettings({ deliveryRewriteEnabled: false }),
+      signals: judged({ currentInfo: true, socialOnly: true }),
+    });
+    assert.deepEqual(searchQueries(mock), []);
+    assert.doesNotMatch(result.answer, /확인 불가/u);
+    assert.doesNotMatch(result.answer, /출처/u);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("a judged follow-up only searches when the previous message asked for information", async () => {
+  const mock = installGateway();
+  try {
+    const settings = createSettings({ deliveryRewriteEnabled: false });
+    await answerTurn({
+      question: "귀여워",
+      currentTurnText: "귀여워",
+      settings,
+      recentTurns: [{ role: "user", text: "프라나야 잘자" }, { role: "assistant", text: "잘 자십시오." }],
+      signals: judged({ searchFollowUp: true }),
+    });
+    assert.deepEqual(searchQueries(mock), []);
+    await answerTurn({
+      question: "부산은?",
+      currentTurnText: "부산은?",
+      settings,
+      recentTurns: [{ role: "user", text: "대전 날씨 어때?" }, { role: "assistant", text: "대전은 맑습니다." }],
+      signals: judged({ searchFollowUp: true }),
+    });
+    assert.equal(searchQueries(mock).length, 1);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("the call name is not part of the search query", async () => {
+  const mock = installGateway();
+  try {
+    await answerTurn({
+      question: "대전 날씨 알려줘",
+      currentTurnText: "프라나야 대전 날씨 알려줘",
+      settings: createSettings({ deliveryRewriteEnabled: false }),
+      signals: judged({ currentInfo: true }),
+    });
+    assert.deepEqual(searchQueries(mock), ["대전 날씨"]);
+  } finally {
+    mock.restore();
+  }
+});

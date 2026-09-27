@@ -35,12 +35,24 @@ export const QUERY_REWRITE_SYSTEM = [
   "출력은 JSON 한 줄만: {\"query\": \"검색어\"}. 검색이 필요 없으면 {\"query\": null}.",
 ].join("\n");
 
+const CALL_NAME_PATTERN = /^\s*프라나야[\s,，.!?~]*/u;
+
+export function stripCallName(text: string): string {
+  return text.replace(CALL_NAME_PATTERN, "").trim();
+}
+
+export function canFollowUpSearch(previousUserText: string | undefined): boolean {
+  return Boolean(previousUserText) &&
+    (isInformationRequestForm(previousUserText as string) || isExplicitSearchRequest(previousUserText as string));
+}
+
 export async function resolveSearchQuery(
   settings: Settings,
   priorUserTexts: string[],
-  currentTurnText: string,
+  rawTurnText: string,
   options: { forceQuery: boolean; followUp: boolean; imageSummary?: string; },
 ): Promise<string | undefined> {
+  const currentTurnText = stripCallName(rawTurnText) || rawTurnText;
   const fallback = buildSearchQuery(options.imageSummary ? `${currentTurnText} ${options.imageSummary}` : currentTurnText);
   if (!settings.searchQueryRewriteEnabled || (fallback.length <= 120 && !options.followUp && !options.imageSummary)) {
     return fallback;

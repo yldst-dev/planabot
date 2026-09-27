@@ -1,5 +1,5 @@
 import { type AnswerTurnParams, type TurnAnswer, type PreparedSearch } from "./types.js";
-import { normalizeCurrentTurnText, isCurrentInformationRequest, isExplicitSearchRequest, isSearchFollowUp, resolveSearchQuery, isSimpleSocialTurn, describeImagesForSearch } from "./queryPolicy.js";
+import { normalizeCurrentTurnText, isCurrentInformationRequest, isExplicitSearchRequest, isSearchFollowUp, resolveSearchQuery, isSimpleSocialTurn, describeImagesForSearch, canFollowUpSearch } from "./queryPolicy.js";
 import { normalizeQuestionForMemory, buildCurrentTurnReference, buildMemoryContextMessage, buildTurnMessages } from "./promptContext.js";
 import { buildLongRangeWeatherReply } from "./weatherPolicy.js";
 import { looksUserInitiatedIntimacy, invokeChatWithIntimacyRecovery } from "./intimacyMode.js";
@@ -38,14 +38,18 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   const priorTexts = recentTurns.map((turn) => turn.text);
 
   const signals = params.signals;
-  const currentInfoRequired = signals ? signals.currentInfo : isCurrentInformationRequest(currentTurnText);
+  const explicitSearch = isExplicitSearchRequest(currentTurnText);
+  const socialTurn =
+    (signals ? signals.socialOnly : isSimpleSocialTurn(currentTurnText)) && !params.images?.length;
+  const searchableTurn = explicitSearch || !socialTurn;
+  const currentInfoRequired =
+    searchableTurn && (signals ? signals.currentInfo : isCurrentInformationRequest(currentTurnText));
   const intimacyActive =
     params.settings.intimacyEnabled &&
     looksUserInitiatedIntimacy(currentTurnText, priorTexts);
-  const explicitSearch = isExplicitSearchRequest(currentTurnText);
-  const followUpSignal = signals
-    ? signals.searchFollowUp
-    : isSearchFollowUp(priorUserTexts.at(-1), currentTurnText);
+  const followUpSignal = searchableTurn && (signals
+    ? signals.searchFollowUp && canFollowUpSearch(priorUserTexts.at(-1))
+    : isSearchFollowUp(priorUserTexts.at(-1), currentTurnText));
   const searchFollowUp = !currentInfoRequired && !explicitSearch && followUpSignal;
   const searchEnabled =
     usesPreSearchContext(params.settings) &&
@@ -60,15 +64,14 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
         followUp: followUpSignal,
         imageSummary,
       }))
-      .then(async (query) => ({
-        query,
-        context: query ? await performPreSearch(params.settings, query) : null,
-      }))
+      .then(async (query) => {
+        logSearchReason({ currentInfoRequired, explicitSearch, searchFollowUp, judged: Boolean(signals), query });
+        return { query, context: query ? await performPreSearch(params.settings, query) : null };
+      })
     : Promise.resolve({ query: undefined, context: null });
   const deliveryEnabled =
     params.settings.deliveryRewriteEnabled && !intimacyActive;
-  const simpleSocialTurn =
-    (signals ? signals.socialOnly : isSimpleSocialTurn(currentTurnText)) && !params.images?.length;
+  const simpleSocialTurn = socialTurn;
 
   let search: PreparedSearch;
   let linkContext: Awaited<ReturnType<typeof buildLinkContext>>;
@@ -167,6 +170,23 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
 function turnImages(attached: InputImage[] | undefined, previews: InputImage[] | undefined): InputImage[] | undefined {
   const images = [...(attached ?? []), ...(previews ?? [])];
   return images.length ? images : undefined;
+}
+
+function logSearchReason(reason: {
+  currentInfoRequired: boolean;
+  explicitSearch: boolean;
+  searchFollowUp: boolean;
+  judged: boolean;
+  query: string | undefined;
+}): void {
+  const kinds = [
+    reason.currentInfoRequired ? "최신정보" : "",
+    reason.explicitSearch ? "검색요청" : "",
+    reason.searchFollowUp ? "후속" : "",
+  ].filter(Boolean).join(",");
+  console.error(
+    `[planabrain] 사전 검색 이유=${kinds} 판단=${reason.judged ? "턴판단" : "규칙"} 검색어=${JSON.stringify(reason.query?.slice(0, 80) ?? null)}`,
+  );
 }
 
 export function logTurnTiming(
