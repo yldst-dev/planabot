@@ -1,5 +1,5 @@
 import { type AnswerTurnParams, type TurnAnswer, type PreparedSearch } from "./types.js";
-import { normalizeCurrentTurnText, isCurrentInformationRequest, isExplicitSearchRequest, isSearchFollowUp, resolveSearchQuery, isSimpleSocialTurn, describeImagesForSearch, canFollowUpSearch } from "./queryPolicy.js";
+import { normalizeCurrentTurnText, isCurrentInformationRequest, isExplicitSearchRequest, isSearchFollowUp, resolveSearchQuery, isSimpleSocialTurn, describeImagesForSearch, canFollowUpSearch, isStatementTurn } from "./queryPolicy.js";
 import { normalizeQuestionForMemory, buildCurrentTurnReference, buildMemoryContextMessage, buildTurnMessages } from "./promptContext.js";
 import { buildLongRangeWeatherReply } from "./weatherPolicy.js";
 import { looksUserInitiatedIntimacy, invokeChatWithIntimacyRecovery } from "./intimacyMode.js";
@@ -41,7 +41,7 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   const explicitSearch = isExplicitSearchRequest(currentTurnText);
   const socialTurn =
     (signals ? signals.socialOnly : isSimpleSocialTurn(currentTurnText)) && !params.images?.length;
-  const searchableTurn = explicitSearch || !socialTurn;
+  const searchableTurn = explicitSearch || (!socialTurn && !isStatementTurn(currentTurnText));
   const currentInfoRequired =
     searchableTurn && (signals ? signals.currentInfo : isCurrentInformationRequest(currentTurnText));
   const intimacyActive =
@@ -140,6 +140,10 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
     (currentInfoRequired || explicitSearch || searchFollowUp) &&
     (!invocation.searchUsed || selected.citations.length === 0)
   ) {
+    console.error(
+      `[planabrain] 확인 불가 처리: 검색=${invocation.searchUsed ? "함" : "안 함"} 검색결과=${preSearch?.citations.length ?? 0} 선택출처=${selected.citations.length} 출처지정=${selected.selection}`,
+    );
+    logTurnTiming(startedAt, preparedAt, answeredAt, Date.now());
     return { answer: CURRENT_INFORMATION_UNAVAILABLE, transcript: continuous ? { wireMessages: [], epoch: epoch + 1 } : undefined };
   }
   checkExecution();

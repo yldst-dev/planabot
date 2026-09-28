@@ -41,6 +41,17 @@ export function stripCallName(text: string): string {
   return text.replace(CALL_NAME_PATTERN, "").trim();
 }
 
+const STATEMENT_ENDING_PATTERN =
+  /(?:다고\s*(?:함|해|했어|했음|하더라|하네|한다|합니다|하더라고)|라고\s*(?:함|해|했어|했음|하더라|하네|한다)|[했였]\s*(?:음|어|다)|했더니|더라(?:고)?|거든|잖아|하네|이네|구나|군요?|[래대]요?|함|음|임)[\s.!~…ㅋㅎㅠㅜ]*$/u;
+
+const INTERROGATIVE_PATTERN = /(뭐|뭔|무슨|무엇|어디|언제|누구|누가|얼마|몇|어떻|어떤|어느|왜)/u;
+
+export function isStatementTurn(currentTurnText: string): boolean {
+  const text = stripCallName(normalizeCurrentTurnText(currentTurnText));
+  return Boolean(text) && !isInformationRequestForm(text) && !isExplicitSearchRequest(text) &&
+    !INTERROGATIVE_PATTERN.test(text) && STATEMENT_ENDING_PATTERN.test(text);
+}
+
 export function canFollowUpSearch(previousUserText: string | undefined): boolean {
   return Boolean(previousUserText) &&
     (isInformationRequestForm(previousUserText as string) || isExplicitSearchRequest(previousUserText as string));

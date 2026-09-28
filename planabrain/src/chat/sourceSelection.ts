@@ -10,7 +10,7 @@ export const SOURCE_SELECTION_LINE = /^(.*?)\s*출처\s*번호\s*[:：]\s*(.+?)\
 export function applySourceSelection(
   content: string,
   citations: WebCitation[],
-): { content: string; citations: WebCitation[]; } {
+): { content: string; citations: WebCitation[]; selection: "none" | "picked" | "unmarked"; } {
   const lines = content.split("\n");
   let selectedIndexes: number[] | null = null;
   let none = false;
@@ -35,15 +35,16 @@ export function applySourceSelection(
   }
   const cleaned = kept.join("\n").replace(/\n{3,}/gu, "\n\n").trim();
   if (none) {
-    return { content: cleaned, citations: [] };
+    return { content: cleaned, citations: [], selection: "none" };
   }
   if (selectedIndexes && selectedIndexes.length > 0) {
     return {
       content: cleaned,
       citations: selectedIndexes.map((n) => citations[n - 1]),
+      selection: "picked",
     };
   }
-  return { content: cleaned, citations: relevantCitations(cleaned, citations) };
+  return { content: cleaned, citations: relevantCitations(cleaned, citations), selection: "unmarked" };
 }
 
 function relevantCitations(answer: string, citations: WebCitation[]): WebCitation[] {

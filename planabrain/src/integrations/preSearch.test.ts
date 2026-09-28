@@ -243,3 +243,44 @@ test("the call name is not part of the search query", async () => {
     mock.restore();
   }
 });
+
+test("statements and hearsay are told apart from questions", async () => {
+  const { isStatementTurn } = await import("../chat/queryPolicy.js");
+  for (const text of ["심지어 역까지 포르쉐 카이엔으로 데리라온다고함", "내일 비온대", "어제 거기 가봤는데 좋더라", "나 오늘 야근했음", "침대가 10개임"]) {
+    assert.equal(isStatementTurn(text), true, text);
+  }
+  for (const text of ["대전 날씨", "오늘 대전 날씨 어때", "이거 뭐임", "얼마임", "리코 GR4 가격 알려줘", "환율 검색해줘 했음", "비 온대?", "프라나야 부산은"]) {
+    assert.equal(isStatementTurn(text), false, text);
+  }
+});
+
+test("hearsay turns do not search or get blocked even when the judge flags current info", async () => {
+  const mock = installGateway();
+  try {
+    const result = await answerTurn({
+      question: "심지어 역까지 포르쉐 카이엔으로 데리라온다고함",
+      currentTurnText: "심지어 역까지 포르쉐 카이엔으로 데리라온다고함",
+      settings: createSettings({ deliveryRewriteEnabled: false }),
+      signals: judged({ currentInfo: true }),
+    });
+    assert.deepEqual(searchQueries(mock), []);
+    assert.doesNotMatch(result.answer, /확인 불가/u);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("a real question still fails closed when search finds nothing usable", async () => {
+  const mock = installGateway({ searchFails: true });
+  try {
+    const result = await answerTurn({
+      question: "대전 날씨",
+      currentTurnText: "대전 날씨",
+      settings: createSettings({ deliveryRewriteEnabled: false }),
+      signals: judged({ currentInfo: true }),
+    });
+    assert.match(result.answer, /확인 불가/u);
+  } finally {
+    mock.restore();
+  }
+});
