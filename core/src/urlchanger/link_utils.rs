@@ -141,12 +141,39 @@ pub fn clean_music_url(url_str: &str) -> String {
                 let new_path = path.split("si=").next().unwrap_or("").trim_end_matches('?');
                 url.set_path(new_path);
             }
+            if let Some(full) = expand_youtube_short(&url) {
+                return full;
+            }
         }
 
         return url.to_string();
     }
 
     url_str.to_string()
+}
+
+pub fn is_youtube_short_link(url_str: &str) -> bool {
+    Url::parse(url_str).is_ok_and(|url| url.host_str() == Some("youtu.be"))
+}
+
+fn expand_youtube_short(url: &Url) -> Option<String> {
+    let id = url.path_segments()?.find(|segment| !segment.is_empty())?;
+    if id.len() != 11
+        || !id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        return None;
+    }
+    let mut full = Url::parse("https://www.youtube.com/watch").ok()?;
+    {
+        let mut pairs = full.query_pairs_mut();
+        pairs.append_pair("v", id);
+        for (key, value) in url.query_pairs() {
+            pairs.append_pair(&key, &value);
+        }
+    }
+    Some(full.to_string())
 }
 
 pub fn extract_music_links(text: &str) -> Vec<MusicLink> {
@@ -392,8 +419,38 @@ mod tests {
     #[test]
     fn test_remove_si_parameter_youtube() {
         let original = "https://youtu.be/Vc-ByDGOuQE?si=qIy-ihfrRKmDAPZP";
-        let expected = "https://youtu.be/Vc-ByDGOuQE";
+        let expected = "https://www.youtube.com/watch?v=Vc-ByDGOuQE";
         assert_eq!(clean_music_url(original), expected);
+    }
+
+    #[test]
+    fn test_youtube_short_links_expand_to_the_watch_url() {
+        for (short, full) in [
+            (
+                "https://youtu.be/d7hGpiHLSRI",
+                "https://www.youtube.com/watch?v=d7hGpiHLSRI",
+            ),
+            (
+                "https://youtu.be/d7hGpiHLSRI?t=42&si=abc",
+                "https://www.youtube.com/watch?v=d7hGpiHLSRI&t=42",
+            ),
+            (
+                "https://youtu.be/d7hGpiHLSRI?list=PL123&index=2",
+                "https://www.youtube.com/watch?v=d7hGpiHLSRI&list=PL123&index=2",
+            ),
+        ] {
+            assert_eq!(clean_music_url(short), full, "{short}");
+            assert!(is_youtube_short_link(short));
+        }
+        assert_eq!(clean_music_url("https://youtu.be/"), "https://youtu.be/");
+        assert_eq!(
+            clean_music_url("https://youtu.be/bad"),
+            "https://youtu.be/bad"
+        );
+        assert!(!is_youtube_short_link(
+            "https://www.youtube.com/watch?v=d7hGpiHLSRI"
+        ));
+        assert!(!is_youtube_short_link("not a url"));
     }
 
     #[test]

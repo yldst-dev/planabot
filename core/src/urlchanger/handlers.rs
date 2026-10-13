@@ -6,6 +6,7 @@ use crate::urlchanger::link_utils::{
     LinkConversion, MusicLink, MusicPlatform, contains_google_share_link, contains_instagram_link,
     contains_music_link, contains_threads_link, contains_x_link, convert_instagram_links,
     convert_threads_links, convert_x_links, extract_google_share_links, extract_music_links,
+    is_youtube_short_link,
 };
 use crate::urlchanger::music_card::build_music_card;
 use chrono::Utc;
@@ -110,8 +111,11 @@ where
 
     let youtube_only = is_youtube_only(&links);
     let any_tracking = links.iter().any(|link| link.had_tracking);
+    let any_short = links
+        .iter()
+        .any(|link| is_youtube_short_link(&link.original));
 
-    if youtube_only && !any_tracking {
+    if youtube_only && !any_tracking && !any_short {
         return Ok(());
     }
 
@@ -165,10 +169,19 @@ fn youtube_plan(username: &str, links: &[MusicLink], had_tracking: bool) -> Link
     } else {
         format!("정리 완료.\n선생님.\n{}: {}", username, cleaned_text)
     };
-    let reply_text = if had_tracking {
-        "정리 완료.\n선생님.\n추적 파라미터를 제거했습니다.\n확인 바랍니다."
-    } else {
-        "확인 완료.\n선생님.\n유튜브 링크입니다.\n원본 링크 버튼을 제공합니다."
+    let expanded = links
+        .iter()
+        .any(|link| is_youtube_short_link(&link.original));
+    let reply_text = match (expanded, had_tracking) {
+        (true, _) => {
+            format!("정리 완료.\n선생님.\n짧은 주소를 전체 주소로 바꿨습니다.\n{cleaned_text}")
+        }
+        (false, true) => {
+            "정리 완료.\n선생님.\n추적 파라미터를 제거했습니다.\n확인 바랍니다.".to_string()
+        }
+        (false, false) => {
+            "확인 완료.\n선생님.\n유튜브 링크입니다.\n원본 링크 버튼을 제공합니다.".to_string()
+        }
     };
     let markup = build_links_keyboard(links);
 
@@ -621,16 +634,33 @@ mod tests {
 
     #[test]
     fn youtube_plan_texts_depend_on_tracking() {
-        let links = extract_music_links("https://youtu.be/Vc-ByDGOuQE?si=abc");
+        let links = extract_music_links("https://www.youtube.com/watch?v=Vc-ByDGOuQE&si=abc");
         let tracked = youtube_plan("sensei", &links, true);
         assert_eq!(
             text_of(&tracked.admin[0]),
-            "정리 완료.\n선생님.\nsensei: https://youtu.be/Vc-ByDGOuQE"
+            "정리 완료.\n선생님.\nsensei: https://www.youtube.com/watch?v=Vc-ByDGOuQE"
         );
         assert!(text_of(&tracked.reply[0]).contains("추적 파라미터를 제거했습니다."));
         let plain = youtube_plan("sensei", &links, false);
         assert!(text_of(&plain.reply[0]).contains("유튜브 링크입니다."));
         assert!(plain.admin[0].markup.is_some());
+    }
+
+    #[test]
+    fn youtube_short_links_are_reposted_as_full_urls_with_a_preview() {
+        let links = extract_music_links("https://youtu.be/d7hGpiHLSRI");
+        let plan = youtube_plan("sensei", &links, false);
+        let full = "https://www.youtube.com/watch?v=d7hGpiHLSRI";
+        assert_eq!(
+            text_of(&plan.admin[0]),
+            format!("정리 완료.\n선생님.\nsensei: {full}")
+        );
+        assert!(text_of(&plan.reply[0]).ends_with(full));
+        assert!(
+            plan.reply
+                .iter()
+                .all(|reply| reply.disable_preview != Some(true))
+        );
     }
 
     #[test]
