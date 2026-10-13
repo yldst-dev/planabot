@@ -38,6 +38,7 @@ pub struct InstagramMedia {
     pub kind: InstagramMediaKind,
     pub bytes: Vec<u8>,
     pub file_name: &'static str,
+    pub size: Option<(u32, u32)>,
 }
 
 pub fn instagram_shortcode(url: &str) -> Option<String> {
@@ -148,14 +149,78 @@ async fn download_media(url: &str) -> Result<InstagramMedia> {
     let bytes = read_body_limited(response, MAX_MEDIA_BYTES).await?;
     let kind = sniff_kind(&content_type, &bytes)
         .ok_or_else(|| anyhow!("미디어 형식을 확인하지 못했습니다"))?;
-    let file_name = match kind {
-        InstagramMediaKind::Video => "instagram.mp4",
-        InstagramMediaKind::Photo => "instagram.jpg",
+    let (file_name, size) = match kind {
+        InstagramMediaKind::Video => ("instagram.mp4", mp4_video_size(&bytes)),
+        InstagramMediaKind::Photo => ("instagram.jpg", None),
     };
     Ok(InstagramMedia {
         kind,
         bytes,
         file_name,
+        size,
+    })
+}
+
+fn mp4_boxes(data: &[u8]) -> Vec<(&[u8], &[u8])> {
+    let mut boxes = Vec::new();
+    let mut offset = 0;
+    while offset + 8 <= data.len() {
+        let size32 = u32::from_be_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]) as usize;
+        let kind = &data[offset + 4..offset + 8];
+        let (header, size) = match size32 {
+            0 => (8, data.len() - offset),
+            1 if offset + 16 <= data.len() => {
+                let mut large = [0u8; 8];
+                large.copy_from_slice(&data[offset + 8..offset + 16]);
+                (16, u64::from_be_bytes(large) as usize)
+            }
+            _ => (8, size32),
+        };
+        if size < header || offset + size > data.len() {
+            break;
+        }
+        boxes.push((kind, &data[offset + header..offset + size]));
+        offset += size;
+    }
+    boxes
+}
+
+fn mp4_video_size(data: &[u8]) -> Option<(u32, u32)> {
+    let moov = mp4_boxes(data)
+        .into_iter()
+        .find(|(kind, _)| *kind == b"moov")?
+        .1;
+    mp4_boxes(moov)
+        .into_iter()
+        .filter(|(kind, _)| *kind == b"trak")
+        .filter_map(|(_, trak)| {
+            mp4_boxes(trak)
+                .into_iter()
+                .find(|(kind, _)| *kind == b"tkhd")
+        })
+        .find_map(|(_, tkhd)| tkhd_display_size(tkhd))
+}
+
+fn tkhd_display_size(tkhd: &[u8]) -> Option<(u32, u32)> {
+    let read = |at: usize| -> Option<u32> {
+        Some(u32::from_be_bytes(tkhd.get(at..at + 4)?.try_into().ok()?))
+    };
+    let matrix = 4 + if *tkhd.first()? == 1 { 32 } else { 20 } + 16;
+    let width = read(matrix + 36)? >> 16;
+    let height = read(matrix + 40)? >> 16;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let rotated = read(matrix)? == 0 && read(matrix + 16)? == 0;
+    Some(if rotated {
+        (height, width)
+    } else {
+        (width, height)
     })
 }
 
@@ -277,6 +342,64 @@ mod tests {
         assert_eq!(sniff_kind("text/html", b"<!DOCTYPE html>"), None);
     }
 
+    fn mp4_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut out = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(payload);
+        out
+    }
+
+    fn tkhd(version: u8, width: u32, height: u32, rotated: bool) -> Vec<u8> {
+        let mut payload = vec![version, 0, 0, 0];
+        payload.extend(vec![0u8; if version == 1 { 32 } else { 20 } + 16]);
+        let (a, b, c, d) = if rotated {
+            (0, 0x0001_0000u32, 0xFFFF_0000u32, 0)
+        } else {
+            (0x0001_0000u32, 0, 0, 0x0001_0000u32)
+        };
+        for value in [a, b, 0, c, d, 0, 0, 0, 0x4000_0000] {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+        payload.extend_from_slice(&(width << 16).to_be_bytes());
+        payload.extend_from_slice(&(height << 16).to_be_bytes());
+        mp4_box(b"tkhd", &payload)
+    }
+
+    fn movie(tracks: &[Vec<u8>]) -> Vec<u8> {
+        let traks: Vec<u8> = tracks.iter().flat_map(|t| mp4_box(b"trak", t)).collect();
+        let mut out = mp4_box(b"ftyp", b"isom\0\0\0\0");
+        out.extend(mp4_box(b"moov", &traks));
+        out.extend(mp4_box(b"mdat", &[0u8; 16]));
+        out
+    }
+
+    #[test]
+    fn test_mp4_video_size_reads_the_video_track() {
+        let audio = tkhd(0, 0, 0, false);
+        assert_eq!(
+            mp4_video_size(&movie(&[audio.clone(), tkhd(0, 720, 1280, false)])),
+            Some((720, 1280))
+        );
+        assert_eq!(
+            mp4_video_size(&movie(&[tkhd(1, 1920, 1080, false)])),
+            Some((1920, 1080))
+        );
+        assert_eq!(
+            mp4_video_size(&movie(&[tkhd(0, 1280, 720, true)])),
+            Some((720, 1280))
+        );
+    }
+
+    #[test]
+    fn test_mp4_video_size_rejects_broken_files() {
+        assert_eq!(mp4_video_size(&movie(&[tkhd(0, 0, 0, false)])), None);
+        assert_eq!(mp4_video_size(b"not an mp4 at all"), None);
+        assert_eq!(mp4_video_size(&[]), None);
+        let mut truncated = movie(&[tkhd(0, 720, 1280, false)]);
+        truncated.truncate(60);
+        assert_eq!(mp4_video_size(&truncated), None);
+    }
+
     #[tokio::test]
     #[ignore]
     async fn fetch_public_reel_preview() {
@@ -285,5 +408,6 @@ mod tests {
             .expect("preview");
         assert_eq!(media.kind, InstagramMediaKind::Video);
         assert!(media.bytes.len() > 1024);
+        assert_eq!(media.size, Some((720, 1280)));
     }
 }

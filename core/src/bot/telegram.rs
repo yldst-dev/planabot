@@ -10,6 +10,7 @@ pub(crate) struct SendOptions {
     pub disable_preview: Option<bool>,
     pub disable_notification: Option<bool>,
     pub parse_mode: Option<ParseMode>,
+    pub video_size: Option<(u32, u32)>,
 }
 
 pub(crate) fn send_in_thread<B>(bot: &B, msg: &Message, text: impl Into<String>) -> B::SendMessage
@@ -389,6 +390,9 @@ where
     B: Requester + ?Sized,
 {
     req = req.supports_streaming(true);
+    if let Some((width, height)) = opts.video_size {
+        req = req.width(width).height(height);
+    }
     if !caption.is_empty() {
         req = req.caption(caption.to_string());
     }

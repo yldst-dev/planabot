@@ -18,6 +18,7 @@ pub(super) enum ReplyContent {
     Video {
         file: InputFile,
         caption: String,
+        size: Option<(u32, u32)>,
         text_fallback: Option<String>,
     },
 }
@@ -70,10 +71,15 @@ impl LinkReply {
         })
     }
 
-    pub(super) fn video(file: InputFile, caption: impl Into<String>) -> Self {
+    pub(super) fn video(
+        file: InputFile,
+        caption: impl Into<String>,
+        size: Option<(u32, u32)>,
+    ) -> Self {
         Self::new(ReplyContent::Video {
             file,
             caption: caption.into(),
+            size,
             text_fallback: None,
         })
     }
@@ -207,9 +213,13 @@ where
         ReplyContent::Video {
             file,
             caption,
+            size,
             text_fallback,
         } => {
             let mut request = send_video_in_thread(bot, msg, file).supports_streaming(true);
+            if let Some((width, height)) = size {
+                request = request.width(width).height(height);
+            }
             if !caption.is_empty() {
                 request = request.caption(caption);
             }
@@ -266,10 +276,15 @@ where
         ReplyContent::Video {
             file,
             caption,
+            size,
             text_fallback,
         } => {
+            let video_opts = SendOptions {
+                video_size: size,
+                ..opts.clone()
+            };
             if let Err(e) =
-                send_video_reply_with_fallback(bot, msg, file, caption, opts.clone()).await
+                send_video_reply_with_fallback(bot, msg, file, caption, video_opts).await
             {
                 let Some(text) = text_fallback else {
                     return Err(e);

@@ -285,9 +285,10 @@ fn instagram_plan(
         let caption = instagram_caption(media.kind);
         let markup = build_instagram_original_keyboard(&link);
         let kind = media.kind;
+        let size = media.size;
         let file = instagram_file(media);
         let build = |file: InputFile| match kind {
-            InstagramMediaKind::Video => LinkReply::video(file, caption.clone()),
+            InstagramMediaKind::Video => LinkReply::video(file, caption.clone(), size),
             InstagramMediaKind::Photo => LinkReply::photo(file, caption.clone()),
         };
         admin.push(build(file.clone()).with_markup(markup.clone()));
