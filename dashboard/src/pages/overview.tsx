@@ -6,25 +6,29 @@ import {
   CircleCheckIcon,
   GitForkIcon,
   HardDriveIcon,
+  ImportIcon,
   type LucideIcon,
   TagIcon,
 } from "lucide-react"
-import type { ReactNode } from "react"
+import { type ReactNode, useState } from "react"
 import { Link } from "react-router"
 
 import { GroupIcon } from "@/components/group-icon"
+import { EnvImportDialog } from "@/components/settings/env-import-dialog"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
-import { Item, ItemActions, ItemContent, ItemGroup, ItemMedia, ItemTitle } from "@/components/ui/item"
+import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemMedia, ItemTitle } from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useOverview, useSettings } from "@/hooks/use-dashboard"
 import { formatUptime } from "@/lib/format"
-import { fieldsIn, findGroup, withCustom } from "@/lib/groups"
+import { fieldsIn, findGroup, importableFields, withCustom } from "@/lib/groups"
 import { cn } from "@/lib/utils"
 
 export function OverviewPage() {
   const overview = useOverview()
   const settings = useSettings()
+  const [importing, setImporting] = useState(false)
 
   if (!overview.data || !settings.data) {
     return (
@@ -41,6 +45,7 @@ export function OverviewPage() {
   const o = overview.data
   const { groups, fields } = settings.data
   const byKey = new Map(fields.map((field) => [field.key, field]))
+  const importable = importableFields(fields)
 
   return (
     <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-6 px-4 py-5 md:px-8">
@@ -52,7 +57,12 @@ export function OverviewPage() {
       <dl className="grid grid-cols-2 overflow-hidden rounded-lg border md:grid-cols-3 xl:grid-cols-5 [&>div]:border-b [&>div]:border-r">
         <Stat icon={TagIcon} label="버전" value={`v${o.version}`} sub={`가동 ${formatUptime(o.uptime)}`} />
         <Stat icon={BotIcon} label="텔레그램 봇" value={o.bot_username ? `@${o.bot_username}` : "연결 전"} sub="봇 계정" />
-        <Stat icon={BrainCircuitIcon} label="주 모델" value={o.model ?? "gpt-6-astra"} sub="codex 게이트웨이" />
+        <Stat
+          icon={BrainCircuitIcon}
+          label="주 모델"
+          value={o.model}
+          sub={o.provider === "anthropic" ? "Claude API" : "codex 게이트웨이"}
+        />
         <Stat icon={GitForkIcon} label="보조 모델" value={o.aux_model ?? "주 모델과 같음"} sub="검색어, 전달문, 기억 작성" />
         <Stat
           icon={ActivityIcon}
@@ -66,6 +76,24 @@ export function OverviewPage() {
           sub={`허용 채팅 ${o.allowed_chats} · 사용자 ${o.allowed_users}`}
         />
       </dl>
+
+      {importable.length > 0 ? (
+        <Item variant="outline">
+          <ItemMedia variant="icon">
+            <ImportIcon />
+          </ItemMedia>
+          <ItemContent>
+            <ItemTitle>env에만 있는 값 {importable.length}개</ItemTitle>
+            <ItemDescription>대시보드로 가져오면 이 화면에서 바로 고칠 수 있고, Dokploy 환경 변수는 비워도 됩니다.</ItemDescription>
+          </ItemContent>
+          <ItemActions>
+            <Button variant="outline" size="sm" onClick={() => setImporting(true)}>
+              가져오기
+            </Button>
+          </ItemActions>
+        </Item>
+      ) : null}
+      <EnvImportDialog open={importing} onOpenChange={setImporting} groups={groups} fields={importable} />
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
         <section className="flex min-w-0 flex-col gap-3">

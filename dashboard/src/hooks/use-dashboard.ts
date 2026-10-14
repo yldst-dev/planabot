@@ -73,6 +73,17 @@ export function useLogout() {
   })
 }
 
+export function useImportEnv() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.importEnv,
+    onSuccess: (data) => {
+      client.setQueryData(queryKeys.settings, data.settings)
+      return client.invalidateQueries({ queryKey: queryKeys.overview })
+    },
+  })
+}
+
 export function useSave() {
   const client = useQueryClient()
   const drop = useChanges((state) => state.drop)

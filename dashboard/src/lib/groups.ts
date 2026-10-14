@@ -1,4 +1,5 @@
 import {
+  AsteriskIcon,
   BracesIcon,
   BrainCircuitIcon,
   DatabaseIcon,
@@ -32,6 +33,7 @@ const ICONS: Record<string, LucideIcon> = {
   memory: DatabaseIcon,
   webfetch: GlobeIcon,
   codex: PlugZapIcon,
+  anthropic: AsteriskIcon,
   search: SearchIcon,
   decision: ScaleIcon,
   system: ServerCogIcon,
@@ -56,6 +58,10 @@ export function sections(groups: Group[]) {
     map.set(group.section, [...(map.get(group.section) ?? []), group])
   }
   return [...map.entries()]
+}
+
+export function importableFields(fields: Field[]) {
+  return fields.filter((field) => field.source === "env" && !field.env_only && !field.custom)
 }
 
 export function fieldsIn(fields: Field[], groupId: string) {

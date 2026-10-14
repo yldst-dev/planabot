@@ -18,6 +18,7 @@ const ALLOWED_PREFIXES: &[&str] = &[
     "CODEX_",
     "OLLAMA_",
     "OPENROUTER_",
+    "ANTHROPIC_",
     "SENDVIS_",
 ];
 const BLOCKED_KEYS: &[&str] = &[
@@ -106,16 +107,23 @@ pub(crate) fn load() -> OverrideFile {
 pub(crate) fn pending_keys(file: &OverrideFile) -> Vec<String> {
     let mut keys: Vec<String> = file
         .values
-        .iter()
-        .filter(|(key, value)| applied_value(key) != Some(value.as_str()))
-        .map(|(key, _)| key.clone())
+        .keys()
+        .cloned()
+        .chain(applied_keys().map(str::to_string))
+        .filter(|key| {
+            let next = file
+                .values
+                .get(key)
+                .cloned()
+                .or_else(|| baseline_value(key));
+            let running = applied_value(key)
+                .map(str::to_string)
+                .or_else(|| baseline_value(key));
+            next != running
+        })
         .collect();
-    keys.extend(
-        applied_keys()
-            .filter(|key| !file.values.contains_key(*key))
-            .map(str::to_string),
-    );
     keys.sort();
+    keys.dedup();
     keys
 }
 
@@ -157,7 +165,11 @@ pub(crate) fn validate_key(key: &str) -> Result<()> {
     if BLOCKED_KEYS.contains(&key) {
         bail!("변경 불가 키");
     }
-    let known = catalog::find(key).is_some();
+    let field = catalog::find(key);
+    if field.is_some_and(|field| field.env_only) {
+        bail!("env에서만 바꿀 수 있는 키");
+    }
+    let known = field.is_some();
     if !known
         && !ALLOWED_PREFIXES
             .iter()
@@ -188,6 +200,8 @@ mod tests {
         assert!(validate_key("TELEGRAM_API_TOKEN").is_ok());
         assert!(validate_key("PLANABRAIN_NEW_FLAG").is_ok());
         assert!(validate_key("CODEX_GATEWAY_BASE_URL").is_ok());
+        assert!(validate_key("ANTHROPIC_API_KEY").is_ok());
+        assert!(validate_key("PLANABRAIN_ANTHROPIC_MODEL").is_ok());
         assert!(validate_key("MEMORY_FLOW_ROOT").is_err());
         assert!(validate_key("GOOGLE_API_KEY").is_err());
     }
@@ -204,6 +218,8 @@ mod tests {
         assert!(validate_key("LD_PRELOAD").is_err());
         assert!(validate_key("PATH").is_err());
         assert!(validate_key("HIROMI_BIN").is_err());
+        assert!(validate_key("HEALTH_PORT").is_err());
+        assert!(validate_key("HEALTH_SECRET_BRAIN").is_err());
         assert!(validate_key(&"PLANABOT_X".repeat(10)).is_err());
     }
 

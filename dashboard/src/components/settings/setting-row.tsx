@@ -1,9 +1,10 @@
-import { RotateCcwIcon, Undo2Icon } from "lucide-react"
+import { LockIcon, RotateCcwIcon, Undo2Icon } from "lucide-react"
 
 import { SettingControl } from "@/components/settings/setting-control"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldContent, FieldDescription, FieldLabel } from "@/components/ui/field"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { Field as SettingField } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -40,7 +41,12 @@ export function SettingRow({
           <FieldLabel htmlFor={id} className={cn("font-medium", dirty && "text-primary")}>
             {field.label}
           </FieldLabel>
-          {restoring ? (
+          {field.env_only ? (
+            <Badge variant="outline">
+              <LockIcon />
+              env 전용
+            </Badge>
+          ) : restoring ? (
             <Badge variant="outline">env로 복원 예정</Badge>
           ) : field.source === "dashboard" ? (
             <Badge className="border-transparent bg-primary/12 text-primary">대시보드</Badge>
@@ -64,7 +70,7 @@ export function SettingRow({
       </FieldContent>
       <div className="flex w-full shrink-0 items-center gap-1.5 @md/rows:w-[46%] @md/rows:max-w-80">
         <div className="min-w-0 flex-1">
-          <SettingControl field={field} id={id} />
+          {field.env_only ? <EnvOnlyValue field={field} id={id} /> : <SettingControl field={field} id={id} />}
         </div>
         {dirty ? (
           <Tooltip>
@@ -75,7 +81,7 @@ export function SettingRow({
             </TooltipTrigger>
             <TooltipContent>편집 취소</TooltipContent>
           </Tooltip>
-        ) : field.source === "dashboard" ? (
+        ) : field.source === "dashboard" && !field.env_only ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon-sm" aria-label="env 값으로 되돌리기" onClick={() => edit(field, null)}>
@@ -89,5 +95,17 @@ export function SettingRow({
         )}
       </div>
     </Field>
+  )
+}
+
+function EnvOnlyValue({ field, id }: { field: SettingField; id: string }) {
+  const value = field.kind === "secret" ? field.env_hint : field.env_value
+  return (
+    <InputGroup>
+      <InputGroupAddon>
+        <LockIcon />
+      </InputGroupAddon>
+      <InputGroupInput id={id} readOnly value={value ?? ""} placeholder="설정 안 됨" />
+    </InputGroup>
   )
 }

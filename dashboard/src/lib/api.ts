@@ -1,4 +1,4 @@
-import type { Changes, Overview, RecoveryCode, Session, SettingsResponse } from "@/lib/types"
+import type { Changes, ImportResult, Overview, RecoveryCode, Session, SettingsResponse } from "@/lib/types"
 
 export class AuthError extends Error {}
 
@@ -42,5 +42,6 @@ export const api = {
   overview: () => request<Overview>("/api/overview"),
   settings: () => request<SettingsResponse>("/api/settings"),
   save: (changes: Changes) => request<SettingsResponse>("/api/settings", "PUT", { changes }),
+  importEnv: (keys: string[]) => request<ImportResult>("/api/settings/import-env", "POST", { keys }),
   restart: () => request<{ ok: boolean }>("/api/restart", "POST"),
 }

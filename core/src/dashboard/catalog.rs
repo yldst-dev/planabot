@@ -28,6 +28,7 @@ pub(crate) struct Field {
     pub kind: Kind,
     pub options: &'static [&'static str],
     pub placeholder: &'static str,
+    pub env_only: bool,
 }
 
 const fn field(
@@ -45,6 +46,7 @@ const fn field(
         kind,
         options: &[],
         placeholder: "",
+        env_only: false,
     }
 }
 
@@ -64,6 +66,7 @@ const fn hinted(
         kind,
         options: &[],
         placeholder,
+        env_only: false,
     }
 }
 
@@ -82,6 +85,20 @@ const fn select(
         kind: Kind::Select,
         options,
         placeholder: "",
+        env_only: false,
+    }
+}
+
+const fn env_only(
+    key: &'static str,
+    group: &'static str,
+    label: &'static str,
+    help: &'static str,
+    kind: Kind,
+) -> Field {
+    Field {
+        env_only: true,
+        ..field(key, group, label, help, kind)
     }
 }
 
@@ -110,7 +127,7 @@ pub(crate) const GROUPS: &[Group] = &[
         id: "model",
         section: "planabrain",
         label: "모델",
-        description: "codex 모델, 보조 모델, 응답 다듬기",
+        description: "응답 제공자, 사고 수준, 응답 다듬기",
     },
     Group {
         id: "persona",
@@ -137,6 +154,12 @@ pub(crate) const GROUPS: &[Group] = &[
         description: "주 모델과 보조 모델 호출",
     },
     Group {
+        id: "anthropic",
+        section: "제공자",
+        label: "Claude API",
+        description: "platform.claude.com 키와 Claude 모델",
+    },
+    Group {
         id: "search",
         section: "제공자",
         label: "웹 검색",
@@ -157,6 +180,13 @@ pub(crate) const GROUPS: &[Group] = &[
 ];
 
 pub(crate) const FIELDS: &[Field] = &[
+    select(
+        "PLANABRAIN_AI_PROVIDER",
+        "model",
+        "응답 제공자",
+        "비우면 codex입니다. anthropic이면 Claude API로 답하고, 보조 호출과 판단도 Claude 보조 모델로 합니다.",
+        &["codex", "anthropic"],
+    ),
     field(
         "TELEGRAM_API_TOKEN",
         "telegram",
@@ -225,6 +255,13 @@ pub(crate) const FIELDS: &[Field] = &[
         Kind::Text,
         "Noto Sans CJK KR",
     ),
+    env_only(
+        "HIROMI_BIN",
+        "media",
+        "hiromi 실행 파일",
+        "실행할 프로그램 경로라서 대시보드에서는 바꿀 수 없습니다.",
+        Kind::Text,
+    ),
     hinted(
         "HIROMI_DOWNLOAD_DIR",
         "media",
@@ -282,7 +319,7 @@ pub(crate) const FIELDS: &[Field] = &[
         "PLANABRAIN_CHAT_THINKING_MODE",
         "model",
         "사고 수준",
-        "off와 minimal은 low로 보냅니다. default면 모델 기본값을 씁니다.",
+        "codex는 reasoning effort, Claude는 effort로 보냅니다. off와 minimal은 low로 보내고, default면 모델 기본값을 씁니다.",
         THINKING,
     ),
     hinted(
@@ -303,8 +340,8 @@ pub(crate) const FIELDS: &[Field] = &[
     hinted(
         "PLANABRAIN_AUX_MODEL",
         "model",
-        "보조 모델",
-        "검색어 재작성, 전달문 재작성, 기억 작성에 쓸 모델입니다. 비우면 주 모델을 씁니다.",
+        "codex 보조 모델",
+        "codex일 때 검색어 재작성, 전달문 재작성, 기억 작성에 쓸 모델입니다. 비우면 주 모델을 씁니다.",
         Kind::Text,
         "gpt-5.6-sol",
     ),
@@ -355,7 +392,7 @@ pub(crate) const FIELDS: &[Field] = &[
         "PLANABRAIN_INTIMACY_FALLBACK_MODEL",
         "persona",
         "친밀 모드 대체 모델",
-        "친밀 모드 재시도에 쓸 모델입니다. 비우면 주 모델을 씁니다.",
+        "codex일 때 친밀 모드 재시도에 쓸 모델입니다. 비우면 주 모델을 씁니다.",
         Kind::Text,
     ),
     field(
@@ -396,6 +433,14 @@ pub(crate) const FIELDS: &[Field] = &[
         "사용자 한 명당 남길 장기 기억 수입니다.",
         Kind::Number,
         "200",
+    ),
+    hinted(
+        "PLANABOT_LOCAL_MEMORY_TOKEN_BUDGET",
+        "memory",
+        "기억 맥락 토큰",
+        "질문과 함께 넘기는 로컬 기억 맥락의 토큰 한도입니다. 비우면 planabrain 기본값을 씁니다.",
+        Kind::Number,
+        "900",
     ),
     field(
         "PLANABRAIN_MEMORY_WRITER_ENABLED",
@@ -444,6 +489,29 @@ pub(crate) const FIELDS: &[Field] = &[
         "18000",
     ),
     field(
+        "ANTHROPIC_API_KEY",
+        "anthropic",
+        "API 키",
+        "platform.claude.com에서 발급한 sk-ant- 키입니다. 응답 제공자가 anthropic일 때만 씁니다.",
+        Kind::Secret,
+    ),
+    hinted(
+        "PLANABRAIN_ANTHROPIC_MODEL",
+        "anthropic",
+        "주 모델",
+        "답변에 쓰는 Claude 모델입니다. 비우면 claude-opus-5-5를 씁니다.",
+        Kind::Text,
+        "claude-opus-5-5",
+    ),
+    hinted(
+        "PLANABRAIN_ANTHROPIC_AUX_MODEL",
+        "anthropic",
+        "보조 모델",
+        "판단, 검색어 재작성, 전달문 재작성, 기억 작성에 씁니다. 비우면 claude-haiku-5-5를 씁니다.",
+        Kind::Text,
+        "claude-haiku-5-5",
+    ),
+    field(
         "OLLAMA_API_KEY",
         "search",
         "API 키",
@@ -484,7 +552,7 @@ pub(crate) const FIELDS: &[Field] = &[
         "PLANABRAIN_DECISION_PROVIDER",
         "decision",
         "판단 모델",
-        "비우면 Jev 키가 있을 때 Jev, 없으면 codex 보조 모델이 판단합니다. off는 규칙 판단만 씁니다.",
+        "비우면 Jev 키가 있을 때 Jev, 없으면 응답 제공자의 보조 모델이 판단합니다. codex를 고르면 Jev 키가 있어도 보조 모델이 판단하고, off는 규칙 판단만 씁니다.",
         &["jev", "codex", "off"],
     ),
     field(
@@ -528,8 +596,8 @@ pub(crate) const FIELDS: &[Field] = &[
     hinted(
         "PLANABRAIN_DECISION_CODEX_TIMEOUT_MS",
         "decision",
-        "codex 판단 제한 시간",
-        "codex가 판단할 때 넘으면 규칙 판단으로 대체합니다(ms).",
+        "보조 모델 판단 제한 시간",
+        "보조 모델이 판단할 때 넘으면 규칙 판단으로 대체합니다(ms).",
         Kind::Number,
         "8000",
     ),
@@ -564,11 +632,108 @@ pub(crate) const FIELDS: &[Field] = &[
         Kind::Text,
         ".planabot/schedules.json",
     ),
+    hinted(
+        "PLANABRAIN_TODO_DIR",
+        "system",
+        "할 일 폴더",
+        "사용자별 할 일 파일을 두는 폴더입니다.",
+        Kind::Text,
+        ".planabrain/todos",
+    ),
+    hinted(
+        "PLANABOT_GROUPS_PATH",
+        "system",
+        "그룹 목록 파일",
+        "봇이 들어가 있는 그룹 목록을 저장하는 파일입니다.",
+        Kind::Text,
+        ".planabot/groups.json",
+    ),
+    hinted(
+        "PLANABOT_SHARE_CLAIMS_PATH",
+        "system",
+        "공유 링크 파일",
+        "갤러리 공유 요청을 잠시 저장하는 파일입니다.",
+        Kind::Text,
+        ".planabot/share_claims.json",
+    ),
+    hinted(
+        "PLANABOT_PLANABRAIN_REPLIES_PATH",
+        "system",
+        "답장 기록 파일",
+        "프라나 답장과 원래 질문을 이어 주는 기록 파일입니다.",
+        Kind::Text,
+        ".planabot/planabrain_replies.json",
+    ),
+    hinted(
+        "PLANABOT_TOKEN_LIMIT",
+        "system",
+        "토큰 측정 기준",
+        "/token 명령이 초과 여부를 알릴 때 쓰는 기준 토큰 수입니다.",
+        Kind::Number,
+        "1024",
+    ),
+    field(
+        "PLANABOT_TOKEN_MODEL",
+        "system",
+        "토큰 측정 모델",
+        "/token 명령이 토큰을 셀 때 기준으로 삼는 모델입니다. 비우면 codex 주 모델을 씁니다.",
+        Kind::Text,
+    ),
+    hinted(
+        "PLANABOT_TOKEN_ESTIMATE_MULTIPLIER",
+        "system",
+        "토큰 추정 배수",
+        "추정 토큰에 곱하는 안전 배수입니다.",
+        Kind::Number,
+        "1",
+    ),
     field(
         "HEALTH_SECRET_CORE",
         "system",
         "헬스체크 비밀값",
-        "설정하면 /health에 secret 쿼리가 필요합니다.",
+        "설정하면 /health에 secret 쿼리가 필요합니다. 컨테이너 헬스체크는 env 값을 읽으므로 env에도 같은 값을 두십시오.",
+        Kind::Secret,
+    ),
+    env_only(
+        "PLANABOT_DASHBOARD_ENABLED",
+        "system",
+        "대시보드 사용",
+        "대시보드를 켜고 끄는 값이라 대시보드에서는 바꿀 수 없습니다.",
+        Kind::Bool,
+    ),
+    env_only(
+        "PLANABOT_DASHBOARD_STATE_PATH",
+        "system",
+        "대시보드 저장 파일",
+        "대시보드 값을 읽기 전에 필요한 경로라서 env에서만 바꿉니다.",
+        Kind::Text,
+    ),
+    env_only(
+        "PLANABOT_DASHBOARD_DIR",
+        "system",
+        "대시보드 화면 폴더",
+        "대시보드 화면 파일이 있는 폴더입니다. env에서만 바꿉니다.",
+        Kind::Text,
+    ),
+    env_only(
+        "HEALTH_PORT",
+        "system",
+        "헬스체크 포트",
+        "대시보드도 이 포트로 열리고 컨테이너 헬스체크가 env 값을 읽어서 env에서만 바꿉니다.",
+        Kind::Number,
+    ),
+    env_only(
+        "BRAIN_HEALTH_PORT",
+        "system",
+        "planabrain 헬스체크 포트",
+        "봇보다 먼저 뜨는 planabrain 헬스체크 서버가 읽는 값이라 env에서만 바꿉니다.",
+        Kind::Number,
+    ),
+    env_only(
+        "HEALTH_SECRET_BRAIN",
+        "system",
+        "planabrain 헬스체크 비밀값",
+        "봇보다 먼저 뜨는 planabrain 헬스체크 서버가 읽는 값이라 env에서만 바꿉니다.",
         Kind::Secret,
     ),
 ];

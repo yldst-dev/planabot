@@ -24,6 +24,7 @@ export interface Field {
   source: FieldSource
   pending: boolean
   custom: boolean
+  env_only: boolean
 }
 
 export interface SettingsResponse {
@@ -36,7 +37,8 @@ export interface Overview {
   version: string
   uptime: number
   bot_username: string | null
-  model: string | null
+  provider: "codex" | "anthropic"
+  model: string
   aux_model: string | null
   planabrain_server: boolean
   overrides: number
@@ -57,3 +59,8 @@ export interface RecoveryCode {
 }
 
 export type Changes = Record<string, string | null>
+
+export interface ImportResult {
+  imported: string[]
+  settings: SettingsResponse
+}

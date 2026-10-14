@@ -26,6 +26,7 @@
 - `npm run typecheck` (in `planabrain/`): TypeScript type check.
 - `npm run build` (in `planabrain/`): compile to `planabrain/dist/`.
 - `npm run lint`, `npm run typecheck`, `npm run build` (in `dashboard/`): lint, type check, and build the settings dashboard.
+- Dashboard lint runs `@shadcn/lint` through oxlint. Existing screens still carry warnings; new UI code must add none.
 - Always run type checks, linting, and builds before pushing.
 
 ## Coding Style & Naming Conventions

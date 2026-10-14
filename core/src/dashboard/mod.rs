@@ -50,6 +50,7 @@ pub(crate) fn router() -> Router {
         .route("/api/recovery-code", post(account::regenerate_recovery))
         .route("/api/overview", get(overview))
         .route("/api/settings", get(settings).put(save_settings))
+        .route("/api/settings/import-env", post(import_env))
         .route("/api/restart", post(restart))
 }
 
@@ -112,7 +113,8 @@ struct OverviewView {
     version: &'static str,
     uptime: u64,
     bot_username: Option<String>,
-    model: Option<String>,
+    provider: &'static str,
+    model: String,
     aux_model: Option<String>,
     planabrain_server: bool,
     overrides: usize,
@@ -144,14 +146,32 @@ async fn overview(headers: HeaderMap) -> Response {
         return response;
     }
     let file = store::load();
+    let anthropic = running("PLANABRAIN_AI_PROVIDER")
+        .map(|provider| provider.to_ascii_lowercase())
+        .is_some_and(|provider| provider == "anthropic" || provider == "claude");
+    let (provider, model, aux_model) = if anthropic {
+        (
+            "anthropic",
+            running("PLANABRAIN_ANTHROPIC_MODEL").unwrap_or_else(|| "claude-opus-5-5".to_string()),
+            running("PLANABRAIN_ANTHROPIC_AUX_MODEL")
+                .or_else(|| Some("claude-haiku-5-5".to_string())),
+        )
+    } else {
+        (
+            "codex",
+            running("PLANABRAIN_CODEX_MODEL").unwrap_or_else(|| "gpt-6-astra".to_string()),
+            running("PLANABRAIN_AUX_MODEL"),
+        )
+    };
     json(
         StatusCode::OK,
         &OverviewView {
             version: env!("CARGO_PKG_VERSION"),
             uptime: crate::health::uptime_secs(),
             bot_username: BOT_USERNAME.get().cloned(),
-            model: running("PLANABRAIN_CODEX_MODEL"),
-            aux_model: running("PLANABRAIN_AUX_MODEL"),
+            provider,
+            model,
+            aux_model,
             planabrain_server: crate::planabrain::server::is_ready(),
             overrides: file.values.len(),
             pending: store::pending_keys(&file),
@@ -178,6 +198,7 @@ struct FieldView {
     source: &'static str,
     pending: bool,
     custom: bool,
+    env_only: bool,
 }
 
 #[derive(Serialize)]
@@ -241,6 +262,7 @@ fn field_view(
         source,
         pending,
         custom: field.is_none(),
+        env_only: field.is_some_and(|field| field.env_only),
     }
 }
 
@@ -309,6 +331,54 @@ async fn save_settings(headers: HeaderMap, Json(body): Json<SaveRequest>) -> Res
     }
 }
 
+#[derive(Deserialize)]
+struct ImportRequest {
+    keys: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ImportView {
+    imported: Vec<String>,
+    settings: SettingsView,
+}
+
+fn importable_env(
+    keys: &[String],
+    file: &store::OverrideFile,
+    env: impl Fn(&str) -> Option<String>,
+) -> BTreeMap<String, Option<String>> {
+    keys.iter()
+        .filter(|key| catalog::find(key).is_some_and(|field| !field.env_only))
+        .filter(|key| !file.values.contains_key(*key))
+        .filter_map(|key| {
+            env(key)
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| (key.clone(), Some(value)))
+        })
+        .collect()
+}
+
+async fn import_env(headers: HeaderMap, Json(body): Json<ImportRequest>) -> Response {
+    if let Some(response) = reject(&headers, true) {
+        return response;
+    }
+    let changes = importable_env(&body.keys, &store::load(), store::baseline_value);
+    let imported: Vec<String> = changes.keys().cloned().collect();
+    if !changes.is_empty() {
+        if let Err(err) = store::update(changes).await {
+            return error(StatusCode::BAD_REQUEST, &format!("가져오기 불가. {err}"));
+        }
+        log::info!("대시보드로 env 값 가져오기: {}", imported.join(", "));
+    }
+    json(
+        StatusCode::OK,
+        &ImportView {
+            imported,
+            settings: settings_view(),
+        },
+    )
+}
+
 async fn restart(headers: HeaderMap) -> Response {
     if let Some(response) = reject(&headers, true) {
         return response;
@@ -331,7 +401,7 @@ pub(crate) fn reset_password() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{field_view, mask};
+    use super::{field_view, importable_env, mask, store::OverrideFile};
 
     #[test]
     fn masks_secrets_without_leaking_short_values() {
@@ -352,6 +422,50 @@ mod tests {
         assert!(view.env_value.is_none());
         assert_eq!(view.hint.as_deref(), Some("•••• alue"));
         assert_eq!(view.source, "dashboard");
+    }
+
+    #[test]
+    fn env_import_takes_only_unsaved_catalog_keys_with_env_values() {
+        let mut file = OverrideFile::default();
+        file.values
+            .insert("PLANABRAIN_CODEX_MODEL".to_string(), "saved".to_string());
+        let keys: Vec<String> = [
+            "PLANABRAIN_AUX_MODEL",
+            "PLANABRAIN_CODEX_FAST",
+            "PLANABRAIN_CODEX_MODEL",
+            "HEALTH_PORT",
+            "PLANABRAIN_NOT_IN_CATALOG",
+            "PATH",
+            "PLANABRAIN_MEMORY_MAX_TURNS",
+        ]
+        .iter()
+        .map(|key| key.to_string())
+        .collect();
+        let env = |key: &str| match key {
+            "PLANABRAIN_CODEX_FAST" => Some("  ".to_string()),
+            "PLANABRAIN_MEMORY_MAX_TURNS" => None,
+            _ => Some(format!("env-{key}")),
+        };
+        let changes = importable_env(&keys, &file, env);
+        assert_eq!(
+            changes.into_iter().collect::<Vec<_>>(),
+            vec![(
+                "PLANABRAIN_AUX_MODEL".to_string(),
+                Some("env-PLANABRAIN_AUX_MODEL".to_string())
+            )]
+        );
+    }
+
+    #[test]
+    fn env_only_fields_are_flagged() {
+        let view = field_view(
+            "HIROMI_BIN",
+            super::catalog::find("HIROMI_BIN"),
+            None,
+            false,
+        );
+        assert!(view.env_only);
+        assert!(!view.custom);
     }
 
     #[test]

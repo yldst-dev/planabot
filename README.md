@@ -280,11 +280,13 @@ docker exec planabot planabot dashboard-reset-password
 
 ### 설정 값
 
-- 왼쪽 사이드바에서 봇, planabrain, 제공자(Codex 게이트웨이, 웹 검색, 판단 모델), 시스템 분류를 오가며 값을 바꿉니다. `⌘K` 또는 `/`로 설정 검색, `⌘S`/`Ctrl+S`로 저장합니다.
+- 왼쪽 사이드바에서 봇, planabrain, 제공자(Codex 게이트웨이, Claude API, 웹 검색, 판단 모델), 시스템 분류를 오가며 값을 바꿉니다. `⌘K` 또는 `/`로 설정 검색, `⌘S`/`Ctrl+S`로 저장합니다.
 - 저장한 값은 `PLANABOT_DASHBOARD_STATE_PATH`(기본 `.planabot/dashboard.json`, 권한 600)에 남고, 프로세스가 시작할 때 `.env`와 컨테이너 env보다 먼저 적용됩니다. 되돌리기 버튼을 누르면 대시보드 값을 지우고 env 값으로 돌아갑니다.
 - 실행 중인 프로세스에는 바로 반영되지 않습니다. 사이드바의 재시작 버튼을 누르면 프로세스가 종료되고, 컨테이너 재시작 정책(`restart: unless-stopped`)으로 다시 올라오면서 적용됩니다. 로컬 `cargo run`에서는 직접 다시 실행해야 합니다.
 - API 키와 토큰은 화면과 API 응답에 끝 4자리만 보이며 원문은 돌려주지 않습니다.
-- 목록에 없는 키는 사용자 지정 메뉴에서 추가합니다. `PLANABOT_`, `PLANABRAIN_`, `CODEX_`, `OLLAMA_`, `OPENROUTER_`, `SENDVIS_` 접두사만 허용하며, 대시보드 자체 설정(`PLANABOT_DASHBOARD_*`)은 대시보드에서 바꿀 수 없습니다.
+- 개요 화면의 가져오기 버튼은 env에만 있는 값을 골라 대시보드 저장 파일로 복사합니다. 값은 서버가 자기 env에서 직접 옮기고 브라우저로는 보내지 않습니다. 실행 중인 값과 같으므로 재시작할 필요가 없고, 옮긴 뒤에는 Dokploy 환경 변수에서 지워도 됩니다. 저장 파일이 있는 볼륨을 지우면 값도 함께 사라집니다.
+- 대시보드보다 먼저 읽히거나 컨테이너 헬스체크가 읽는 값(`PLANABOT_DASHBOARD_*`, `HEALTH_PORT`, `BRAIN_HEALTH_PORT`, `HEALTH_SECRET_BRAIN`)과 실행 파일 경로(`HIROMI_BIN`)는 env 전용으로 보여 주기만 하고 바꿀 수 없습니다.
+- 목록에 없는 키는 사용자 지정 메뉴에서 추가합니다. `PLANABOT_`, `PLANABRAIN_`, `CODEX_`, `OLLAMA_`, `OPENROUTER_`, `ANTHROPIC_`, `SENDVIS_` 접두사만 허용합니다.
 - 공개 도메인에 연결할 때는 반드시 HTTPS 리버스 프록시 뒤에 두십시오. `X-Forwarded-Proto: https`가 오면 쿠키에 `Secure`를 붙입니다.
 
 ## 로컬 데이터 경로
