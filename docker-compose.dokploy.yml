@@ -16,6 +16,8 @@ services:
     expose:
       - "8080"
       - "8081"
+    ports:
+      - "18080:8080"
     volumes:
       - planabot-state:/app/.planabot
       - planabrain-data:/app/.planabrain

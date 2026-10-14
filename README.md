@@ -250,6 +250,8 @@ node dist/cli/index.js memory-reset-all
 
 헬스체크 포트(`HEALTH_PORT`, 기본 8080)의 `/` 경로에서 설정 대시보드가 열립니다. `PLANABOT_DASHBOARD_ENABLED=0`이면 꺼집니다.
 
+Dokploy 배포(`docker-compose.dokploy.yml`)는 컨테이너 8080을 서버의 18080 포트로 공개하므로, 서버와 같은 로컬망에서 `http://<서버 로컬 IP>:18080/`으로 접속합니다. Docker가 공개한 포트는 ufw를 거치지 않으니 공유기에서 18080을 포워딩하거나 DMZ를 켜지 마십시오.
+
 화면은 `dashboard/`의 React(TypeScript), shadcn/ui, Tailwind CSS 앱이고, 봇은 빌드 결과(`PLANABOT_DASHBOARD_DIR`, 기본 `dashboard/dist`)를 그대로 서빙합니다. Docker 이미지는 빌드 단계에서 함께 만듭니다.
 
 ```bash
