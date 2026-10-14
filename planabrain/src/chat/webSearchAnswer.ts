@@ -1,5 +1,5 @@
 import { type AnswerTurnParams, type TurnAnswer, type PreparedSearch } from "./types.js";
-import { normalizeCurrentTurnText, isCurrentInformationRequest, isExplicitSearchRequest, isSearchFollowUp, resolveSearchQuery, isSimpleSocialTurn, describeImagesForSearch, canFollowUpSearch, isStatementTurn } from "./queryPolicy.js";
+import { normalizeCurrentTurnText, isCurrentInformationRequest, isExplicitSearchRequest, isSearchFollowUp, resolveSearchQuery, isSimpleSocialTurn, describeImagesForSearch, canFollowUpSearch, isStatementTurn, extractReplyContext, extractCurrentTime, isClockQuestion, SEARCH_FOLLOW_UP_MAX_CHARS } from "./queryPolicy.js";
 import { normalizeQuestionForMemory, buildCurrentTurnReference, buildMemoryContextMessage, buildTurnMessages } from "./promptContext.js";
 import { buildLongRangeWeatherReply } from "./weatherPolicy.js";
 import { looksUserInitiatedIntimacy, invokeChatWithIntimacyRecovery } from "./intimacyMode.js";
@@ -11,13 +11,6 @@ import { MAX_TURN_IMAGES } from "./imageLinks.js";
 import { buildReplay, buildChatSystemPrompt } from "./replay.js";
 import { applySourceSelection } from "./sourceSelection.js";
 import { checkExecution } from "../runtime/execution.js";
-
-export const CURRENT_INFORMATION_UNAVAILABLE = [
-  "확인 불가.",
-  "선생님.",
-  "최신 정보를 검색 결과와 출처로 확인하지 못했습니다.",
-  "추측해서 답하지 않겠습니다.",
-].join("\n");
 
 export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> {
   const currentTurnText =
@@ -41,7 +34,7 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   const explicitSearch = isExplicitSearchRequest(currentTurnText);
   const socialTurn =
     (signals ? signals.socialOnly : isSimpleSocialTurn(currentTurnText)) && !params.images?.length;
-  const searchableTurn = explicitSearch || (!socialTurn && !isStatementTurn(currentTurnText));
+  const searchableTurn = explicitSearch || (!socialTurn && !isStatementTurn(currentTurnText) && !isClockQuestion(currentTurnText));
   const currentInfoRequired =
     searchableTurn && (signals ? signals.currentInfo : isCurrentInformationRequest(currentTurnText));
   const intimacyActive =
@@ -61,8 +54,12 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
     ? (params.images?.length ? describeImagesForSearch(params.settings, params.images, currentTurnText) : Promise.resolve(undefined))
       .then((imageSummary) => resolveSearchQuery(params.settings, priorUserTexts, currentTurnText, {
         forceQuery: currentInfoRequired || explicitSearch,
-        followUp: followUpSignal,
+        followUp: followUpSignal ||
+          Boolean(signals?.searchFollowUp && priorUserTexts.length > 0) ||
+          (currentInfoRequired && priorUserTexts.length > 0 && currentTurnText.length <= SEARCH_FOLLOW_UP_MAX_CHARS),
         imageSummary,
+        replyContext: extractReplyContext(params.question),
+        currentTime: extractCurrentTime(params.question),
       }))
       .then(async (query) => {
         logSearchReason({ currentInfoRequired, explicitSearch, searchFollowUp, judged: Boolean(signals), query });
@@ -100,7 +97,7 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   let epoch = 0;
   try {
     const systemContent = buildChatSystemPrompt(params.settings, {
-      searchEnabled,
+      searchEnabled: searchEnabled && !(wantsPreSearch && !preSearch),
       intimacyActive,
     });
     const replay = continuous
@@ -136,15 +133,10 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   }
   const answeredAt = Date.now();
   const selected = applySourceSelection(invocation.content, invocation.citations);
-  if (
-    (currentInfoRequired || explicitSearch || searchFollowUp) &&
-    (!invocation.searchUsed || selected.citations.length === 0)
-  ) {
+  if (wantsPreSearch && selected.citations.length === 0) {
     console.error(
-      `[planabrain] 확인 불가 처리: 검색=${invocation.searchUsed ? "함" : "안 함"} 검색결과=${preSearch?.citations.length ?? 0} 선택출처=${selected.citations.length} 출처지정=${selected.selection}`,
+      `[planabrain] 검증된 출처 없이 답변: 검색결과=${preSearch?.citations.length ?? 0} 출처지정=${selected.selection}`,
     );
-    logTurnTiming(startedAt, preparedAt, answeredAt, Date.now());
-    return { answer: CURRENT_INFORMATION_UNAVAILABLE, transcript: continuous ? { wireMessages: [], epoch: epoch + 1 } : undefined };
   }
   checkExecution();
   const citations = mergeWebCitations(

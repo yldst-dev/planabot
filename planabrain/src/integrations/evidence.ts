@@ -69,11 +69,7 @@ export function normalizeCitationUrl(value: unknown): string | null {
     }
     url.hash = "";
     for (const key of Array.from(url.searchParams.keys())) {
-      if (
-        /(auth|code|credential|jwt|key|password|secret|session|sig|token)/i.test(
-          key,
-        )
-      ) {
+      if (isSecretParam(key)) {
         url.searchParams.delete(key);
       }
     }
@@ -81,6 +77,15 @@ export function normalizeCitationUrl(value: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+const SECRET_PARAM_PATTERN = /token|secret|passw(?:or)?d|signature|credential|jwt|apikey|accesskey|privatekey|sessionid|phpsessid|authorization|authkey/u;
+
+const SECRET_PARAM_WORDS = new Set(["auth", "key", "session", "sig"]);
+
+export function isSecretParam(name: string): boolean {
+  const words = name.replace(/([a-z])([A-Z])/gu, "$1 $2").toLowerCase().split(/[^a-z0-9]+/u);
+  return SECRET_PARAM_PATTERN.test(name.toLowerCase()) || words.some((word) => SECRET_PARAM_WORDS.has(word));
 }
 
 export function normalizeCitationText(value: unknown, maxLength: number): string | undefined {

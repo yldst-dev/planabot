@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { testSettings } from "../testing/settings.js";
 import { codexStream } from "../testing/codex.js";
-import { buildMemoryContext, closeMemoryDatabases, forgetMemory, listMemories, listRecentTurns, recallMemories, rememberExchange, resetUserMemory } from "./service.js";
+import { buildMemoryContext, closeMemoryDatabases, forgetMemory, listMemories, listRecentTurns, recallMemories, rememberExchange, resetUserMemory, sanitizeAssistantTurn } from "./service.js";
 
 test("an exchange is stored, distilled into memories and recalled in later turns", async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "planabot-memory-"));
@@ -64,4 +64,9 @@ test("an exchange is stored, distilled into memories and recalled in later turns
     if (previous.decision !== undefined) process.env.PLANABRAIN_DECISION_PROVIDER = previous.decision;
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("only searched answers to time-sensitive questions are replaced in stored history", () => {
+  assert.equal(sanitizeAssistantTurn("오늘 환율 알려줘", "1달러는 1,380원입니다.\n\n출처: [환율](https://example.com/fx)"), "시의성 정보 확인 응답 완료.");
+  assert.equal(sanitizeAssistantTurn("뉴스레터 문구 다듬어줘", "이번 달 소식을 전해 드립니다."), "이번 달 소식을 전해 드립니다.");
 });

@@ -1,4 +1,4 @@
-import { currentExecution, consumeCall, ExecutionLimitError } from "../runtime/execution.js";
+import { abortScopeSignal, currentExecution, consumeCall, ExecutionLimitError } from "../runtime/execution.js";
 
 export type ProviderErrorKind =
   | "credit_exhausted"
@@ -248,7 +248,7 @@ export async function fetchWithTimeout(
 ): Promise<Response> {
   consumeCall();
   const timeoutMs = readHttpTimeoutMs();
-  const signals = [init?.signal, currentExecution()?.signal, timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined]
+  const signals = [init?.signal, currentExecution()?.signal, abortScopeSignal(), timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined]
     .filter((signal): signal is AbortSignal => Boolean(signal));
   const signal = signals.length > 0 ? AbortSignal.any(signals) : undefined;
   return fetch(url, { ...init, signal });

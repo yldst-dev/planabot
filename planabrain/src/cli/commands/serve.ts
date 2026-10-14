@@ -31,7 +31,7 @@ export function createPlanabrainServer(options: ServerOptions): http.Server {
   let active = 0;
   return http.createServer((request, response) => {
     if (request.method === "POST" && active >= 4) {
-      writeJson(response, 503, { error: { kind: "provider_unavailable", message: "처리 중인 요청이 너무 많습니다.", retryable: true } });
+      writeJson(response, 503, { error: { kind: "rate_limited", message: "처리 중인 요청이 너무 많습니다.", retryable: true } });
       return;
     }
     const controller = new AbortController();
@@ -199,9 +199,8 @@ function parseRecentTurns(value: unknown): RecentTurnInput[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  if (value.length > 40) throw new Error("대화 기록은 40개 이하여야 합니다.");
   const turns: RecentTurnInput[] = [];
-  for (const raw of value) {
+  for (const raw of value.slice(-40)) {
     if (typeof raw !== "object" || raw === null) {
       continue;
     }

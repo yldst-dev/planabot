@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildTurnMessages, buildMemoryContextMessage } from "./promptContext.js";
-import { fitContextMessages, contextTokens } from "./contextBudget.js";
+import { fitContextMessages, contextTokens, MAX_CONTEXT_TOKENS } from "./contextBudget.js";
 import { buildReplay } from "./replay.js";
-import { normalizeDeliveryText, finalizeAnswerForDelivery } from "./deliveryRewrite.js";
+import { normalizeDeliveryText, finalizeAnswerForDelivery, removeModelSourceLines } from "./deliveryRewrite.js";
 import { invokeChatWithMetadata } from "../integrations/chat.js";
 import { testSettings } from "../testing/settings.js";
 import { codexStream, installFetch } from "../testing/codex.js";
@@ -28,7 +28,11 @@ test("budgeting protects current evidence and reference after dropping old pairs
     searchContext: "현재 검색 근거",
   });
   assert.deepEqual(messages.map((message) => message.content), ["시스템 규칙", "답장한 원문", "현재 검색 근거", "현재 질문"]);
-  assert.throws(() => buildTurnMessages({ ...parts, searchContext: "가".repeat(25_000) }), /너무 깁니다/u);
+  const trimmed = buildTurnMessages({ ...parts, linkContext: "나".repeat(18_000), searchContext: "가".repeat(9_000) });
+  assert.ok(contextTokens(trimmed) <= 24_000);
+  assert.equal(trimmed.find((message) => message.content.startsWith("가"))?.content.length, 9_000);
+  assert.ok((trimmed.find((message) => message.content.startsWith("나"))?.content.length ?? 0) < 18_000);
+  assert.throws(() => buildTurnMessages({ ...parts, currentTurnText: "가".repeat(25_000) }), /너무 깁니다/u);
   assert.throws(() => fitContextMessages([{ role: "user", content: "질문" }, { role: "developer", content: "가".repeat(25_000) }]), /너무 깁니다/u);
 });
 
@@ -57,7 +61,8 @@ test("canonical replay avoids accumulated evidence and preserves delivered wordi
 
 test("delivery formatting is idempotent and preserves numbers and sentence meaning", () => {
   const formatted = normalizeDeliveryText("네, 선생님.\n\n가격은 519MB가 아니라 519원입니다. 날짜는 2026-09-14입니다.");
-  assert.match(formatted, /^네\.\n선생님\./u);
+  assert.match(formatted, /^네, 선생님\.\n/u);
+  assert.equal(normalizeDeliveryText("선생님, 여기 있습니다."), "선생님, 여기 있습니다.");
   assert.match(formatted, /519MB가 아니라 519원/u);
   assert.match(formatted, /2026-09-14/u);
   assert.equal(normalizeDeliveryText(formatted), formatted);
@@ -112,7 +117,6 @@ test("delivery rewriting rejects changed numbers and lost negation", async () =>
 test("style checks flag the reported greeting failure and enforce requested sentence counts", async () => {
   const { styleChecks } = await import("../evaluation/prana.js");
   const bad = styleChecks("네, 선생님.\n좋은 밤이네요.\n(다가앉습니다)\n선생님은 잠은 잘 잡니다.\n쉬셔야 합니다.", true);
-  assert.equal(bad.teacherLine, false);
   assert.equal(bad.noUnsolicitedScene, false);
   assert.equal(bad.concise, false);
   assert.equal(bad.noKnownGrammarError, false);
@@ -140,4 +144,36 @@ test("only plain social turns skip unrelated long-term context", async () => {
 test("memory deduplication does not confuse equal text from different roles", () => {
   const messages = buildTurnMessages({ ...parts, history: [{ role: "user", content: "확인했습니다." }], memoryContext: buildMemoryContextMessage("memory_context:\n- assistant: 확인했습니다.") });
   assert.match(messages.find((message) => message.contextKind === "memory")?.content ?? "", /assistant: 확인했습니다/u);
+});
+
+test("source cleanup removes model source lines but keeps prose and code that mention a source", () => {
+  assert.equal(removeModelSourceLines("답변입니다. 출처: 연합뉴스\n출처: https://a.example"), "답변입니다.");
+  assert.equal(removeModelSourceLines("이 자료의 출처: 통계청이라고 적혀 있습니다."), "이 자료의 출처: 통계청이라고 적혀 있습니다.");
+  assert.equal(removeModelSourceLines("resources:\n  limits: 1"), "resources:\n  limits: 1");
+  assert.equal(removeModelSourceLines("const source: string = path;"), "const source: string = path;");
+});
+
+test("canonical replay matches turns sent with the call name or an image marker", () => {
+  const replay = buildReplay([
+    { role: "user", text: "오늘 달러 환율 얼마야?\n(이미지 1장 첨부)" },
+    { role: "assistant", text: "시의성 정보 확인 응답 완료.", wireMessages: [{ role: "user", content: "프라나야, 오늘 달러 환율 얼마야?" }, { role: "assistant", content: "1달러는 1,380원입니다." }] },
+  ]);
+  assert.equal(replay.messages[1]?.content, "1달러는 1,380원입니다.");
+});
+
+test("a continuation that no longer fits keeps the answer already written", async () => {
+  const image = { data: "aGk=", mimeType: "image/png" };
+  const messages: ChatMessage[] = [
+    { role: "system", content: "시스템" },
+    { role: "user", content: "가".repeat(7000), contextKind: "history" },
+    { role: "user", content: "이 사진들 설명해줘", images: [image, image, image, image], contextKind: "current" },
+  ];
+  assert.ok(contextTokens(messages) < MAX_CONTEXT_TOKENS);
+  const partial = "나".repeat(1200);
+  const mock = installFetch(() => codexStream(partial, { incomplete: true }));
+  try {
+    const result = await invokeChatWithMetadata({ settings: testSettings(), messages });
+    assert.equal(mock.codexRequests().length, 1);
+    assert.equal(result.content, partial);
+  } finally { mock.restore(); }
 });

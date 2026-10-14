@@ -1,7 +1,7 @@
 import { checkExecution } from "../runtime/execution.js";
 import { buildSystemPrompt } from "../config/systemPrompt.js";
 import type { Settings } from "../config/settings.js";
-import { invokeChat } from "../integrations/chat.js";
+import { invokeChat, normalizeCitationUrl } from "../integrations/chat.js";
 import { estimateTokenCount } from "tokenx";
 import { looksAbruptlyTruncated, isLengthLimitedFinishReason } from "../integrations/continuation.js";
 import { resolveAuxSettings } from "./auxSettings.js";
@@ -117,7 +117,6 @@ export function normalizeDeliveryText(raw: string): string {
   if (!text) {
     return text;
   }
-  text = text.replace(/^([ \t]*(?:네[,，]?\s*)?)선생님[.,，]+[ \t]*(?:\n[ \t]*)*/gmu, (_match, prefix: string) => `${prefix.trim() ? "네.\n" : ""}선생님.\n`);
   text = text.replace(/\n{3,}/g, "\n\n").trim();
   return text.split("\n").map(breakIntoSentenceLines).join("\n").trim();
 }
@@ -136,10 +135,11 @@ export function removeModelSourceLines(input: string): string {
   return input
     .split(/\r?\n/u)
     .map((line) => {
-      const source = line.match(/(?:출처|sources?):/iu);
+      const source = line.match(/(?<![\p{L}\p{N}_])(?:출처|sources?):/iu);
       if (source?.index !== undefined) {
         const prefix = line.slice(0, source.index).trimEnd();
-        return /^[\s>*\-•]*$/u.test(prefix) ? "" : prefix;
+        if (/^[\s>*\-•]*$/u.test(prefix)) return "";
+        if (/[.!?。…)\]]$/u.test(prefix)) return prefix;
       }
       const trimmed = line.trim();
       if (
@@ -204,36 +204,18 @@ function normalizeVerifiedCitations(
     if (entries.length >= MAX_VERIFIED_CITATIONS) {
       break;
     }
-    try {
-      const url = new URL(citation.url);
-      if (url.protocol !== "https:" || url.username || url.password) {
-        continue;
-      }
-      url.hash = "";
-      for (const key of Array.from(url.searchParams.keys())) {
-        if (
-          /(auth|code|credential|jwt|key|password|secret|session|sig|token)/i.test(
-            key,
-          )
-        ) {
-          url.searchParams.delete(key);
-        }
-      }
-      const normalized = url.toString();
-      if (normalized.includes(")") || seen.has(normalized)) {
-        continue;
-      }
-      const label = buildCitationLabel(citation.title, url, entries.length + 1);
-      const entry = `[${label}](${normalized})`;
-      if (totalChars + entry.length > MAX_VERIFIED_SOURCE_CHARS) {
-        continue;
-      }
-      seen.add(normalized);
-      entries.push(entry);
-      totalChars += entry.length;
-    } catch {
+    const normalized = normalizeCitationUrl(citation.url);
+    if (!normalized || normalized.includes(")") || seen.has(normalized)) {
       continue;
     }
+    const label = buildCitationLabel(citation.title, new URL(normalized), entries.length + 1);
+    const entry = `[${label}](${normalized})`;
+    if (totalChars + entry.length > MAX_VERIFIED_SOURCE_CHARS) {
+      continue;
+    }
+    seen.add(normalized);
+    entries.push(entry);
+    totalChars += entry.length;
   }
   return entries;
 }

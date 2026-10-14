@@ -11,6 +11,7 @@ const MAX_CANDIDATES = 16;
 const FALLBACK_LIMIT = 5;
 const FALLBACK_MIN_OVERLAP = 0.12;
 const RECENCY_HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000;
+const SUBJECT_PREFIX = /^(?:사용자(?:는|의|가)|이 방은)\s*/u;
 
 export function selectRecall(memories: MemoryRecord[], query: string, now = Date.now()): MemoryRecall {
   const pinned = memories
@@ -31,7 +32,7 @@ export function selectRecall(memories: MemoryRecord[], query: string, now = Date
 export function fallbackRelevant(candidates: MemoryRecord[], query: string): MemoryRecord[] {
   const queryGrams = bigrams(query);
   return candidates
-    .map((memory) => ({ memory, overlap: overlap(queryGrams, bigrams(memory.content)) }))
+    .map((memory) => ({ memory, overlap: overlap(queryGrams, topicGrams(memory)) }))
     .filter((entry) => entry.overlap >= FALLBACK_MIN_OVERLAP)
     .sort((a, b) => b.overlap - a.overlap)
     .slice(0, FALLBACK_LIMIT)
@@ -59,7 +60,11 @@ export function renderMemoryContext(memories: MemoryRecord[], tokenBudget: numbe
 function priorScore(memory: MemoryRecord, queryGrams: Set<string>, now: number): number {
   const age = Math.max(0, now - Math.max(memory.updatedAt, memory.lastRecalledAt ?? 0));
   const recency = Math.pow(0.5, age / RECENCY_HALF_LIFE_MS);
-  return 0.5 * overlap(queryGrams, bigrams(memory.content)) + 0.3 * memory.importance + 0.2 * recency;
+  return 0.5 * overlap(queryGrams, topicGrams(memory)) + 0.3 * memory.importance + 0.2 * recency;
+}
+
+function topicGrams(memory: MemoryRecord): Set<string> {
+  return bigrams(memory.content.replace(SUBJECT_PREFIX, ""));
 }
 
 export function bigrams(text: string): Set<string> {

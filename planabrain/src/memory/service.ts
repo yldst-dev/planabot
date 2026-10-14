@@ -106,6 +106,7 @@ export async function rememberExchange(
         role: "assistant",
         text: sanitizeAssistantTurn(userText, assistantText),
         at: startedAt + 1,
+        ownerUserId: input.userId,
         ...(input.wireMessages?.length ? { wireMessages: input.wireMessages } : {}),
         ...(input.epoch === undefined ? {} : { epoch: input.epoch }),
       },
@@ -169,12 +170,13 @@ async function writeLongTermMemory(
 const TIME_SENSITIVE_PATTERN =
   /(날씨|기온|강수|습도|미세먼지|대기질|환율|시세|주가|코인|암호화폐|금리|뉴스|속보|물가|가격|재고|운행|항공편|교통|경기\s*(?:결과|일정)|스코어|순위|통계|선거\s*결과)/u;
 
-function sanitizeAssistantTurn(userText: string, assistantText: string): string {
-  if (TIME_SENSITIVE_PATTERN.test(userText)) {
+export function sanitizeAssistantTurn(userText: string, assistantText: string): string {
+  const lines = assistantText.split(/\r?\n/u);
+  const sourced = lines.some((line) => line.trimStart().startsWith("출처:"));
+  if (sourced && TIME_SENSITIVE_PATTERN.test(userText)) {
     return "시의성 정보 확인 응답 완료.";
   }
-  const sanitized = assistantText
-    .split(/\r?\n/u)
+  const sanitized = lines
     .filter((line) => !line.trimStart().startsWith("출처:"))
     .join("\n")
     .trim();

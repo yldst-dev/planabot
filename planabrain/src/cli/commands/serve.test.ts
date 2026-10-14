@@ -136,6 +136,10 @@ test("request parsers validate required fields", () => {
   assert.throws(() => parseAskInput("nope"), /JSON/u);
   const ask = parseAskInput(JSON.stringify({ userId: "u", question: "q", image: { path: "/tmp/x.png" } }));
   assert.deepEqual(ask.image, { path: "/tmp/x.png", mimeType: undefined });
+  const longHistory = Array.from({ length: 41 }, (_, index) => ({ role: "user", text: String(index) }));
+  const trimmed = parseAskInput(JSON.stringify({ userId: "u", question: "q", recentTurns: longHistory }));
+  assert.equal(trimmed.recentTurns?.length, 40);
+  assert.equal(trimmed.recentTurns?.[0]?.text, "1");
   const exchange = parseExchangeInput(
     JSON.stringify({ userId: "u", chatScope: "c", userText: "a", assistantText: "b" }),
   );

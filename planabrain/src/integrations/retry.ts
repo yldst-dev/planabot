@@ -1,5 +1,5 @@
 import { ProviderApiError, toStructuredError } from "./providerError.js";
-import { checkExecution, waitForRetry, currentExecution } from "../runtime/execution.js";
+import { abortScopeSignal, checkExecution, waitForRetry, currentExecution } from "../runtime/execution.js";
 
 export const RATE_LIMIT_MAX_RETRIES = 2;
 
@@ -8,7 +8,7 @@ export const RATE_LIMIT_RETRY_CAP_MS = 8000;
 export const RATE_LIMIT_MESSAGE = [
   "선생님.",
   "지금 요청이 한꺼번에 몰려서 처리 용량이 잠시 가득 찼습니다.",
-  "조금만 기다렸다가 다시 말씀해 주시겠어요.",
+  "조금 뒤에 다시 말씀해 주십시오.",
   "금방 정리하고 다시 도와드리겠습니다.",
 ].join("\n");
 
@@ -30,6 +30,7 @@ export async function withRateLimitRetry<T>(fn: () => Promise<T>): Promise<T> {
       return await fn();
     } catch (error) {
       checkExecution();
+      if (abortScopeSignal()?.aborted) throw error;
       const structured = toStructuredError(error);
       const status = structured.status;
       const execution = currentExecution();

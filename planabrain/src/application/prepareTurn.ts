@@ -1,10 +1,11 @@
 import { checkExecution, runExecution } from "../runtime/execution.js";
 import { buildMemoryContext, listRecentTurns, recallMemories } from "../memory/service.js";
 import type { MemoryRecall } from "../memory/recall.js";
-import { interpretScheduleRequest } from "../schedule/intent.js";
+import { interpretScheduleRequest, type ScheduleAction } from "../schedule/intent.js";
 import { interpretTodoRequest, type TodoAction } from "../todo/intent.js";
 import { classifyTurn, type TurnClassification, type TurnClassificationInput, type TurnSignals } from "../decision/turnSignals.js";
 import { listTodos } from "../todo/store.js";
+import { extractReplyContext } from "../chat/queryPolicy.js";
 
 export type TurnPrepareInput = {
   requestId?: string;
@@ -42,7 +43,7 @@ export type TurnPrepareOutput = {
 export type TurnPrepareDeps = {
   classifyTurn: (input: TurnClassificationInput) => Promise<TurnClassification | undefined>;
   interpretTodo: (userId: string, text: string, action?: TodoAction) => Promise<{ handled: boolean; }>;
-  interpretSchedule: (text: string) => { handled: boolean; };
+  interpretSchedule: (text: string, action?: ScheduleAction, meridiem?: TurnClassification["meridiem"]) => { handled: boolean; };
   listTodos: (userId: string) => Promise<unknown>;
   recallMemory: (input: { userId: string; chatScope: string; query: string; }) => Promise<MemoryRecall>;
   renderMemory: (input: {
@@ -103,16 +104,19 @@ async function executePrepareTurn(input: TurnPrepareInput, deps: TurnPrepareDeps
     classification = await deps.classifyTurn({
       message: query,
       previousUserMessage: recentTurns.filter((turn) => turn.role === "user").at(-1)?.text,
+      replyContext: extractReplyContext(input.question),
       hasImage: input.hasImage === true,
       memories: recall.candidates.map((memory) => ({ id: memory.id, content: memory.content })),
+      nowMs: input.nowMs,
     });
   } catch (error) {
     output.errors.signals = describeError(error);
   }
   output.signals = classification?.signals ?? null;
   const route = output.signals?.routeConfident ? output.signals.route : undefined;
+  const family = route ?? (output.signals?.route === "chat" ? undefined : output.signals?.route);
 
-  if (!route || route.startsWith("todo_")) {
+  if (!family || family.startsWith("todo_")) {
     try {
       output.todo = await deps.interpretTodo(input.userId, input.question, route ? toTodoAction(route) : undefined);
     } catch (error) {
@@ -123,9 +127,9 @@ async function executePrepareTurn(input: TurnPrepareInput, deps: TurnPrepareDeps
     }
   }
 
-  if (!route || route.startsWith("schedule_")) {
+  if (!family || family.startsWith("schedule_")) {
     try {
-      output.schedule = deps.interpretSchedule(input.question);
+      output.schedule = deps.interpretSchedule(input.question, route ? toScheduleAction(route) : undefined, classification?.meridiem);
     } catch (error) {
       output.errors.schedule = describeError(error);
     }
@@ -162,11 +166,16 @@ function toTodoAction(route: TurnSignals["route"]): TodoAction | undefined {
   return ["add", "complete", "delete", "update", "list"].includes(action) ? (action as TodoAction) : undefined;
 }
 
+function toScheduleAction(route: TurnSignals["route"]): ScheduleAction | undefined {
+  const action = route.slice("schedule_".length);
+  return ["add", "cancel", "list"].includes(action) ? (action as ScheduleAction) : undefined;
+}
+
 export function buildTurnPrepareDeps(nowMs?: number): TurnPrepareDeps {
   return {
     classifyTurn: (input) => classifyTurn(input),
     interpretTodo: (userId, text, action) => interpretTodoRequest(userId, text, action),
-    interpretSchedule: (text) => interpretScheduleRequest(text, { nowMs }),
+    interpretSchedule: (text, action, meridiem) => interpretScheduleRequest(text, { nowMs, action, meridiem }),
     listTodos: (userId) => listTodos(userId),
     recallMemory: async (params) => recallMemories({ userId: params.userId, chatId: params.chatScope, query: params.query }),
     renderMemory: async (params) => buildMemoryContext(params),

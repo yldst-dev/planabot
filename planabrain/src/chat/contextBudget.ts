@@ -6,6 +6,7 @@ import { ExecutionLimitError } from "../runtime/execution.js";
 export const MAX_CONTEXT_TOKENS = 24_000;
 export const DEFAULT_IMAGE_TOKENS = 4096;
 const LOW_DETAIL_IMAGE_TOKENS = 256;
+const MIN_EVIDENCE_CHARS = 500;
 
 export function imageTokenEstimate(detail: string | undefined): number {
   return detail === "low" ? LOW_DETAIL_IMAGE_TOKENS : DEFAULT_IMAGE_TOKENS;
@@ -37,8 +38,21 @@ export function fitContextMessages(messages: ChatMessage[], preserveReplay = fal
     total -= sizes.splice(index, count).reduce((sum, size) => sum + size, 0);
     result.splice(index, count);
   }
+  while (total > MAX_CONTEXT_TOKENS) {
+    let index = -1;
+    result.forEach((message, position) => {
+      if (message.contextKind === "evidence" && message.content.length > MIN_EVIDENCE_CHARS && (index < 0 || sizes[position] > sizes[index])) index = position;
+    });
+    if (index < 0) break;
+    const message = result[index];
+    const keep = Math.max(MIN_EVIDENCE_CHARS, message.content.length - Math.ceil((total - MAX_CONTEXT_TOKENS) * 1.1) - 1);
+    result[index] = { ...message, content: message.content.slice(0, keep) };
+    const size = messageTokens(result[index], imageTokens);
+    total += size - sizes[index];
+    sizes[index] = size;
+  }
   if (total > MAX_CONTEXT_TOKENS) {
-    throw new ExecutionLimitError("질문과 참고 자료가 너무 깁니다. 내용을 나누어 보내 주세요.");
+    throw new ExecutionLimitError("질문과 참고 자료가 너무 깁니다. 내용을 나누어 보내 주십시오.");
   }
   return result;
 }

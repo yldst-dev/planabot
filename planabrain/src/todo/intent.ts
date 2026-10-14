@@ -26,26 +26,20 @@ export async function interpretTodoRequest(
   const normalized = normalizeIntentText(userText);
   const todoRelated = action !== undefined || isTodoRelated(normalized) || isTodoContextText(text);
 
-  const update = !action || action === "update" ? parseUpdate(userText) : undefined;
+  const update = action === "update" || (!action && todoRelated) ? parseUpdate(userText) : undefined;
   if (update) {
-    const result = await updateTodo(userId, update.target, update.content);
-    if (!result.ok && !todoRelated) {
-      return emptyOutput();
-    }
+    const result = await updateTodo(userId, await resolveTodoTarget(userId, update.target, text), update.content);
     return mutationOutput("update", result.ok ? "수정 완료.\n선생님." : "확인 불가.\n선생님.", result);
   }
 
-  if (action ? action === "delete" : hasAny(normalized, ["삭제", "지워", "제거"])) {
-    const target = extractTarget(userText, ["삭제", "지워", "제거", "해줘", "해주세요", "해", "줘"]);
+  if (action ? action === "delete" : todoRelated && hasAny(normalized, ["삭제", "지워", "제거"])) {
+    const target = await resolveTodoTarget(userId, extractTarget(userText, ["삭제", "지워", "제거", "해줘", "해주세요", "해", "줘"]), text);
     const result = await deleteTodo(userId, target);
-    if (!result.ok && !todoRelated) {
-      return emptyOutput();
-    }
     return mutationOutput("delete", result.ok ? "삭제 완료.\n선생님." : "확인 불가.\n선생님.", result);
   }
 
   if (action ? action === "complete" : hasAny(normalized, ["완료", "끝냈", "끝낫", "처리했", "체크", "했어", "했습니다"])) {
-    const target = extractCompleteTarget(userText, text, todoRelated);
+    const target = await resolveTodoTarget(userId, extractCompleteTarget(userText, text, todoRelated), text);
     const result = await completeTodo(userId, target);
     if (!result.ok && !todoRelated) {
       return emptyOutput();
@@ -76,18 +70,27 @@ export async function interpretTodoRequest(
   return emptyOutput();
 }
 
+const DONE_LINES: Partial<Record<TodoInterpretOutput["action"], string>> = {
+  add: "항목을 추가했습니다.",
+  complete: "항목을 완료했습니다.",
+  update: "항목으로 고쳤습니다.",
+  delete: "항목을 지웠습니다."
+};
+
 function mutationOutput(
   action: TodoInterpretOutput["action"],
   prefix: string,
   result: {
     ok: boolean;
+    item?: TodoItem;
     items: TodoItem[];
     markdown: string;
     error?: string;
   }
 ): TodoInterpretOutput {
+  const detail = result.item && DONE_LINES[action] ? `\n"${result.item.content}" ${DONE_LINES[action]}` : "";
   const message = result.ok
-    ? `${prefix}\n\n${result.markdown}`
+    ? `${prefix}${detail}\n\n${result.markdown}`
     : `${prefix}\n${result.error ?? "작업을 처리하지 못했습니다."}\n\n${result.markdown}`;
   return {
     handled: true,
@@ -181,6 +184,19 @@ function extractSelectedOpenTodoFromContext(target: string, text: string): strin
   const openItems = extractOpenTodosFromContext(text);
   const index = parseTodoSelectorIndex(target, openItems.length);
   return index === undefined ? undefined : openItems[index];
+}
+
+async function resolveTodoTarget(userId: string, target: string, fullText: string): Promise<string> {
+  const fromContext = extractSelectedOpenTodoFromContext(target, fullText);
+  if (fromContext) {
+    return fromContext;
+  }
+  if (parseTodoSelectorIndex(target, Number.MAX_SAFE_INTEGER) === undefined) {
+    return target;
+  }
+  const open = (await listTodos(userId)).items.filter((item) => !item.completed);
+  const index = parseTodoSelectorIndex(target, open.length);
+  return index === undefined ? target : open[index].id;
 }
 
 function extractOpenTodosFromContext(text: string): string[] {
@@ -277,7 +293,6 @@ function isTodoContextText(text: string): boolean {
   return hasAny(normalizeIntentText(text), [
     "todo 컨텍스트",
     "오늘 할 일 입니다",
-    "등록된 항목이 없습니다",
     "- [ ]",
     "- [x]"
   ]);

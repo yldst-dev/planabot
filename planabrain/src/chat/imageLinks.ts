@@ -4,13 +4,20 @@ import { extractUrls, fetchWebImage } from "../integrations/webFetch.js";
 import { checkExecution } from "../runtime/execution.js";
 
 export const MAX_TURN_IMAGES = 4;
-export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const ANTHROPIC_MAX_IMAGE_BYTES = 3_932_160;
 
 const IMAGE_PATH_PATTERN = /\.(?:jpe?g|png|webp|gif)$/iu;
 const YOUTUBE_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/u;
 const YOUTUBE_HOSTS = new Set(["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"]);
 
-export type LinkedImage = { image: InputImage; } | { failure: "unsupported" | "failed"; };
+export type LinkedImage = { image: InputImage; } | { failure: "unsupported" | "too_large" | "failed"; };
+
+export function imageSizeLimit(settings: Pick<Settings, "aiProvider">): { bytes: number; label: string; } {
+  return settings.aiProvider === "anthropic"
+    ? { bytes: ANTHROPIC_MAX_IMAGE_BYTES, label: "3.75MB" }
+    : { bytes: MAX_IMAGE_BYTES, label: "10MB" };
+}
 
 export function isImageUrl(raw: string): boolean {
   try {
@@ -56,13 +63,13 @@ export function sniffImageType(bytes: Buffer): string | undefined {
 
 export async function loadLinkedImage(settings: Settings, url: string): Promise<LinkedImage> {
   try {
-    const { body } = await fetchWebImage(settings, url, MAX_IMAGE_BYTES);
+    const { body } = await fetchWebImage(settings, url, imageSizeLimit(settings).bytes);
     const mimeType = sniffImageType(body);
     return mimeType ? { image: { data: body.toString("base64"), mimeType } } : { failure: "unsupported" };
   } catch (error) {
     checkExecution();
     const reason = error instanceof Error ? error.message : String(error);
     console.error(`[planabrain] 이미지 링크 가져오기 실패: ${reason}`);
-    return { failure: "failed" };
+    return { failure: /크기가 제한을 초과/u.test(reason) ? "too_large" : "failed" };
   }
 }

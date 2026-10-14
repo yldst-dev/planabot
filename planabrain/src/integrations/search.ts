@@ -3,8 +3,11 @@ import { type Settings } from "../config/settings.js";
 import { type PreSearchContext, type WebCitation } from "./contracts.js";
 import { invokeOllamaApi } from "./ollama/api.js";
 import { parseWebSearchCitations } from "./evidence.js";
+import { toStructuredError } from "./providerError.js";
 
 export const PRE_SEARCH_EVIDENCE_LIMIT = 1500;
+
+const SEARCH_TIMEOUT_MS = 15_000;
 
 export const SEARCH_REQUEST_SUFFIX_PATTERN =
   /(?:\s*(?:좀|한번|한\s*번|다시|빨리|지금|바로))*\s*(?:[을를]\s*)?(?:알아\s*(?:봐\s*줘|봐\s*주세요|봐\s*줄래|봐|보자)|알려\s*(?:줘|주세요|줄래|다오)|찾아\s*(?:봐\s*줘|봐|줘|주세요|보자)|검색해\s*(?:줘|주세요|봐|볼래)|조사해\s*(?:줘|주세요)|확인해\s*(?:줘|주세요|봐)|말해\s*(?:줘|주세요))\s*[.?!~…]*$/u;
@@ -31,22 +34,30 @@ export async function runPreSearch(
   }
   if (!consumeTool()) return null;
   let result: unknown;
-  try {
-    result = await invokeOllamaApi({
-      providerName: "Ollama Web Search",
-      host: settings.ollamaSearchHost,
-      apiKeys: settings.ollamaApiKeys,
-      path: "/api/web_search",
-      payload: {
-        query,
-        max_results: settings.ollamaWebSearchMaxResults,
-      },
-    });
-  } catch (error) {
-    checkExecution();
-    const reason = error instanceof Error ? error.message : String(error);
-    console.error(`[planabrain] 선검색 실패: ${reason}`);
-    return null;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      result = await invokeOllamaApi({
+        providerName: "Ollama Web Search",
+        host: settings.ollamaSearchHost,
+        apiKeys: settings.ollamaApiKeys,
+        path: "/api/web_search",
+        payload: {
+          query,
+          max_results: settings.ollamaWebSearchMaxResults,
+        },
+        timeoutMs: SEARCH_TIMEOUT_MS,
+      });
+      break;
+    } catch (error) {
+      checkExecution();
+      const failure = toStructuredError(error);
+      if (attempt === 0 && failure.retryable && failure.kind !== "rate_limited") {
+        continue;
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`[planabrain] 선검색 실패: ${reason}`);
+      return null;
+    }
   }
   const citations = parseWebSearchCitations([result]);
   if (citations.length === 0) {

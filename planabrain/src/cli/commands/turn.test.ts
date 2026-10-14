@@ -111,10 +111,44 @@ test("confident schedule route skips the todo interpreter", async () => {
   assert.deepEqual(d.calls, ["recall", "schedule", "list", "memory"]);
 });
 
-test("low confidence route falls back to rule interpreters", async () => {
-  const d = deps({ classifyTurn: async () => ({ signals: { route: "chat", routeConfident: false, currentInfo: false, searchFollowUp: false, socialOnly: false }, relevantMemoryIds: new Set<number>() }) });
+function leaning(route: TurnRoute): TurnPrepareDeps["classifyTurn"] {
+  return async () => ({ signals: { route, routeConfident: false, currentInfo: false, searchFollowUp: false, socialOnly: false }, relevantMemoryIds: new Set<number>() });
+}
+
+test("low confidence chat route falls back to the rule interpreters while a confident one skips them", async () => {
+  const unsure = deps({ classifyTurn: leaning("chat") });
+  await prepareTurn(input, unsure);
+  assert.deepEqual(unsure.calls, ["recall", "todo", "schedule", "list", "memory"]);
+  const sure = deps({ classifyTurn: signals("chat") });
+  await prepareTurn(input, sure);
+  assert.deepEqual(sure.calls, ["recall", "list", "memory"]);
+});
+
+test("low confidence todo route runs only the todo rules without a decided action", async () => {
+  let received: string | undefined = "unset";
+  const d = deps({
+    classifyTurn: leaning("todo_delete"),
+    interpretTodo: async (_userId, _text, action) => {
+      received = action;
+      return { handled: false };
+    },
+  });
   await prepareTurn(input, d);
-  assert.deepEqual(d.calls, ["recall", "todo", "schedule", "list", "memory"]);
+  assert.equal(received, undefined);
+  assert.deepEqual(d.calls, ["recall", "list", "memory"]);
+});
+
+test("confident schedule route passes the decided action to the interpreter", async () => {
+  let received: string | undefined;
+  const d = deps({
+    classifyTurn: signals("schedule_list"),
+    interpretSchedule: (_text, action) => {
+      received = action;
+      return { handled: false };
+    },
+  });
+  await prepareTurn(input, d);
+  assert.equal(received, "list");
 });
 
 test("classifier receives the previous user message from recent turns", async () => {

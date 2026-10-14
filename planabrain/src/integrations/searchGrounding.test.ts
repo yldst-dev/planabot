@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { finalizeAnswerForDelivery } from "../chat/deliveryRewrite.js";
+import { redactSensitiveUrl } from "../chat/linkContext.js";
 import {
   answerTurn,
   isCurrentInformationRequest,
@@ -62,8 +63,8 @@ test("uses only currentTurnText for the current-information gate", async () => {
   }
 });
 
-test("fails closed when a current-information request has no verified citation", async () => {
-  const mock = installGateway({ results: [] }, "현재 환율은 1달러에 1,500원입니다.\n출처: Example");
+test("a search without results is answered from known facts without sources", async () => {
+  const mock = installGateway({ results: [] }, "지금은 환율을 확인하지 못했습니다.\n출처: Example");
   try {
     const { answer } = await answerTurn({
       question:
@@ -72,16 +73,19 @@ test("fails closed when a current-information request has no verified citation",
       settings: createSettings(),
     });
 
-    assert.match(answer, /확인 불가/u);
-    assert.match(answer, /추측해서 답하지 않겠습니다/u);
+    assert.equal(answer, "지금은 환율을 확인하지 못했습니다.");
     assert.ok(mock.requests.some((request) => request.url.endsWith("/api/web_search")));
+    assert.match(String(mock.codexRequests()[0]?.body.instructions), /웹 검색 도구를 사용할 수 없습니다/u);
   } finally {
     mock.restore();
   }
 });
 
-test("explicit search request requires evidence even when search ran", async () => {
-  const mock = installGateway({ results: [] }, "해당 회사를 확인했습니다.");
+test("an answer that uses none of the search results is sent without sources", async () => {
+  const mock = installGateway(
+    { results: [{ url: "https://news.example/other", title: "다른 기사", content: "다른 회사 소식" }] },
+    "검색 결과에서는 그 회사 소식을 찾지 못했습니다.\n출처번호: 없음",
+  );
   try {
     const { answer } = await answerTurn({
       question:
@@ -90,11 +94,34 @@ test("explicit search request requires evidence even when search ran", async () 
       settings: createSettings(),
     });
 
-    assert.match(answer, /확인 불가/u);
-    assert.doesNotMatch(answer, /해당 회사를 확인했습니다/u);
+    assert.equal(answer, "검색 결과에서는 그 회사 소식을 찾지 못했습니다.");
   } finally {
     mock.restore();
   }
+});
+
+test("citation URLs keep page identifiers and drop only secret parameters", async () => {
+  const citations = parseWebSearchCitations([{
+    results: [
+      { url: "https://finance.naver.com/item/main.naver?code=005930", title: "삼성전자" },
+      { url: "https://finance.naver.com/item/main.naver?code=000660", title: "SK하이닉스" },
+      { url: "https://prod.danawa.com/info/?pcode=123&keyword=gpu&access_token=a&X-Amz-Signature=b&apiKey=c&apitoken=d&author=e", title: "다나와" },
+    ],
+  }]);
+  assert.deepEqual(citations.map((citation) => citation.url), [
+    "https://finance.naver.com/item/main.naver?code=005930",
+    "https://finance.naver.com/item/main.naver?code=000660",
+    "https://prod.danawa.com/info/?pcode=123&keyword=gpu&author=e",
+  ]);
+
+  const answer = await finalizeAnswerForDelivery({
+    question: "질문",
+    answer: "본문입니다.",
+    settings: createSettings({ deliveryRewriteEnabled: false }),
+    verifiedCitations: [{ url: "https://finance.naver.com/item/main.naver?code=005930&token=x", title: "삼성전자" }],
+  });
+  assert.equal(answer, "본문입니다.\n\n출처: [삼성전자](https://finance.naver.com/item/main.naver?code=005930)");
+  assert.equal(redactSensitiveUrl("https://finance.naver.com/item/main.naver?code=005930&token=x"), "https://finance.naver.com/item/main.naver?code=005930");
 });
 
 test("replaces model-authored sources with verified HTTPS citation URLs", async () => {
@@ -286,6 +313,10 @@ test("explicit search request classifier detects search directives", () => {
   assert.equal(isExplicitSearchRequest("구글링해줘"), true);
   assert.equal(isExplicitSearchRequest("심심해"), false);
   assert.equal(isExplicitSearchRequest("오늘 기분이 어때"), false);
+  for (const text of ["검색하지 말고 그냥 대답해줘", "검색은 필요 없어", "내일 병원 알아봐야겠다", "주말에 맛집 찾아봐야지", "리서치 회사에 다녀"]) {
+    assert.equal(isExplicitSearchRequest(text), false, text);
+  }
+  assert.equal(isExplicitSearchRequest("알아봐야 할 것 같은데 좀 찾아봐 줘"), true);
   assert.equal(
     isExplicitSearchRequest(
       "메타정보:\n현재 시각: 2026-07-24\n사용자 질문:\nTODO 컨텍스트:\n- 자료 검색하기\n\n심심해",

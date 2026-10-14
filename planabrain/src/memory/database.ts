@@ -105,16 +105,15 @@ export class MemoryDatabase {
           turn.epoch ?? null,
         );
       }
+      this.db.prepare("DELETE FROM conversation_turns WHERE at < ?").run(params.cutoffAt);
       this.db.prepare(`
         DELETE FROM conversation_turns
-        WHERE chat_id = :chatId AND conversation_id = :conversationId AND (
-          at < :cutoffAt OR id NOT IN (
-            SELECT id FROM conversation_turns
-            WHERE chat_id = :chatId AND conversation_id = :conversationId
-            ORDER BY at DESC, id DESC LIMIT :maxTurns
-          )
+        WHERE chat_id = :chatId AND conversation_id = :conversationId AND id NOT IN (
+          SELECT id FROM conversation_turns
+          WHERE chat_id = :chatId AND conversation_id = :conversationId
+          ORDER BY at DESC, id DESC LIMIT :maxTurns
         )
-      `).run({ chatId: params.chatId, conversationId: params.conversationId, cutoffAt: params.cutoffAt, maxTurns: params.maxTurns });
+      `).run({ chatId: params.chatId, conversationId: params.conversationId, maxTurns: params.maxTurns });
       return true;
     });
   }
@@ -167,7 +166,7 @@ export class MemoryDatabase {
         const target = { ...visibilityParams(params.context), id: operation.id };
         const result = operation.op === "update"
           ? this.db.prepare(`
-              UPDATE memories SET content = :content, importance = COALESCE(:importance, importance), updated_at = :now
+              UPDATE memories SET content = :content, importance = COALESCE(:importance, importance), updated_at = :now, chat_id = :chatId, direct = :direct
               WHERE id = :id AND ${VISIBLE}
             `).run({ ...target, content: operation.content, importance: operation.importance ?? null, now })
           : this.db.prepare(`DELETE FROM memories WHERE id = :id AND ${VISIBLE}`).run(target);
@@ -179,6 +178,12 @@ export class MemoryDatabase {
           ORDER BY importance DESC, updated_at DESC LIMIT :limit
         )
       `).run({ userId: params.context.userId, limit: params.maxMemoriesPerUser });
+      this.db.prepare(`
+        DELETE FROM memories WHERE subject_user_id IS NULL AND chat_id = :chatId AND id NOT IN (
+          SELECT id FROM memories WHERE subject_user_id IS NULL AND chat_id = :chatId
+          ORDER BY importance DESC, updated_at DESC LIMIT :limit
+        )
+      `).run({ chatId: params.context.chatId, limit: params.maxMemoriesPerUser });
       return applied;
     });
   }
@@ -201,10 +206,10 @@ export class MemoryDatabase {
       this.db.prepare("INSERT INTO resets (user_id, at) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET at = excluded.at").run(userId, Date.now());
       const memories = this.db.prepare("DELETE FROM memories WHERE subject_user_id = ?").run(userId);
       const turns = this.db.prepare(`
-        DELETE FROM conversation_turns WHERE (chat_id, conversation_id) IN (
-          SELECT DISTINCT chat_id, conversation_id FROM conversation_turns WHERE owner_user_id = ?
-        )
-      `).run(userId);
+        DELETE FROM conversation_turns WHERE owner_user_id = :userId OR (role = 'assistant' AND id IN (
+          SELECT id + 1 FROM conversation_turns WHERE owner_user_id = :userId AND role = 'user'
+        ))
+      `).run({ userId });
       return Number(memories.changes) + Number(turns.changes) > 0;
     });
   }

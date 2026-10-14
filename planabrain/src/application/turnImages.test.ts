@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { extractImageUrls, isImageUrl, sniffImageType, youtubeThumbnail } from "../chat/imageLinks.js";
+import { testSettings } from "../testing/settings.js";
+import { resolveTurnImages } from "./turnImages.js";
 
 test("image types come from the file signature, not the name", () => {
   assert.equal(sniffImageType(Buffer.from([255, 216, 255, 224])), "image/jpeg");
@@ -38,4 +43,20 @@ test("youtube links map straight to their thumbnail without loading the page", (
   assert.equal(youtubeThumbnail("https://www.youtube.com/watch?v=short"), undefined);
   assert.equal(youtubeThumbnail("https://notyoutube.com/watch?v=dQw4w9WgXcQ"), undefined);
   assert.equal(youtubeThumbnail("not a url"), undefined);
+});
+
+test("images too large for the Claude API are skipped with a notice before the request", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "planabot-images-"));
+  try {
+    const file = path.join(dir, "large.png");
+    await writeFile(file, Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.alloc(4_000_000)]));
+    const files = [{ path: file, mimeType: "image/png" }];
+    const claude = await resolveTurnImages({ files, text: "", settings: testSettings({ aiProvider: "anthropic", webFetchEnabled: false }) });
+    assert.equal(claude.images, undefined);
+    assert.equal(claude.imageNotice, "3.75MB를 넘는 이미지는 확인하지 않았습니다.");
+    const codex = await resolveTurnImages({ files, text: "", settings: testSettings({ webFetchEnabled: false }) });
+    assert.equal(codex.images?.length, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

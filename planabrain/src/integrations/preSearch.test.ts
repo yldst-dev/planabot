@@ -6,7 +6,7 @@ import { buildSystemPrompt } from "../config/systemPrompt.js";
 import type { Settings } from "../config/settings.js";
 import { testSettings } from "../testing/settings.js";
 import { codexStream, installFetch, jsonResponse } from "../testing/codex.js";
-import { buildSearchQuery, invokeChatWithMetadata } from "./chat.js";
+import { buildSearchQuery, invokeChatWithMetadata, performPreSearch } from "./chat.js";
 
 function createSettings(overrides: Partial<Settings> = {}): Settings {
   return testSettings({ continuousChat: false, searchQueryRewriteEnabled: false, ...overrides });
@@ -39,6 +39,8 @@ test("buildSearchQuery strips request phrases but keeps short inputs", () => {
 test("system prompt uses the search-context rules when search is enabled", () => {
   const prompt = buildSystemPrompt(createSettings(), { searchEnabled: true });
   assert.match(prompt, /\[웹 검색 결과\]/u);
+  assert.match(prompt, /출처번호: 1, 3/u);
+  assert.match(prompt, /현재 시각과 비교/u);
   assert.doesNotMatch(prompt, /web_search 도구를 먼저 호출/u);
   assert.match(buildSystemPrompt(createSettings()), /웹 검색 도구를 사용할 수 없습니다/u);
 });
@@ -83,8 +85,9 @@ test("pre-search failure falls back to a plain chat request", async () => {
       preSearchQuery: "대전의 날씨",
       messages: [{ role: "user", content: "대전의 날씨를 알아봐줘" }],
     });
-    assert.equal(mock.requests.length, 2);
-    assert.equal((mock.requests[1]?.body.input as InputItem[]).length, 1);
+    assert.equal(mock.requests.length, 3);
+    assert.equal(mock.requests.filter((request) => request.url.endsWith("/api/web_search")).length, 2);
+    assert.equal((mock.requests[2]?.body.input as InputItem[]).length, 1);
     assert.equal(result.searchUsed, false);
     assert.equal(result.citations.length, 0);
   } finally {
@@ -270,7 +273,7 @@ test("hearsay turns do not search or get blocked even when the judge flags curre
   }
 });
 
-test("a real question still fails closed when search finds nothing usable", async () => {
+test("a failed search is answered from known facts with one model call", async () => {
   const mock = installGateway({ searchFails: true });
   try {
     const result = await answerTurn({
@@ -279,7 +282,91 @@ test("a real question still fails closed when search finds nothing usable", asyn
       settings: createSettings({ deliveryRewriteEnabled: false }),
       signals: judged({ currentInfo: true }),
     });
-    assert.match(result.answer, /확인 불가/u);
+    assert.doesNotMatch(result.answer, /출처/u);
+    assert.equal(mock.codexRequests().length, 1);
+    assert.match(String(mock.codexRequests()[0]?.body.instructions), /웹 검색 도구를 사용할 수 없습니다/u);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("the replied message is used to write the search query", async () => {
+  const mock = installFetch((request) => {
+    if (request.url.endsWith("/api/web_search")) return jsonResponse({ results: [] });
+    const rewrite = String(request.body.instructions).includes("웹 검색어 생성기");
+    return codexStream(rewrite ? '{"query": "갤럭시 Z 폴드8 공개"}' : "확인하지 못했습니다.");
+  });
+  try {
+    await answerTurn({
+      question: "메타정보:\n현재 시각: 2026-10-14 (수) 14:00:00 KST\n\n사용자 질문:\n참고 메시지:\n삼성전자가 갤럭시 Z 폴드8을 공개했다\n\n질문:\n이거 진짜야? 검색해줘",
+      currentTurnText: "이거 진짜야? 검색해줘",
+      settings: createSettings({ searchQueryRewriteEnabled: true, deliveryRewriteEnabled: false }),
+      signals: judged({ currentInfo: true }),
+    });
+    const rewrite = mock.codexRequests().find((request) => String(request.body.instructions).includes("웹 검색어 생성기"));
+    assert.match(JSON.stringify(rewrite?.body.input), /답장한 메시지: 삼성전자가 갤럭시 Z 폴드8을 공개했다/u);
+    assert.match(JSON.stringify(rewrite?.body.input), /현재 시각: 2026-10-14 \(수\) 14:00:00 KST/u);
+    assert.deepEqual(searchQueries(mock), ["갤럭시 Z 폴드8 공개"]);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("a search that fails once on a server error is tried again, but a bad request is not", async () => {
+  for (const [status, expected] of [[500, 2], [400, 1]] as const) {
+    let searches = 0;
+    const mock = installFetch((request) => {
+      if (!request.url.endsWith("/api/web_search")) return codexStream("답변입니다.");
+      searches += 1;
+      return searches === 1 ? jsonResponse({ error: "boom" }, status) : jsonResponse({ results: [{ title: "대전 날씨", url: "https://weather.example/daejeon", content: "맑음" }] });
+    });
+    try {
+      const context = await performPreSearch(createSettings(), "대전 날씨");
+      assert.equal(searches, expected);
+      assert.equal(Boolean(context), status === 500);
+    } finally {
+      mock.restore();
+    }
+  }
+});
+
+test("questions about the current date or time are answered without a search", async () => {
+  const { isClockQuestion } = await import("../chat/queryPolicy.js");
+  for (const text of ["오늘 며칠이야?", "지금 몇 시야", "프라나야 오늘 무슨 요일이야?", "지금 시간 알려줘", "현재 시각은?"]) {
+    assert.equal(isClockQuestion(text), true, text);
+  }
+  for (const text of ["오늘 영업 시간 알려줘", "오늘 날짜에 맞는 운세 알려줘", "지금 미국 대선 상황 어때?"]) {
+    assert.equal(isClockQuestion(text), false, text);
+  }
+  const mock = installGateway();
+  try {
+    await answerTurn({
+      question: "오늘 며칠이야?",
+      currentTurnText: "오늘 며칠이야?",
+      settings: createSettings({ deliveryRewriteEnabled: false }),
+      signals: judged({ currentInfo: true }),
+    });
+    assert.deepEqual(searchQueries(mock), []);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("a judged follow-up is rewritten with the earlier topic before searching", async () => {
+  const mock = installFetch((request) => {
+    if (request.url.endsWith("/api/web_search")) return jsonResponse({ results: [] });
+    const rewrite = String(request.body.instructions).includes("웹 검색어 생성기");
+    return codexStream(rewrite ? '{"query": "부산 날씨"}' : "확인하지 못했습니다.");
+  });
+  try {
+    await answerTurn({
+      question: "그럼 부산은?",
+      currentTurnText: "그럼 부산은?",
+      settings: createSettings({ searchQueryRewriteEnabled: true, deliveryRewriteEnabled: false }),
+      recentTurns: [{ role: "user", text: "서울 날씨" }, { role: "assistant", text: "서울은 맑습니다." }],
+      signals: judged({ currentInfo: true, searchFollowUp: true }),
+    });
+    assert.deepEqual(searchQueries(mock), ["부산 날씨"]);
   } finally {
     mock.restore();
   }

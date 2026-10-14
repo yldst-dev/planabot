@@ -39,6 +39,13 @@ test("does not treat casual conversation as a weather request", () => {
   assert.equal(result, null);
 });
 
+test("words that only contain weather syllables are not weather requests", () => {
+  for (const text of ["12월 여행 경비가 얼마나 들까?", "준비가 다 됐어, 12월 3일 출발이야", "눈이 아파서 12월에 병원 가", "12월 날씨 좋으면 여행 가려고"]) {
+    assert.equal(buildLongRangeWeatherReply(text, METADATA), null, text);
+  }
+  assert.match(buildLongRangeWeatherReply("12월 3일에 눈이 와?", METADATA) ?? "", /단기 예보 범위를 벗어납니다/u);
+});
+
 test("infers the next year for a past month without an explicit year", () => {
   const result = buildLongRangeWeatherReply("1월 말 날씨를 알려줘", METADATA);
 

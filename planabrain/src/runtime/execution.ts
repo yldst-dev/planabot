@@ -28,6 +28,8 @@ export type Execution = {
 
 const executions = new AsyncLocalStorage<Execution>();
 
+const abortScopes = new AsyncLocalStorage<AbortSignal>();
+
 export class ExecutionLimitError extends Error {
   constructor(message: string) {
     super(message);
@@ -149,7 +151,18 @@ export function recordUsage(inputTokens: unknown, outputTokens: unknown, cachedI
 
 export async function waitForRetry(ms: number): Promise<void> {
   checkExecution();
-  await delay(ms, undefined, { signal: currentExecution()?.signal });
+  const signals = [currentExecution()?.signal, abortScopes.getStore()].filter((signal): signal is AbortSignal => Boolean(signal));
+  await delay(ms, undefined, { signal: signals.length > 0 ? AbortSignal.any(signals) : undefined });
+}
+
+export function abortScopeSignal(): AbortSignal | undefined {
+  return abortScopes.getStore();
+}
+
+export function withAbortSignal<T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> {
+  const outer = abortScopes.getStore();
+  const scoped = outer ? AbortSignal.any([outer, signal]) : signal;
+  return abortScopes.run(scoped, () => abortable(work(), scoped));
 }
 
 export async function abortable<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {

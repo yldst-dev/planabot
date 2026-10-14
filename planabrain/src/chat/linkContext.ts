@@ -1,9 +1,10 @@
 import { type Settings } from "../config/settings.js";
-import { type InputImage, type WebCitation, mergeWebCitations } from "../integrations/chat.js";
+import { type InputImage, type WebCitation, isSecretParam, mergeWebCitations } from "../integrations/chat.js";
 import { extractUrls, canFetchUrls, fetchWebPage } from "../integrations/webFetch.js";
 import { isImageUrl, loadLinkedImage, youtubeThumbnail } from "./imageLinks.js";
 
 const MAX_PREVIEW_IMAGES = 2;
+const UNSUPPORTED_PAGE_MESSAGE = "지원하지 않는 웹페이지 형식입니다.";
 
 export type LinkContext = { content: string; citations: WebCitation[]; images: InputImage[]; };
 
@@ -124,7 +125,17 @@ async function fetchLink(settings: Settings, url: string): Promise<FetchedLink> 
       },
       imageUrl: page.imageUrl,
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === UNSUPPORTED_PAGE_MESSAGE) {
+      return {
+        document: {
+          source_url: redactSensitiveUrl(url),
+          status: "unavailable",
+          reason: "웹페이지가 아닌 파일 링크라 본문을 읽지 않았습니다.",
+        },
+        imageUrl: url,
+      };
+    }
     return {
       document: {
         source_url: redactSensitiveUrl(url),
@@ -151,11 +162,7 @@ export function redactSensitiveUrl(rawUrl: string): string {
   try {
     const url = new URL(rawUrl);
     for (const key of Array.from(url.searchParams.keys())) {
-      if (
-        /(auth|code|credential|jwt|key|password|secret|session|sig|token)/i.test(
-          key,
-        )
-      ) {
+      if (isSecretParam(key)) {
         url.searchParams.delete(key);
       }
     }

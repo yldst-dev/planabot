@@ -5,7 +5,7 @@ import { sanitizeAssistantOutput } from "../chat/sanitizeOutput.js";
 import { normalizeContinuationArtifacts, mergeContinuationContent, shouldContinueChat } from "./continuation.js";
 import { invokeAnthropicChat } from "./providers/anthropic.js";
 import { invokeCodexChat } from "./providers/codex.js";
-import { measureStage } from "../runtime/execution.js";
+import { ExecutionLimitError, measureStage } from "../runtime/execution.js";
 import { mergeWebCitations } from "./evidence.js";
 
 export function insertBeforeLastUserMessage(
@@ -78,18 +78,23 @@ export async function invokeChatWithMetadata(
     if (attempt === maxContinuations) {
       return finish(result.finishReason);
     }
-    workingMessages = fitContextMessages([
-      ...continuationMessages,
-      {
-        role: "assistant",
-        content: combined,
-      },
-      {
-        role: "user",
-        content:
-          "방금 답변한 마지막 문장 다음부터만 이어서 남은 정보를 적어 주십시오. 이미 쓴 서두는 반복하지 말고, 출처 줄, 메타 설명, 내부 판단은 쓰지 마십시오.",
-      },
-    ], true, imageTokens);
+    try {
+      workingMessages = fitContextMessages([
+        ...continuationMessages,
+        {
+          role: "assistant",
+          content: combined,
+        },
+        {
+          role: "user",
+          content:
+            "방금 답변한 마지막 문장 다음부터만 이어서 남은 정보를 적어 주십시오. 이미 쓴 서두는 반복하지 말고, 출처 줄, 메타 설명, 내부 판단은 쓰지 마십시오.",
+        },
+      ], true, imageTokens);
+    } catch (error) {
+      if (error instanceof ExecutionLimitError) return finish(result.finishReason);
+      throw error;
+    }
   }
 
   return finish(undefined);
@@ -105,4 +110,4 @@ export function toWireMessage(message: ChatMessage): WireMessage {
 export { ProviderRateLimitError } from "./retry.js";
 export { type InputImage, type ChatMessage, type WebCitation, type WireMessage, type ChatInvocationMetadata, type ChatInvocationParams, type PreSearchContext } from "./contracts.js";
 export { usesPreSearchContext, buildSearchQuery, SOURCE_SELECTION_INSTRUCTION, performPreSearch } from "./search.js";
-export { parseWebSearchCitations, mergeWebCitations } from "./evidence.js";
+export { parseWebSearchCitations, mergeWebCitations, normalizeCitationUrl, isSecretParam } from "./evidence.js";

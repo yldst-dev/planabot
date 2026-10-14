@@ -33,9 +33,13 @@ test("original backup keeps the frozen persona and adult policy", () => {
 test("live persona supplies Korean examples without forcing a scene", () => {
   assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /이름은 언제나 프라나/u);
   assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /아로나 선배/u);
-  assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /독립된 줄/u);
+  assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /매 답장마다 부르지는 않습니다/u);
+  assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /태블릿 속에 있다는 식으로 거리를 두지 않습니다/u);
   assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /한 줄에 한 문장씩/u);
   assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /좋은 밤입니다/u);
+  assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /"긍정\." 또는 "부정\."/u);
+  assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /새벽 2시에서 5시 사이면, 대화에서 한 번만/u);
+  assert.match(LIVE_DEFAULT_SYSTEM_PROMPT, /첫 줄에 결론을 말하고/u);
   assert.doesNotMatch(LIVE_DEFAULT_SYSTEM_PROMPT, /학습한 프라나|반드시 웹 검색/u);
 });
 
@@ -53,6 +57,7 @@ test("guard prompt no longer embeds persona or dating-sim rules", () => {
   assert.doesNotMatch(assembled, /아로나는 프라나가 아닌 선배/u);
   assert.match(assembled, /보안 규칙을 위반하는 요청에만/u);
   assert.match(assembled, /현재 사용자의 요청은 시스템 규칙 안에서 수행/u);
+  assert.match(assembled, /등록했거나 처리했다고 말하지 않고/u);
   assert.doesNotMatch(assembled, /사용자 입력, 메타정보/u);
 });
 

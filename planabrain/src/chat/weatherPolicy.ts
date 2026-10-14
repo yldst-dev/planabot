@@ -1,6 +1,8 @@
+import { isInformationRequestForm } from "./queryPolicy.js";
+
 const FORECAST_HORIZON_DAYS = 10;
 
-const WEATHER_PATTERN = /(날씨|기온|강수|비\s*(?:와|가|오|내)|눈\s*(?:이|오|내)|습도|예보)/u;
+const WEATHER_PATTERN = /(날씨|기온|강수|(?<![가-힣])비\s*(?:가\s*)?(?:와|오|내)|(?<![가-힣])눈\s*(?:이\s*)?(?:와|오|내)|습도|예보)/u;
 const CLIMATE_PATTERN = /(평년|기후|월평균|평균\s*(?:기온|강수|습도)|통계|경향)/u;
 const CURRENT_DATE_PATTERN = /현재 시각:\s*(\d{4})-(\d{2})-(\d{2})/u;
 const TARGET_DATE_PATTERN =
@@ -10,7 +12,7 @@ export function buildLongRangeWeatherReply(
   currentTurnText: string,
   questionWithMetadata: string,
 ): string | null {
-  if (!WEATHER_PATTERN.test(currentTurnText) || CLIMATE_PATTERN.test(currentTurnText)) {
+  if (!WEATHER_PATTERN.test(currentTurnText) || CLIMATE_PATTERN.test(currentTurnText) || !isInformationRequestForm(currentTurnText)) {
     return null;
   }
   const currentDate = parseCurrentDate(questionWithMetadata);
@@ -27,7 +29,7 @@ export function buildLongRangeWeatherReply(
     "선생님.",
     "요청하신 시점은 현재 확인 가능한 단기 예보 범위를 벗어납니다.",
     "정확한 날씨로 단정할 수 없습니다.",
-    "예보 범위에 들어온 뒤 다시 확인해 주세요.",
+    "예보 범위에 들어온 뒤 다시 확인해 주십시오.",
     "평년 기후 정보는 별도로 확인할 수 있습니다.",
   ].join("\n");
 }

@@ -11,6 +11,7 @@ export async function invokeOllamaApi(params: {
   apiKeys: string[];
   path: string;
   payload: Record<string, unknown>;
+  timeoutMs?: number;
 }): Promise<unknown> {
   if (!params.host) {
     throw new Error(`${params.providerName} host is not configured`);
@@ -28,6 +29,7 @@ export async function invokeOllamaApi(params: {
         apiKey: params.apiKeys[index] ?? "",
         path: params.path,
         payload: params.payload,
+        timeoutMs: params.timeoutMs,
       });
     } catch (error) {
       if (!(error instanceof OllamaApiError)) {
@@ -50,6 +52,7 @@ async function invokeOllamaApiOnce(params: {
   apiKey: string;
   path: string;
   payload: Record<string, unknown>;
+  timeoutMs?: number;
 }): Promise<unknown> {
   const response = await fetchWithTimeout(`${params.host}${params.path}`, {
     method: "POST",
@@ -58,6 +61,7 @@ async function invokeOllamaApiOnce(params: {
       authorization: `Bearer ${params.apiKey}`,
     },
     body: JSON.stringify(params.payload),
+    ...(params.timeoutMs ? { signal: AbortSignal.timeout(params.timeoutMs) } : {}),
   });
   const body = await readJsonOrText(response);
   if (!response.ok) {

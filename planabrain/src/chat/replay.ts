@@ -3,6 +3,7 @@ import { buildSystemPrompt } from "../config/systemPrompt.js";
 import { usesPreSearchContext, type ChatMessage } from "../integrations/chat.js";
 import { sanitizeAssistantOutput } from "./sanitizeOutput.js";
 import { normalizeDeliveryText, removeModelSourceLines, buildDeliveryGenerationRules } from "./deliveryRewrite.js";
+import { stripCallName } from "./queryPolicy.js";
 import { type Replay, type RecentTurnInput } from "./types.js";
 
 export const MAX_REPLAY_MESSAGES = 40;
@@ -26,7 +27,8 @@ export function buildReplay(recentTurns: RecentTurnInput[], maxMessages = MAX_RE
     const turn = turns[index];
     if (turn.role === "assistant") {
       const wire = turn.wireMessages;
-      const canonical = wire?.length === 2 && wire[0].role === "user" && wire[0].content === turns[index - 1]?.text && wire[1].role === "assistant";
+      const previous = turns[index - 1]?.text;
+      const canonical = wire?.length === 2 && wire[0].role === "user" && previous !== undefined && userTextKey(wire[0].content) === userTextKey(previous) && wire[1].role === "assistant";
       const content = canonical ? normalizeDeliveryText(removeModelSourceLines(sanitizeAssistantOutput(wire[1].content))) : turn.text;
       messages.push({ role: "assistant", content });
       continue;
@@ -38,4 +40,8 @@ export function buildReplay(recentTurns: RecentTurnInput[], maxMessages = MAX_RE
   }
   while (messages[0]?.role === "assistant") messages.shift();
   return { messages, epoch: latestEpoch };
+}
+
+function userTextKey(text: string): string {
+  return stripCallName(text.replace(/\n\(이미지 \d+장 첨부\)$/u, "")).replace(/^[\s:\-—,，.!?~]+/u, "").trim();
 }

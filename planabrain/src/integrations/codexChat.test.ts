@@ -138,6 +138,16 @@ test("codex falls back to the joined deltas and always sends instructions", asyn
   });
 });
 
+test("codex marks a stream that stops without a finish event as cut off", async () => {
+  const events = sse([{ type: "response.output_text.delta", delta: "잘린 응답" }]);
+  await withGateway((res) => streamChunks(res, events), async (baseUrl) => {
+    const settings = testSettings({ codexApiKey: "cg_test", codexBaseUrl: baseUrl, chatThinkingMode: "default", continuousChat: false });
+    const result = await invokeChatWithMetadata({ settings, maxContinuations: 0, messages: [{ role: "user", content: "안녕" }] });
+    assert.equal(result.content, "잘린 응답");
+    assert.equal(result.finishReason, "length");
+  });
+});
+
 test("codex reports gateway rule violations and failed streams as provider errors", async () => {
   await withGateway((res) => {
     res.writeHead(400, { "content-type": "application/json" });

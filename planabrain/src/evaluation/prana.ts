@@ -46,7 +46,6 @@ export function styleChecks(answer: string, short = false, caseId?: string): Rec
     nonempty: lines.length > 0,
     preservesFacts: caseId !== "numbers" || (/519MB/u.test(answer) && /23분\s*42초/u.test(answer) && /완료되지 않|완료되지 않은|미완료/u.test(answer)),
     requestedSentences: caseId !== "numbers" || lines.length === 2,
-    teacherLine: !answer.includes("선생님") || lines.includes("선생님."),
     noEmoji: !/\p{Extended_Pictographic}/u.test(answer),
     noMarkdown: !/(?:^|\n)\s*(?:#{1,6}\s|[-*]\s|```)|\*\*/u.test(answer),
     noUnsolicitedScene: !short || !/[()（）]|다가앉|잠들 때까지|쉬셔야|주무셔야/u.test(answer),

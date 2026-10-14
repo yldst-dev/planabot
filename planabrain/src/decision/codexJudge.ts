@@ -1,7 +1,7 @@
 import { resolveAuxSettings } from "../chat/auxSettings.js";
 import { type Settings } from "../config/settings.js";
 import { invokeChat } from "../integrations/chat.js";
-import { abortable } from "../runtime/execution.js";
+import { withAbortSignal } from "../runtime/execution.js";
 import { readAnswers, type SystemOneAnswer, type SystemOneQuestion } from "./systemOne.js";
 
 export const CODEX_JUDGE_SYSTEM = [
@@ -20,7 +20,7 @@ export async function evaluateWithCodex(
   questions: Record<string, SystemOneQuestion>,
   timeoutMs: number,
 ): Promise<Record<string, SystemOneAnswer>> {
-  const content = await abortable(
+  const content = await withAbortSignal(AbortSignal.timeout(timeoutMs), () =>
     invokeChat({
       settings: resolveAuxSettings(settings),
       maxContinuations: 0,
@@ -29,9 +29,8 @@ export async function evaluateWithCodex(
         { role: "user", content: JSON.stringify({ state, questions }) },
       ],
     }),
-    AbortSignal.timeout(timeoutMs),
   );
-  return readAnswers(normalizeAnswers(extractAnswers(content), questions), questions);
+  return readAnswers(extractAnswers(content), questions);
 }
 
 function extractAnswers(content: string): unknown {
@@ -47,13 +46,4 @@ function extractAnswers(content: string): unknown {
 function parseWithMissingBraces(text: string): unknown {
   const missing = Math.max(0, (text.match(/\{/gu)?.length ?? 0) - (text.match(/\}/gu)?.length ?? 0));
   return JSON.parse(text + "}".repeat(Math.min(missing, 3)));
-}
-
-function normalizeAnswers(raw: unknown, questions: Record<string, SystemOneQuestion>): unknown {
-  if (typeof raw !== "object" || raw === null) return raw;
-  const record = raw as Record<string, unknown>;
-  return Object.fromEntries(Object.keys(questions).map((key) => {
-    const value = record[key];
-    return [key, typeof value === "number" ? { noul: value } : value];
-  }));
 }

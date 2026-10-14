@@ -3,13 +3,12 @@ import { open, realpath } from "node:fs/promises";
 import type { Settings } from "../config/settings.js";
 import type { InputImage } from "../integrations/chat.js";
 import { canFetchUrls } from "../integrations/webFetch.js";
-import { MAX_IMAGE_BYTES, MAX_TURN_IMAGES, extractImageUrls, loadLinkedImage, sniffImageType } from "../chat/imageLinks.js";
+import { MAX_TURN_IMAGES, extractImageUrls, imageSizeLimit, loadLinkedImage, sniffImageType } from "../chat/imageLinks.js";
 
 export type ImageFile = { path: string; mimeType?: string; };
 
 type ImageResult = { image: InputImage; } | { notice: string; };
 
-const TOO_LARGE_NOTICE = "10MB를 넘는 이미지는 확인하지 않았습니다.";
 const UNSUPPORTED_NOTICE = "지원하지 않는 형식의 이미지가 있습니다. JPEG, PNG, WebP, GIF만 볼 수 있습니다.";
 const MISMATCH_NOTICE = "파일 내용이 이미지 형식과 맞지 않아 확인하지 않았습니다.";
 const LINK_FAILED_NOTICE = "이미지 링크를 가져오지 못했습니다.";
@@ -24,7 +23,7 @@ export async function resolveTurnImages(params: {
   const images: InputImage[] = [];
   const notices = [params.notice?.trim()];
   for (const file of params.files.slice(0, MAX_TURN_IMAGES)) {
-    collect(await readImageFile(file, params.imageRoot), images, notices);
+    collect(await readImageFile(file, params.settings, params.imageRoot), images, notices);
   }
   const links = canFetchUrls(params.settings) ? extractImageUrls(params.text, MAX_TURN_IMAGES - images.length) : [];
   for (const result of await Promise.all(links.map((url) => readImageLink(params.settings, url)))) {
@@ -39,7 +38,7 @@ function collect(result: ImageResult, images: InputImage[], notices: Array<strin
   else images.push(result.image);
 }
 
-async function readImageFile(file: ImageFile, imageRoot?: string): Promise<ImageResult> {
+async function readImageFile(file: ImageFile, settings: Settings, imageRoot?: string): Promise<ImageResult> {
   const mimeType = file.mimeType?.trim() || "image/jpeg";
   let resolved: string;
   try {
@@ -58,7 +57,7 @@ async function readImageFile(file: ImageFile, imageRoot?: string): Promise<Image
   let bytes: Buffer;
   try {
     const info = await handle.stat();
-    if (!info.isFile() || info.size > MAX_IMAGE_BYTES) return { notice: TOO_LARGE_NOTICE };
+    if (!info.isFile() || info.size > imageSizeLimit(settings).bytes) return { notice: tooLargeNotice(settings) };
     bytes = await handle.readFile();
   } finally {
     await handle.close();
@@ -72,5 +71,10 @@ async function readImageFile(file: ImageFile, imageRoot?: string): Promise<Image
 async function readImageLink(settings: Settings, url: string): Promise<ImageResult> {
   const result = await loadLinkedImage(settings, url);
   if ("image" in result) return result;
+  if (result.failure === "too_large") return { notice: tooLargeNotice(settings) };
   return { notice: result.failure === "unsupported" ? UNSUPPORTED_NOTICE : LINK_FAILED_NOTICE };
+}
+
+function tooLargeNotice(settings: Settings): string {
+  return `${imageSizeLimit(settings).label}를 넘는 이미지는 확인하지 않았습니다.`;
 }

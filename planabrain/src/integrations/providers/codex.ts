@@ -90,6 +90,7 @@ export async function readCodexStream(response: Response): Promise<ChatInvocatio
   const deltas: string[] = [];
   let doneText: string | undefined;
   let finishReason = "stop";
+  let finished = false;
   let buffer = "";
   const handle = (block: string): void => {
     const data = block
@@ -114,6 +115,7 @@ export async function readCodexStream(response: Response): Promise<ChatInvocatio
       case "response.completed":
       case "response.incomplete": {
         const completed = asRecord(event.response);
+        finished = true;
         readUsage(completed);
         recordProviderResponse(completed, "codex");
         if (event.type === "response.incomplete") finishReason = "length";
@@ -140,7 +142,7 @@ export async function readCodexStream(response: Response): Promise<ChatInvocatio
   if (!content) {
     throw emptyResponse("codex 응답에 본문이 없습니다.");
   }
-  return { content, finishReason };
+  return { content, finishReason: finished || doneText !== undefined ? finishReason : "length" };
 }
 
 function streamError(event: Record<string, unknown>): ProviderApiError {

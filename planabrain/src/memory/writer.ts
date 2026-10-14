@@ -48,6 +48,7 @@ async function passesGate(input: WriterInput, decision: DecisionEvaluator | unde
         },
       },
     );
+    if (!answers.remember && !answers.forget) return true;
     return [answers.remember, answers.forget].some((answer) => answer?.type === "noul" && answer.noul >= GATE_THRESHOLD);
   } catch (error) {
     checkExecution();
@@ -89,6 +90,7 @@ export function buildSystemPrompt(context: ChatContext): string {
     "봇의 답변은 사용자 메시지를 이해하는 데만 참고하고, 그 내용을 기억으로 만들지 않습니다.",
     "기존 기억과 같은 내용이면 아무것도 하지 않습니다. 내용이 바뀌었으면 update, 사용자가 틀렸다고 하거나 잊어 달라고 하면 delete합니다.",
     "기억 하나는 \"사용자는 ...\"으로 시작하는 짧은 한국어 문장 하나로 씁니다.",
+    ...(context.direct ? [] : ["room 기억은 특정 사람이 아니라 대화방 전체에 대한 내용이므로 \"이 방은 ...\"으로 시작합니다."]),
     `kind: ${kinds.join(", ")}`,
     "importance: 0.0부터 1.0까지. 건강, 알레르기, 호칭, 부탁한 규칙은 높게 둡니다.",
     "출력은 JSON 한 줄만 씁니다: {\"operations\":[...]}. 고칠 것이 없으면 {\"operations\":[]}.",

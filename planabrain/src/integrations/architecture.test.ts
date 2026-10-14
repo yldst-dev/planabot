@@ -36,14 +36,17 @@ test("continuation retains pre-search evidence", async () => {
   } finally { mock.restore(); }
 });
 
-test("unsupported search evidence is excluded from future replay", async () => {
+test("a search without results still answers and keeps the replay transcript", async () => {
   const mock = installFetch((request) =>
-    request.url.endsWith("/api/web_search") ? jsonResponse({ results: [] }) : codexStream("검증하지 않은 최신 정보입니다."),
+    request.url.endsWith("/api/web_search") ? jsonResponse({ results: [] }) : codexStream("지금은 오늘 뉴스를 확인하지 못했습니다."),
   );
   try {
     const result = await answerTurn({ question: "오늘 뉴스를 검색해줘", settings: testSettings({ searchQueryRewriteEnabled: false }) });
-    assert.match(result.answer, /확인 불가/u);
-    assert.deepEqual(result.transcript, { wireMessages: [], epoch: 1 });
+    assert.equal(result.answer, "지금은 오늘 뉴스를 확인하지 못했습니다.");
+    assert.deepEqual(result.transcript, {
+      wireMessages: [{ role: "user", content: "오늘 뉴스를 검색해줘" }, { role: "assistant", content: "지금은 오늘 뉴스를 확인하지 못했습니다." }],
+      epoch: 0,
+    });
   } finally { mock.restore(); }
 });
 

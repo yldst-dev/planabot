@@ -47,3 +47,11 @@ test("defaults to the search-disabled rules", () => {
   const fallback = buildSystemPrompt(promptSettings);
   assert.doesNotMatch(fallback, /web_search 도구를 먼저 호출/u);
 });
+
+test("keeps answers that only quote English phrases but strips leaked reasoning", () => {
+  const translation = "선생님.\nI should go home은 집에 가야겠다는 뜻입니다.";
+  assert.equal(sanitizeAssistantOutput(translation), translation);
+  const explanation = "시스템 프롬프트(system prompt)는 모델에 주는 기본 지시문입니다.";
+  assert.equal(sanitizeAssistantOutput(explanation), explanation);
+  assert.equal(sanitizeAssistantOutput("I should respond in Korean.\n\n좋은 밤입니다."), "좋은 밤입니다.");
+});

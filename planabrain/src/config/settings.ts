@@ -73,7 +73,7 @@ export function loadSettings(): Settings {
     ollamaApiKeys,
     ollamaSearchHost: ollamaApiKeys.length > 0 ? resolveOllamaSearchHost() : undefined,
     ollamaWebSearchEnabled: parseBooleanEnv("PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH", false),
-    ollamaWebSearchMaxResults: parseRequiredPositiveIntEnv("PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS", 5),
+    ollamaWebSearchMaxResults: Math.min(10, parseRequiredPositiveIntEnv("PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS", 5)),
     webFetchEnabled: parseBooleanEnv("PLANABRAIN_WEB_FETCH_ENABLED", true),
     webFetchTimeoutMs: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_TIMEOUT_MS", 10000, 1000, 30000),
     webFetchMaxBytes: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_MAX_BYTES", 1000000, 1024, 5000000),

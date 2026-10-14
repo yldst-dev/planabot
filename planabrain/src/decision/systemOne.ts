@@ -72,21 +72,22 @@ export function readAnswers(
   const answers: Record<string, SystemOneAnswer> = {};
   for (const [key, question] of Object.entries(questions)) {
     const answer = readAnswer(record[key], question);
-    if (!answer) {
-      throw new Error(`판단 모델 응답 형식 오류: ${key}`);
+    if (answer) {
+      answers[key] = answer;
     }
-    answers[key] = answer;
   }
   return answers;
 }
 
 function readAnswer(raw: unknown, question: SystemOneQuestion): SystemOneAnswer | undefined {
-  if (typeof raw !== "object" || raw === null) return undefined;
-  const value = raw as Record<string, unknown>;
+  const value = typeof raw === "object" && raw !== null
+    ? raw as Record<string, unknown>
+    : question.type === "noul" ? { noul: raw } : { choice: raw };
   if (question.type === "noul") {
-    return isProbability(value.noul) ? { type: "noul", noul: value.noul } : undefined;
+    const noul = typeof value.noul === "boolean" ? Number(value.noul) : value.noul;
+    return isProbability(noul) ? { type: "noul", noul } : undefined;
   }
-  if (typeof value.choice !== "string" || !(value.choice in question.criteria)) return undefined;
+  if (typeof value.choice !== "string" || !Object.hasOwn(question.criteria, value.choice)) return undefined;
   return {
     type: "choice",
     choice: value.choice,
