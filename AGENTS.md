@@ -3,7 +3,7 @@
 ## 요약
 - Rust 텔레그램 봇(`core/src/`) + TS CLI(`planabrain/src/`) 구조.
 - 빌드/테스트는 cargo + 필요 시 planabrain 빌드.
-- 응답 메시지는 항상 프라나 톤(짧고 차분, “선생님.” 단독 줄).
+- 응답 메시지는 항상 프라나 톤(짧고 차분). 고정 안내문은 “선생님.”을 단독 줄로 두고, AI 답변은 필요할 때만 자연스럽게 부름.
 - 변경 시 테스트/린트/빌드 후 푸시.
 
 ## Project Structure & Module Organization
@@ -34,9 +34,11 @@
 - Prefer `anyhow::Result` and `?` for error propagation; avoid `unwrap`/`expect` in handlers.
 - Naming: `snake_case` for functions/vars, `CamelCase` for types, `SCREAMING_SNAKE_CASE` for consts.
 - User-facing strings are Korean and must use Blue Archive “Prana(프라나)” tone consistently across all features (links, error messages, bot replies).
-  - Style: short sentences, “선생님.” on its own line, calm/system-like tone.
+  - Style: short sentences, calm/system-like tone.
+  - Fixed bot messages (errors, statuses, schedules) put “선생님.” on its own line. AI answers address 선생님 only when it reads naturally, e.g. “선생님, 여기 있습니다.”
   - Prefer status lines like “정리 완료.” / “확인 완료.” / “오류.” / “불가.” / “대기 중.” where appropriate.
   - Avoid emoticons, slang, excessive warmth, and exclamation marks.
+  - End polite requests with “~주십시오” rather than “~주세요”.
   - Escape HTML via `teloxide::utils::html` when interpolating.
 - TypeScript: ESM (`"type": "module"`), NodeNext module resolution.
 
