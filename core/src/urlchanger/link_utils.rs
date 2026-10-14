@@ -141,9 +141,9 @@ pub fn clean_music_url(url_str: &str) -> String {
                 let new_path = path.split("si=").next().unwrap_or("").trim_end_matches('?');
                 url.set_path(new_path);
             }
-            if let Some(full) = expand_youtube_short(&url) {
-                return full;
-            }
+        }
+        if let Some(full) = expand_youtube_short(&url) {
+            return full;
         }
 
         return url.to_string();
@@ -153,18 +153,28 @@ pub fn clean_music_url(url_str: &str) -> String {
 }
 
 pub fn is_youtube_short_link(url_str: &str) -> bool {
-    Url::parse(url_str).is_ok_and(|url| url.host_str() == Some("youtu.be"))
+    Url::parse(url_str).is_ok_and(|url| youtube_short_id(&url).is_some())
+}
+
+fn youtube_short_id(url: &Url) -> Option<&str> {
+    let segments: Vec<&str> = url
+        .path_segments()?
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let id = match (url.host_str()?, segments.as_slice()) {
+        ("youtu.be", [id, ..]) => *id,
+        ("youtube.com" | "www.youtube.com" | "m.youtube.com", ["shorts", id, ..]) => *id,
+        _ => return None,
+    };
+    let valid = id.len() == 11
+        && id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-');
+    valid.then_some(id)
 }
 
 fn expand_youtube_short(url: &Url) -> Option<String> {
-    let id = url.path_segments()?.find(|segment| !segment.is_empty())?;
-    if id.len() != 11
-        || !id
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
-    {
-        return None;
-    }
+    let id = youtube_short_id(url)?;
     let mut full = Url::parse("https://www.youtube.com/watch").ok()?;
     {
         let mut pairs = full.query_pairs_mut();
@@ -438,6 +448,14 @@ mod tests {
                 "https://youtu.be/d7hGpiHLSRI?list=PL123&index=2",
                 "https://www.youtube.com/watch?v=d7hGpiHLSRI&list=PL123&index=2",
             ),
+            (
+                "https://youtube.com/shorts/LDVp294Ty0k",
+                "https://www.youtube.com/watch?v=LDVp294Ty0k",
+            ),
+            (
+                "https://m.youtube.com/shorts/LDVp294Ty0k?si=abc&feature=share",
+                "https://www.youtube.com/watch?v=LDVp294Ty0k&feature=share",
+            ),
         ] {
             assert_eq!(clean_music_url(short), full, "{short}");
             assert!(is_youtube_short_link(short));
@@ -451,6 +469,14 @@ mod tests {
             "https://www.youtube.com/watch?v=d7hGpiHLSRI"
         ));
         assert!(!is_youtube_short_link("not a url"));
+        for kept in [
+            "https://www.youtube.com/shorts/",
+            "https://www.youtube.com/shorts/bad",
+            "https://www.youtube.com/@channel/shorts",
+            "https://youtube.com.example.com/shorts/LDVp294Ty0k",
+        ] {
+            assert!(!is_youtube_short_link(kept), "{kept}");
+        }
     }
 
     #[test]

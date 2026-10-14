@@ -174,7 +174,7 @@ fn youtube_plan(username: &str, links: &[MusicLink], had_tracking: bool) -> Link
         .any(|link| is_youtube_short_link(&link.original));
     let reply_text = match (expanded, had_tracking) {
         (true, _) => {
-            format!("정리 완료.\n선생님.\n짧은 주소를 전체 주소로 바꿨습니다.\n{cleaned_text}")
+            format!("정리 완료.\n선생님.\n영상 주소를 기본 형식으로 바꿨습니다.\n{cleaned_text}")
         }
         (false, true) => {
             "정리 완료.\n선생님.\n추적 파라미터를 제거했습니다.\n확인 바랍니다.".to_string()
@@ -648,19 +648,29 @@ mod tests {
 
     #[test]
     fn youtube_short_links_are_reposted_as_full_urls_with_a_preview() {
-        let links = extract_music_links("https://youtu.be/d7hGpiHLSRI");
-        let plan = youtube_plan("sensei", &links, false);
-        let full = "https://www.youtube.com/watch?v=d7hGpiHLSRI";
-        assert_eq!(
-            text_of(&plan.admin[0]),
-            format!("정리 완료.\n선생님.\nsensei: {full}")
-        );
-        assert!(text_of(&plan.reply[0]).ends_with(full));
-        assert!(
-            plan.reply
-                .iter()
-                .all(|reply| reply.disable_preview != Some(true))
-        );
+        for (short, full) in [
+            (
+                "https://youtu.be/d7hGpiHLSRI",
+                "https://www.youtube.com/watch?v=d7hGpiHLSRI",
+            ),
+            (
+                "https://youtube.com/shorts/LDVp294Ty0k",
+                "https://www.youtube.com/watch?v=LDVp294Ty0k",
+            ),
+        ] {
+            let links = extract_music_links(short);
+            let plan = youtube_plan("sensei", &links, false);
+            assert_eq!(
+                text_of(&plan.admin[0]),
+                format!("정리 완료.\n선생님.\nsensei: {full}")
+            );
+            assert!(text_of(&plan.reply[0]).ends_with(full));
+            assert!(
+                plan.reply
+                    .iter()
+                    .all(|reply| reply.disable_preview != Some(true))
+            );
+        }
     }
 
     #[test]
