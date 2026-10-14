@@ -133,11 +133,7 @@ fn running(key: &str) -> Option<String> {
 
 fn count_list(key: &str) -> usize {
     running(key)
-        .map(|raw| {
-            raw.split(',')
-                .filter(|item| !item.trim().is_empty())
-                .count()
-        })
+        .map(|raw| crate::planabrain::parse_id_list(&raw).len())
         .unwrap_or(0)
 }
 

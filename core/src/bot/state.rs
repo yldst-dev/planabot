@@ -100,6 +100,28 @@ pub struct AppState {
     share_claims_path: PathBuf,
     write_lock: Arc<AsyncMutex<()>>,
     pub hiromi_bin: PathBuf,
+    gallery_jobs: Arc<Mutex<HashSet<String>>>,
+    gallery_job_slots: Arc<Semaphore>,
+}
+
+pub(crate) struct GalleryJob {
+    jobs: Arc<Mutex<HashSet<String>>>,
+    gallery_id: String,
+}
+
+fn start_job(jobs: &Arc<Mutex<HashSet<String>>>, gallery_id: &str) -> Option<GalleryJob> {
+    let mut running = jobs.lock().unwrap_or_else(|e| e.into_inner());
+    running.insert(gallery_id.to_string()).then(|| GalleryJob {
+        jobs: jobs.clone(),
+        gallery_id: gallery_id.to_string(),
+    })
+}
+
+impl Drop for GalleryJob {
+    fn drop(&mut self) {
+        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        jobs.remove(&self.gallery_id);
+    }
 }
 
 const SHARE_CLAIM_TTL_MS: i64 = 24 * 60 * 60 * 1000;
@@ -164,7 +186,22 @@ impl AppState {
             share_claims_path,
             write_lock: Arc::new(AsyncMutex::new(())),
             hiromi_bin,
+            gallery_jobs: Arc::new(Mutex::new(HashSet::new())),
+            gallery_job_slots: Arc::new(Semaphore::new(2)),
         }
+    }
+
+    pub(crate) fn start_gallery_job(&self, gallery_id: &str) -> Option<GalleryJob> {
+        start_job(&self.gallery_jobs, gallery_id)
+    }
+
+    pub(crate) fn is_gallery_job_running(&self, gallery_id: &str) -> bool {
+        let jobs = self.gallery_jobs.lock().unwrap_or_else(|e| e.into_inner());
+        jobs.contains(gallery_id)
+    }
+
+    pub(crate) async fn gallery_job_slot(&self) -> Option<OwnedSemaphorePermit> {
+        self.gallery_job_slots.clone().acquire_owned().await.ok()
     }
 
     pub(crate) async fn put_share_claim(&self, claim: ShareClaim) {
@@ -175,7 +212,7 @@ impl AppState {
                 Ok(claims) => claims,
                 Err(_) => return,
             };
-            claims.retain(|_, stored| is_share_claim_live(stored.created_at_ms, now));
+            claims.retain(|_, stored| keep_live_claim(stored, now));
             claims.insert(
                 claim.token.clone(),
                 StoredShareClaim {
@@ -215,12 +252,8 @@ impl AppState {
     }
 
     pub(crate) fn planabrain_conversation_scope_id(&self, msg: &Message) -> String {
-        let Some(reply) = msg.reply_to_message() else {
-            return default_conversation_scope_id(
-                msg.chat.id.0,
-                msg.chat.is_private(),
-                msg.from.as_ref().map(|user| user.id.0),
-            );
+        let Some(reply) = conversation_reply(msg) else {
+            return planabrain_default_scope_id(msg);
         };
         let tracker = self.planabrain_replies.read().ok();
         if let Some(record) = tracker
@@ -233,13 +266,14 @@ impl AppState {
         format!("reply_{}", reply.id.0)
     }
 
-    pub(crate) fn planabrain_todo_reply_owner_user_id(&self, msg: &Message) -> Option<u64> {
+    pub(crate) fn planabrain_reply_owner_user_id(&self, msg: &Message) -> Option<u64> {
         let reply = msg.reply_to_message()?;
         let tracker = self.planabrain_replies.read().ok()?;
         let record = tracker.get(reply.chat.id, reply.id)?;
-        let raw_owner = record
-            .conversation_scope_id
+        let scope = &record.conversation_scope_id;
+        let raw_owner = scope
             .strip_prefix("todo_")
+            .or_else(|| scope.strip_prefix("schedule_"))
             .and_then(|value| value.parse::<u64>().ok())?;
         Some(record.owner_user_id.unwrap_or(raw_owner))
     }
@@ -435,6 +469,28 @@ impl ImageRateLimiter {
     }
 }
 
+const SENDER_CHAT_USER_BASE: u64 = 1 << 60;
+
+pub(crate) fn requester_user_id(msg: &Message) -> Option<u64> {
+    match msg.sender_chat.as_ref() {
+        Some(chat) => Some(SENDER_CHAT_USER_BASE | chat.id.0.unsigned_abs()),
+        None => msg.from.as_ref().map(|user| user.id.0),
+    }
+}
+
+pub(crate) fn conversation_reply(msg: &Message) -> Option<&Message> {
+    msg.reply_to_message()
+        .filter(|reply| reply.forum_topic_created().is_none())
+}
+
+pub(crate) fn planabrain_default_scope_id(msg: &Message) -> String {
+    default_conversation_scope_id(
+        msg.chat.id.0,
+        msg.chat.is_private(),
+        msg.from.as_ref().map(|user| user.id.0),
+    )
+}
+
 fn default_conversation_scope_id(chat_id: i64, is_private: bool, user_id: Option<u64>) -> String {
     if is_private {
         return format!("chat_{chat_id}");
@@ -481,10 +537,26 @@ fn resolve_share_claims_path() -> PathBuf {
     }
 }
 
+fn keep_live_claim(stored: &StoredShareClaim, now_ms: i64) -> bool {
+    if is_share_claim_live(stored.created_at_ms, now_ms) {
+        return true;
+    }
+    if stored.claim.path.is_empty() {
+        return false;
+    }
+    match std::fs::remove_file(&stored.claim.path) {
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+            warn!("만료된 뷰어 파일 삭제 실패: {}", err);
+        }
+        _ => {}
+    }
+    false
+}
+
 fn load_share_claims(path: &Path, now_ms: i64) -> HashMap<String, StoredShareClaim> {
     read_json_or_default::<Vec<StoredShareClaim>>(path)
         .into_iter()
-        .filter(|stored| is_share_claim_live(stored.created_at_ms, now_ms))
+        .filter(|stored| keep_live_claim(stored, now_ms))
         .map(|stored| (stored.claim.token.clone(), stored))
         .collect()
 }
@@ -544,6 +616,54 @@ mod tests {
     };
     use crate::hiromi_share::ShareClaim;
 
+    fn message(json: serde_json::Value) -> teloxide::types::Message {
+        serde_json::from_value(json).expect("message json")
+    }
+
+    #[test]
+    fn anonymous_admins_get_one_identity_per_group() {
+        let anonymous = |chat_id: i64| {
+            message(serde_json::json!({
+                "message_id": 1, "date": 0, "text": "프라나야 일정 보여줘",
+                "chat": {"id": chat_id, "title": "g", "type": "supergroup"},
+                "sender_chat": {"id": chat_id, "title": "g", "type": "supergroup"},
+                "from": {"id": 1087968824, "is_bot": true, "first_name": "Group", "username": "GroupAnonymousBot"}
+            }))
+        };
+        let first = super::requester_user_id(&anonymous(-1001)).expect("first group");
+        let second = super::requester_user_id(&anonymous(-1002)).expect("second group");
+        assert_ne!(first, second);
+        assert_ne!(first, 1087968824);
+        assert!(first >= 1 << 52);
+        let person = message(serde_json::json!({
+            "message_id": 2, "date": 0, "text": "안녕",
+            "chat": {"id": -1001, "title": "g", "type": "supergroup"},
+            "from": {"id": 42, "is_bot": false, "first_name": "A"}
+        }));
+        assert_eq!(super::requester_user_id(&person), Some(42));
+    }
+
+    #[test]
+    fn forum_topic_messages_are_not_treated_as_replies() {
+        let topic = message(serde_json::json!({
+            "chat": {"id": -1001847508954_i64, "is_forum": true, "title": "t", "type": "supergroup"},
+            "date": 1675229140, "from": {"first_name": "A", "id": 1253681278, "is_bot": false},
+            "is_topic_message": true, "message_id": 5, "message_thread_id": 4, "text": "프라나야 안녕",
+            "reply_to_message": {
+                "chat": {"id": -1001847508954_i64, "is_forum": true, "title": "t", "type": "supergroup"},
+                "date": 1675229139, "forum_topic_created": {"icon_color": 9367192, "name": "주제"},
+                "from": {"first_name": "A", "id": 1253681278, "is_bot": false},
+                "is_topic_message": true, "message_id": 4, "message_thread_id": 4
+            }
+        }));
+        assert!(topic.reply_to_message().is_some());
+        assert!(super::conversation_reply(&topic).is_none());
+        assert_eq!(
+            super::planabrain_default_scope_id(&topic),
+            "chat_-1001847508954_user_1253681278"
+        );
+    }
+
     #[test]
     fn default_conversation_scope_is_per_chat_privately_and_per_user_in_groups() {
         assert_eq!(
@@ -558,6 +678,16 @@ mod tests {
             super::default_conversation_scope_id(-100, false, None),
             "chat_-100"
         );
+    }
+
+    #[test]
+    fn a_gallery_job_runs_once_until_it_finishes() {
+        let jobs = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+        let first = super::start_job(&jobs, "3723891").expect("first job");
+        assert!(super::start_job(&jobs, "3723891").is_none());
+        assert!(super::start_job(&jobs, "1234567").is_some());
+        drop(first);
+        assert!(super::start_job(&jobs, "3723891").is_some());
     }
 
     #[test]
@@ -579,13 +709,18 @@ mod tests {
             path: String::new(),
             size: 0,
         };
+        let stale_file = dir.join(format!("planabot_stale_viewer_{}.html", std::process::id()));
+        std::fs::write(&stale_file, "viewer").unwrap();
         let stored = vec![
             StoredShareClaim {
                 claim: claim("fresh"),
                 created_at_ms: 10_000,
             },
             StoredShareClaim {
-                claim: claim("stale"),
+                claim: ShareClaim {
+                    path: stale_file.to_string_lossy().into_owned(),
+                    ..claim("stale")
+                },
                 created_at_ms: 0,
             },
         ];
@@ -593,6 +728,7 @@ mod tests {
         let loaded = load_share_claims(&path, SHARE_CLAIM_TTL_MS + 5_000);
         assert!(loaded.contains_key("fresh"));
         assert!(!loaded.contains_key("stale"));
+        assert!(!stale_file.exists());
         let _ = std::fs::remove_file(path);
     }
     use teloxide::types::{ChatId, MessageId};

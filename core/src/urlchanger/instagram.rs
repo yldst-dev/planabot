@@ -181,11 +181,14 @@ fn mp4_boxes(data: &[u8]) -> Vec<(&[u8], &[u8])> {
             }
             _ => (8, size32),
         };
-        if size < header || offset + size > data.len() {
+        let Some(end) = offset.checked_add(size) else {
+            break;
+        };
+        if size < header || end > data.len() {
             break;
         }
-        boxes.push((kind, &data[offset + header..offset + size]));
-        offset += size;
+        boxes.push((kind, &data[offset + header..end]));
+        offset = end;
     }
     boxes
 }
@@ -288,6 +291,16 @@ async fn read_body_limited(mut response: reqwest::Response, limit: usize) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_mp4_boxes_are_ignored_instead_of_panicking() {
+        let mut bytes = vec![0, 0, 0, 8];
+        bytes.extend_from_slice(b"ftyp");
+        bytes.extend_from_slice(&[0, 0, 0, 1]);
+        bytes.extend_from_slice(b"moov");
+        bytes.extend_from_slice(&[0xFF; 8]);
+        assert_eq!(mp4_video_size(&bytes), None);
+    }
 
     #[test]
     fn test_shortcode_from_reel() {

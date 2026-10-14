@@ -39,6 +39,7 @@ pub(crate) enum ImageSkip {
     TooLarge,
     Unsupported,
     Failed,
+    TooMany,
 }
 
 impl ImageSkip {
@@ -49,6 +50,7 @@ impl ImageSkip {
                 "지원하지 않는 형식의 이미지가 있습니다. JPEG, PNG, WebP, GIF만 볼 수 있습니다."
             }
             Self::Failed => "이미지를 내려받지 못했습니다.",
+            Self::TooMany => "한 번에 4장까지만 볼 수 있어 나머지 이미지는 확인하지 않았습니다.",
         }
     }
 }
@@ -201,6 +203,9 @@ where
     }
     let mut images = TurnImages::default();
     let mut skipped = Vec::new();
+    if sources.len() > MAX_TURN_IMAGES {
+        skipped.push(ImageSkip::TooMany);
+    }
     for source in sources.into_iter().take(MAX_TURN_IMAGES) {
         match download_image(bot, &source).await {
             Ok(input) => {
@@ -226,7 +231,11 @@ where
         .await
         .map_err(|err| {
             warn!("이미지 파일 조회 실패: {}", err);
-            ImageSkip::Failed
+            if err.to_string().to_lowercase().contains("file is too big") {
+                ImageSkip::TooLarge
+            } else {
+                ImageSkip::Failed
+            }
         })?;
     if u64::from(file.size) > MAX_IMAGE_BYTES {
         return Err(ImageSkip::TooLarge);
@@ -267,6 +276,34 @@ where
         return Err(ImageSkip::TooLarge);
     }
     sniff_image_mime(&bytes).ok_or(ImageSkip::Unsupported)
+}
+
+pub(crate) fn own_image_first(
+    own: Option<ImageSource>,
+    group: Vec<ImageSource>,
+) -> Vec<ImageSource> {
+    let mut sources: Vec<ImageSource> = own.into_iter().collect();
+    for source in group {
+        if !sources.contains(&source) {
+            sources.push(source);
+        }
+    }
+    sources
+}
+
+pub(crate) fn clear_image_dir() {
+    let Some(entries) = image_dir().and_then(|dir| std::fs::read_dir(dir).ok()) else {
+        return;
+    };
+    let leftovers = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "tmp"));
+    for path in leftovers {
+        if let Err(err) = std::fs::remove_file(&path) {
+            warn!("남은 이미지 임시 파일 삭제 실패: {}", err);
+        }
+    }
 }
 
 fn image_dir() -> Option<PathBuf> {
@@ -325,7 +362,6 @@ impl MediaGroupCache {
                 entry
                     .items
                     .iter()
-                    .take(MAX_TURN_IMAGES)
                     .map(|(_, source)| source.clone())
                     .collect()
             })
@@ -372,7 +408,8 @@ impl MediaGroupCache {
 mod tests {
     use super::{
         ImageSkip, ImageSource, MAX_TURN_IMAGES, MediaGroupCache, extract_image_source,
-        media_label, preferred_photo, skip_notice, sniff_image_mime, sticker_image_source,
+        media_label, own_image_first, preferred_photo, skip_notice, sniff_image_mime,
+        sticker_image_source,
     };
     use teloxide::types::{Message, PhotoSize, Sticker};
 
@@ -593,7 +630,21 @@ mod tests {
         for id in 0..10 {
             cache.record(3, "big", id, source(&format!("p{id}")));
         }
-        assert_eq!(cache.images(3, "big").len(), MAX_TURN_IMAGES);
+        assert_eq!(cache.images(3, "big").len(), 10);
         assert!(cache.images(9, "missing").is_empty());
+    }
+
+    #[test]
+    fn the_replied_album_photo_comes_first_and_extra_photos_get_a_notice() {
+        let group: Vec<ImageSource> = (1..=10).map(|id| source(&format!("p{id}"))).collect();
+        let ordered = own_image_first(Some(source("p7")), group);
+        let ids: Vec<&str> = ordered.iter().map(|s| s.file_id.as_str()).collect();
+        assert_eq!(ids[..MAX_TURN_IMAGES], ["p7", "p1", "p2", "p3"]);
+        assert_eq!(ordered.len(), 10);
+        assert!(
+            skip_notice(&[ImageSkip::TooMany])
+                .expect("notice")
+                .contains("4장까지만")
+        );
     }
 }

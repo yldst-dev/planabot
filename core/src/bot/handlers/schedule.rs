@@ -52,12 +52,17 @@ where
 
     let message = match schedule.action.as_str() {
         "list" => {
-            let items = state.schedule_store.list_user_pending(owner_user_id);
+            let items = state
+                .schedule_store
+                .list_user_pending(owner_user_id, msg.chat.id.0);
             render_schedule_list(&items)
         }
         "cancel" => {
             let target = schedule.target.unwrap_or_default();
-            let result = state.schedule_store.cancel(owner_user_id, &target).await?;
+            let result = state
+                .schedule_store
+                .cancel(owner_user_id, msg.chat.id.0, &target)
+                .await?;
             render_schedule_cancel_result(&result)
         }
         "add" => {
@@ -65,7 +70,9 @@ where
                 let result = ScheduleMutation {
                     ok: false,
                     item: None,
-                    items: state.schedule_store.list_user_pending(owner_user_id),
+                    items: state
+                        .schedule_store
+                        .list_user_pending(owner_user_id, msg.chat.id.0),
                     error: Some(error.to_string()),
                 };
                 render_schedule_add_result(&result)
@@ -80,7 +87,9 @@ where
                     let result = ScheduleMutation {
                         ok: false,
                         item: None,
-                        items: state.schedule_store.list_user_pending(owner_user_id),
+                        items: state
+                            .schedule_store
+                            .list_user_pending(owner_user_id, msg.chat.id.0),
                         error: Some("타이머 시간을 확인하지 못했습니다.".to_string()),
                     };
                     return send_schedule_result(

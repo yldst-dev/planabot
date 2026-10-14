@@ -610,9 +610,12 @@ pub(crate) async fn interpret_schedule_request(text: &str) -> Result<ScheduleInt
     if text.chars().count() > MAX_CLI_TEXT_CHARS {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
+            .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!("planabrain_schedule_text_{timestamp}.txt"));
+        let path = std::env::temp_dir().join(format!(
+            "planabrain_schedule_text_{}_{timestamp}.txt",
+            std::process::id()
+        ));
         std::fs::write(&path, text).context("planabrain 텍스트 파일 저장 실패")?;
         command.env("PLANABRAIN_SCHEDULE_TEXT_FILE", &path);
         text_file = Some(path);
@@ -651,7 +654,7 @@ pub(crate) fn is_planabrain_allowed(chat_id: i64, user_id: Option<i64>, is_priva
             user_id,
             is_private,
             &ALLOWED_CHAT_IDS,
-            &ALLOWED_USER_IDS,
+            ALLOWED_USER_IDS.as_ref(),
         )
 }
 
@@ -660,7 +663,7 @@ fn is_allowed_by_lists(
     user_id: Option<i64>,
     is_private: bool,
     allowed_chats: &HashSet<i64>,
-    allowed_users: &HashSet<i64>,
+    allowed_users: Option<&HashSet<i64>>,
 ) -> bool {
     if allowed_chats.contains(&chat_id) {
         return true;
@@ -668,7 +671,21 @@ fn is_allowed_by_lists(
     if !is_private {
         return false;
     }
+    let Some(allowed_users) = allowed_users else {
+        return false;
+    };
     allowed_users.is_empty() || user_id.is_some_and(|id| allowed_users.contains(&id))
+}
+
+pub(crate) fn id_list_tokens(raw: &str) -> impl Iterator<Item = &str> {
+    raw.split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace())
+        .filter(|token| !token.is_empty())
+}
+
+pub(crate) fn parse_id_list(raw: &str) -> HashSet<i64> {
+    id_list_tokens(raw)
+        .filter_map(|token| token.parse().ok())
+        .collect()
 }
 
 pub(crate) fn truncate_message(text: &str, limit: usize) -> String {
@@ -746,32 +763,17 @@ pub(crate) fn is_planabrain_enabled() -> bool {
     *PLANABRAIN_ENABLED
 }
 
-static ALLOWED_CHAT_IDS: Lazy<HashSet<i64>> = Lazy::new(|| {
-    let raw = std::env::var("PLANABRAIN_ALLOWED_CHAT_IDS").unwrap_or_default();
-    raw.split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace())
-        .filter_map(|item| {
-            let trimmed = item.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                trimmed.parse::<i64>().ok()
-            }
-        })
-        .collect()
-});
+static ALLOWED_CHAT_IDS: Lazy<HashSet<i64>> =
+    Lazy::new(|| parse_id_list(&std::env::var("PLANABRAIN_ALLOWED_CHAT_IDS").unwrap_or_default()));
 
-static ALLOWED_USER_IDS: Lazy<HashSet<i64>> = Lazy::new(|| {
+static ALLOWED_USER_IDS: Lazy<Option<HashSet<i64>>> = Lazy::new(|| {
     let raw = std::env::var("PLANABRAIN_ALLOWED_USER_IDS").unwrap_or_default();
-    raw.split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace())
-        .filter_map(|item| {
-            let trimmed = item.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                trimmed.parse::<i64>().ok()
-            }
-        })
-        .collect()
+    let ids = parse_id_list(&raw);
+    if ids.is_empty() && !raw.trim().is_empty() {
+        log::error!("PLANABRAIN_ALLOWED_USER_IDS 값을 읽지 못해 개인 채팅의 AI 사용을 막습니다.");
+        return None;
+    }
+    Some(ids)
 });
 
 struct ImageCleanup(Vec<PathBuf>);
@@ -865,9 +867,12 @@ fn prepare_planabrain_ask(
     if question.chars().count() > MAX_CLI_QUESTION_CHARS {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
+            .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!("planabrain_question_{timestamp}.txt"));
+        let path = std::env::temp_dir().join(format!(
+            "planabrain_question_{}_{timestamp}.txt",
+            std::process::id()
+        ));
         std::fs::write(&path, question).context("planabrain 질문 파일 저장 실패")?;
         command.env("PLANABRAIN_QUESTION_FILE", &path);
         question_file = Some(path);
@@ -1008,7 +1013,7 @@ pub(crate) fn is_local_memory_enabled() -> bool {
     };
 
     let normalized = raw.trim().to_ascii_lowercase();
-    !(normalized.is_empty() || normalized == "0" || normalized == "false")
+    !matches!(normalized.as_str(), "" | "0" | "false" | "off" | "no")
 }
 
 pub(crate) fn resolve_local_memory_token_budget() -> Option<u32> {
@@ -1034,12 +1039,48 @@ mod tests {
         let chats: HashSet<i64> = [-100].into_iter().collect();
         let empty = HashSet::new();
         let users: HashSet<i64> = [7].into_iter().collect();
-        assert!(is_allowed_by_lists(42, Some(42), true, &chats, &empty));
-        assert!(is_allowed_by_lists(42, None, true, &chats, &empty));
-        assert!(!is_allowed_by_lists(-200, Some(42), false, &chats, &empty));
-        assert!(is_allowed_by_lists(-100, Some(42), false, &chats, &empty));
-        assert!(is_allowed_by_lists(7, Some(7), true, &chats, &users));
-        assert!(!is_allowed_by_lists(42, Some(42), true, &chats, &users));
+        assert!(is_allowed_by_lists(
+            42,
+            Some(42),
+            true,
+            &chats,
+            Some(&empty)
+        ));
+        assert!(is_allowed_by_lists(42, None, true, &chats, Some(&empty)));
+        assert!(!is_allowed_by_lists(
+            -200,
+            Some(42),
+            false,
+            &chats,
+            Some(&empty)
+        ));
+        assert!(is_allowed_by_lists(
+            -100,
+            Some(42),
+            false,
+            &chats,
+            Some(&empty)
+        ));
+        assert!(is_allowed_by_lists(7, Some(7), true, &chats, Some(&users)));
+        assert!(!is_allowed_by_lists(
+            42,
+            Some(42),
+            true,
+            &chats,
+            Some(&users)
+        ));
+    }
+
+    #[test]
+    fn an_unreadable_user_list_closes_private_chats() {
+        let chats: HashSet<i64> = [-100].into_iter().collect();
+        assert!(!is_allowed_by_lists(42, Some(42), true, &chats, None));
+        assert!(is_allowed_by_lists(-100, Some(42), false, &chats, None));
+        assert!(super::parse_id_list("\"123456789\"").is_empty());
+        assert_eq!(
+            super::parse_id_list("123, -100;7 8"),
+            [123, -100, 7, 8].into_iter().collect()
+        );
     }
 
     #[tokio::test]
@@ -1133,7 +1174,7 @@ mod tests {
     async fn prepare_turn_runs_against_real_cli() {
         let input = TurnPrepareInput {
             request_id: "test-request".into(),
-            deadline_ms: 200_000,
+            deadline_ms: crate::schedule::now_ms() + 200_000,
             user_id: "turn_test_user".into(),
             chat_scope: "chat_turn_test".into(),
             conversation_id: None,

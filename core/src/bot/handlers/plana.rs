@@ -12,11 +12,11 @@ use tokio::time;
 use tokio::time::Duration;
 
 use super::super::media::{self, ImageSource};
+use super::super::state::{planabrain_default_scope_id, requester_user_id};
 use super::super::telegram::{
-    SendOptions, send_reply_html_with_fallback, send_reply_markdown_with_fallback,
-    send_reply_with_fallback,
+    SendOptions, send_reply_html_with_fallback, send_reply_with_fallback,
 };
-use super::super::{AppState, HandlerResult};
+use super::super::{AppState, HandlerResult, report_handler_error};
 use super::schedule::*;
 use crate::planabrain;
 use crate::time::kst_now;
@@ -39,16 +39,16 @@ where
     B::SetMessageReaction: Send,
     B::EditMessageText: Send,
 {
-    if msg.media_group_id().is_none() {
-        return run_plana_turn(bot, msg, state).await;
-    }
-    if !state.claim_media_group_turn(&msg) {
+    let album = msg.media_group_id().is_some();
+    if album && !state.claim_media_group_turn(&msg) {
         return Ok(());
     }
     tokio::spawn(async move {
-        time::sleep(MEDIA_GROUP_SETTLE).await;
+        if album {
+            time::sleep(MEDIA_GROUP_SETTLE).await;
+        }
         if let Err(err) = run_plana_turn(bot, msg, state).await {
-            error!("앨범 질문 처리 실패: {:?}", err);
+            report_handler_error(&err);
         }
     });
     Ok(())
@@ -77,7 +77,9 @@ where
     };
     let current_turn_text = text.trim().to_string();
 
-    let question = match planabrain::extract_plana_question(&text) {
+    let explicit_question = planabrain::extract_plana_question(&text);
+    let explicit = explicit_question.is_some();
+    let question = match explicit_question {
         Some(q) => q,
         None if state.is_reply_to_planabrain(&msg) => text.trim().to_string(),
         None => return Ok(()),
@@ -93,21 +95,18 @@ where
         return Ok(());
     }
 
-    let requester_user_id = msg.from.as_ref().map(|user| user.id.0);
-    if state
-        .planabrain_todo_reply_owner_user_id(&msg)
-        .is_some_and(|owner_user_id| requester_user_id != Some(owner_user_id))
-    {
+    let requester_user_id = requester_user_id(&msg);
+    let foreign_reply = state
+        .planabrain_reply_owner_user_id(&msg)
+        .is_some_and(|owner_user_id| requester_user_id != Some(owner_user_id));
+    if foreign_reply && !explicit {
         return Ok(());
     }
 
-    let user_id = msg
-        .from
-        .as_ref()
-        .and_then(|user| i64::try_from(user.id.0).ok());
+    let user_id = requester_user_id.and_then(|id| i64::try_from(id).ok());
     let is_private = msg.chat.is_private();
     if !planabrain::is_planabrain_allowed(msg.chat.id.0, user_id, is_private) {
-        send_reply_markdown_with_fallback(
+        send_reply_with_fallback(
             &bot,
             &msg,
             "접근 불가.\n선생님.\n프라나 AI 기능은 베타입니다.\n허용된 채팅만 지원합니다.",
@@ -117,7 +116,11 @@ where
         return Ok(());
     }
 
-    let conversation_scope_id = state.planabrain_conversation_scope_id(&msg);
+    let conversation_scope_id = if foreign_reply {
+        planabrain_default_scope_id(&msg)
+    } else {
+        state.planabrain_conversation_scope_id(&msg)
+    };
     let (image_sources, remembered_images) = turn_image_sources(&msg, &state);
     let question = match question.trim() {
         "" if !image_sources.is_empty() => {
@@ -132,10 +135,10 @@ where
     };
     let question = build_planabrain_question(&question, &msg, &state);
     if question.trim().is_empty() {
-        let sent = send_reply_markdown_with_fallback(
+        let sent = send_reply_with_fallback(
             &bot,
             &msg,
-            "대기 중.\n선생님.\n질문을 입력해 주세요.",
+            "대기 중.\n선생님.\n질문을 입력해 주십시오.",
             SendOptions::default(),
         )
         .await?;
@@ -145,19 +148,20 @@ where
         return Ok(());
     }
 
-    let user_id = msg
-        .from
-        .as_ref()
-        .map(|user| user.id.to_string())
+    let user_id = requester_user_id
+        .map(|id| id.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
     add_heart_reaction(&bot, &msg).await;
 
+    let conversation_lock =
+        state.planabrain_conversation_lock(&format!("{}_{}", msg.chat.id.0, conversation_scope_id));
+    let _conversation_guard = conversation_lock.lock_owned().await;
     let Some(_planabrain_permit) = state.try_acquire_planabrain_permit() else {
         let sent = deliver_planabrain_answer(
             &bot,
             &msg,
-            "대기 불가.\n선생님.\n현재 요청이 가득 찼습니다.\n잠시 후 다시 시도해 주세요."
+            "대기 불가.\n선생님.\n현재 요청이 가득 찼습니다.\n잠시 후 다시 시도해 주십시오."
                 .to_string(),
         )
         .await?;
@@ -166,9 +170,6 @@ where
             .await;
         return Ok(());
     };
-    let conversation_lock =
-        state.planabrain_conversation_lock(&format!("{}_{}", msg.chat.id.0, conversation_scope_id));
-    let _conversation_guard = conversation_lock.lock_owned().await;
     let request_id = format!("telegram_{}_{}", msg.chat.id.0, msg.id.0);
     let deadline_ms = crate::schedule::now_ms() + 175_000;
     let chat_scope = format!("chat_{}", msg.chat.id.0);
@@ -237,10 +238,8 @@ where
     let images = if image_sources.is_empty() {
         media::TurnImages::default()
     } else {
-        let limiter_key = msg
-            .from
-            .as_ref()
-            .and_then(|user| i64::try_from(user.id.0).ok())
+        let limiter_key = requester_user_id
+            .and_then(|id| i64::try_from(id).ok())
             .unwrap_or(msg.chat.id.0);
         let allowed = remembered_images || state.allow_image_request(limiter_key).await;
         media::load_turn_images(&bot, image_sources, allowed).await
@@ -283,7 +282,7 @@ where
             let sent = deliver_planabrain_answer(
                 &bot,
                 &msg,
-                "지연 감지.\n선생님.\n요청 처리 시간이 초과되었습니다.\n실패로 간주합니다.\n다시 시도해 주세요.".to_string(),
+                "지연 감지.\n선생님.\n요청 처리 시간이 초과되었습니다.\n실패로 간주합니다.\n다시 시도해 주십시오.".to_string(),
             )
             .await?;
             state
@@ -297,6 +296,21 @@ where
     match answer {
         Ok(outcome) => {
             let answer = outcome.answer.trim().to_string();
+            if answer.is_empty() {
+                let sent = deliver_planabrain_answer(
+                    &bot,
+                    &msg,
+                    planabrain_error_user_message(Some(
+                        planabrain::PlanabrainErrorKind::EmptyOrFiltered,
+                    ))
+                    .to_string(),
+                )
+                .await?;
+                state
+                    .record_planabrain_reply(&sent, &conversation_scope_id)
+                    .await;
+                return Ok(());
+            }
             let reply = planabrain::truncate_message(&answer, 4000);
             let sent = deliver_planabrain_answer(&bot, &msg, reply).await?;
             let memory_turn_text = with_image_marker(&memory_turn_text, seen_images.len());
@@ -446,22 +460,22 @@ pub(super) fn planabrain_error_user_message(
             "오류.\n선생님.\nAI 서비스 인증에 문제가 생겼습니다.\n관리자 확인이 필요합니다."
         }
         Some(K::RateLimited) => {
-            "혼잡.\n선생님.\n지금 요청이 몰려 처리량이 잠시 가득 찼습니다.\n조금 뒤에 다시 시도해 주세요."
+            "혼잡.\n선생님.\n지금 요청이 몰려 처리량이 잠시 가득 찼습니다.\n조금 뒤에 다시 시도해 주십시오."
         }
         Some(K::ProviderUnavailable) => {
-            "오류.\n선생님.\nAI 서비스가 일시적으로 불안정합니다.\n잠시 후 다시 시도해 주세요."
+            "오류.\n선생님.\nAI 서비스가 일시적으로 불안정합니다.\n잠시 후 다시 시도해 주십시오."
         }
         Some(K::NetworkTimeout) => {
-            "지연.\n선생님.\nAI 서비스 응답이 지연되고 있습니다.\n잠시 후 다시 시도해 주세요."
+            "지연.\n선생님.\nAI 서비스 응답이 지연되고 있습니다.\n잠시 후 다시 시도해 주십시오."
         }
         Some(K::InvalidRequest) => {
-            "오류.\n선생님.\n요청을 처리하지 못했습니다.\n표현을 바꿔 다시 시도해 주세요."
+            "오류.\n선생님.\n요청을 처리하지 못했습니다.\n표현을 바꿔 다시 시도해 주십시오."
         }
         Some(K::EmptyOrFiltered) => {
-            "오류.\n선생님.\n답변을 생성하지 못했습니다.\n표현을 바꾸거나 잠시 후 다시 시도해 주세요."
+            "오류.\n선생님.\n답변을 생성하지 못했습니다.\n표현을 바꾸거나 잠시 후 다시 시도해 주십시오."
         }
         Some(K::Unknown) | None => {
-            "오류.\n선생님.\n응답 생성에 실패했습니다.\n잠시 후 다시 시도해 주세요."
+            "오류.\n선생님.\n응답 생성에 실패했습니다.\n잠시 후 다시 시도해 주십시오."
         }
     }
 }
@@ -548,17 +562,14 @@ fn turn_image_sources(msg: &Message, state: &AppState) -> (Vec<ImageSource>, boo
     if !remembered.is_empty() {
         return (remembered, true);
     }
-    let mut sources = message_image_sources(reply, state);
-    sources.truncate(media::MAX_TURN_IMAGES);
-    (sources, false)
+    (message_image_sources(reply, state), false)
 }
 
 fn message_image_sources(msg: &Message, state: &AppState) -> Vec<ImageSource> {
-    let grouped = state.media_group_images(msg);
-    if !grouped.is_empty() {
-        return grouped;
-    }
-    media::extract_image_source(msg).into_iter().collect()
+    media::own_image_first(
+        media::extract_image_source(msg),
+        state.media_group_images(msg),
+    )
 }
 
 fn with_image_marker(text: &str, count: usize) -> String {

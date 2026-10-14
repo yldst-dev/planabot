@@ -16,6 +16,9 @@ use tokio::time::{self, Duration};
 const MAX_SCHEDULE_ITEMS: usize = 500;
 const MAX_USER_PENDING_ITEMS: usize = 100;
 const SCHEDULE_POLL_SECONDS: u64 = 15;
+const MAX_SEND_ATTEMPTS: u32 = 5;
+const RETRY_BASE_MS: i64 = 30_000;
+const SYNTHETIC_OWNER_ID_START: u64 = 1 << 52;
 const DEFAULT_SCHEDULE_TITLE: &str = "요청하신 내용";
 
 static SCHEDULE_ID_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -69,6 +72,8 @@ pub(crate) struct ScheduleItem {
     pub sent_at_ms: Option<i64>,
     pub canceled_at_ms: Option<i64>,
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub attempts: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -118,9 +123,11 @@ impl ScheduleStore {
             title = default_schedule_title().to_string();
         }
         if input.due_at_ms <= now {
-            return Ok(
-                self.mutation_error(input.owner_user_id, "현재 이후 시각만 등록할 수 있습니다.")
-            );
+            return Ok(self.mutation_error(
+                input.owner_user_id,
+                input.chat_id.0,
+                "현재 이후 시각만 등록할 수 있습니다.",
+            ));
         }
 
         let (item, items, snapshot) = {
@@ -133,8 +140,9 @@ impl ScheduleStore {
                         && item.status == ScheduleStatus::Pending
                 })
                 .count();
-            if user_pending_count >= MAX_USER_PENDING_ITEMS {
-                let visible = list_pending_for_user(&items, input.owner_user_id);
+            let active_count = items.iter().filter(|item| is_active(item)).count();
+            if user_pending_count >= MAX_USER_PENDING_ITEMS || active_count >= MAX_SCHEDULE_ITEMS {
+                let visible = list_pending_for_user(&items, input.owner_user_id, input.chat_id.0);
                 return Ok(ScheduleMutation {
                     ok: false,
                     item: None,
@@ -158,10 +166,11 @@ impl ScheduleStore {
                 sent_at_ms: None,
                 canceled_at_ms: None,
                 last_error: None,
+                attempts: 0,
             };
             items.push(item.clone());
             sort_items(&mut items);
-            let visible = list_pending_for_user(&items, item.owner_user_id);
+            let visible = list_pending_for_user(&items, item.owner_user_id, item.chat_id);
             (item, visible, items)
         };
 
@@ -174,19 +183,24 @@ impl ScheduleStore {
         })
     }
 
-    pub(crate) fn list_user_pending(&self, owner_user_id: u64) -> Vec<ScheduleItem> {
+    pub(crate) fn list_user_pending(&self, owner_user_id: u64, chat_id: i64) -> Vec<ScheduleItem> {
         let items = lock_items(&self.items);
-        list_pending_for_user(&items, owner_user_id)
+        list_pending_for_user(&items, owner_user_id, chat_id)
     }
 
-    pub(crate) async fn cancel(&self, owner_user_id: u64, query: &str) -> Result<ScheduleMutation> {
+    pub(crate) async fn cancel(
+        &self,
+        owner_user_id: u64,
+        chat_id: i64,
+        query: &str,
+    ) -> Result<ScheduleMutation> {
         let _guard = self.write_lock.lock().await;
         let now = now_ms();
         let (result, snapshot) = {
             let mut items = lock_items(&self.items).clone();
-            let pending = list_pending_for_user(&items, owner_user_id);
+            let pending = list_pending_for_user(&items, owner_user_id, chat_id);
             let Some(target) = find_schedule_match(&pending, query) else {
-                let visible = list_pending_for_user(&items, owner_user_id);
+                let visible = pending;
                 return Ok(ScheduleMutation {
                     ok: false,
                     item: None,
@@ -205,7 +219,7 @@ impl ScheduleStore {
                 }
             }
             sort_items(&mut items);
-            let visible = list_pending_for_user(&items, owner_user_id);
+            let visible = list_pending_for_user(&items, owner_user_id, chat_id);
             (
                 ScheduleMutation {
                     ok: true,
@@ -227,7 +241,10 @@ impl ScheduleStore {
             let mut items = lock_items(&self.items).clone();
             let mut due = Vec::new();
             for item in items.iter_mut() {
-                if item.status == ScheduleStatus::Pending && item.due_at_ms <= now {
+                if item.status == ScheduleStatus::Pending
+                    && item.due_at_ms <= now
+                    && retry_ready(item, now)
+                {
                     item.status = ScheduleStatus::Sending;
                     item.updated_at_ms = now;
                     item.last_error = None;
@@ -262,14 +279,19 @@ impl ScheduleStore {
         self.commit(snapshot).await
     }
 
-    async fn mark_failed(&self, id: &str, error: &str) -> Result<()> {
+    async fn mark_failed(&self, id: &str, error: &str, transient: bool) -> Result<()> {
         let _guard = self.write_lock.lock().await;
         let now = now_ms();
         let snapshot = {
             let mut items = lock_items(&self.items).clone();
             for item in items.iter_mut() {
                 if item.id == id {
-                    item.status = ScheduleStatus::Failed;
+                    item.attempts += 1;
+                    item.status = if transient && item.attempts < MAX_SEND_ATTEMPTS {
+                        ScheduleStatus::Pending
+                    } else {
+                        ScheduleStatus::Failed
+                    };
                     item.updated_at_ms = now;
                     item.last_error = Some(error.trim().chars().take(500).collect());
                     break;
@@ -280,11 +302,11 @@ impl ScheduleStore {
         self.commit(snapshot).await
     }
 
-    fn mutation_error(&self, owner_user_id: u64, error: &str) -> ScheduleMutation {
+    fn mutation_error(&self, owner_user_id: u64, chat_id: i64, error: &str) -> ScheduleMutation {
         ScheduleMutation {
             ok: false,
             item: None,
-            items: self.list_user_pending(owner_user_id),
+            items: self.list_user_pending(owner_user_id, chat_id),
             error: Some(error.to_string()),
         }
     }
@@ -326,7 +348,11 @@ where
                     }
                     Err(err) => {
                         warn!("일정 발송 실패 ({}): {}", item.id, err);
-                        if let Err(save_err) = store.mark_failed(&item.id, &err.to_string()).await {
+                        let transient = is_transient_send_error(&err);
+                        if let Err(save_err) = store
+                            .mark_failed(&item.id, &err.to_string(), transient)
+                            .await
+                        {
                             error!("일정 실패 상태 저장 실패 ({}): {}", item.id, save_err);
                         }
                     }
@@ -377,9 +403,12 @@ pub(crate) fn render_schedule_add_result(result: &ScheduleMutation) -> String {
 }
 
 pub(crate) fn render_schedule_cancel_result(result: &ScheduleMutation) -> String {
-    if result.ok {
+    if let (true, Some(item)) = (result.ok, result.item.as_ref()) {
         return format!(
-            "취소 완료.\n선생님.\n\n{}",
+            "취소 완료.\n선생님.\n취소한 항목: [{}] {} - {}\n\n{}",
+            render_kind(&item.kind),
+            format_kst(item.due_at_ms),
+            item.title,
             render_schedule_list(&result.items)
         );
     }
@@ -402,7 +431,11 @@ pub(crate) fn now_ms() -> i64 {
 }
 
 fn render_due_message(item: &ScheduleItem) -> String {
-    let owner = format!("<a href=\"tg://user?id={}\">선생님</a>", item.owner_user_id);
+    let owner = if item.owner_user_id >= SYNTHETIC_OWNER_ID_START {
+        "선생님".to_string()
+    } else {
+        format!("<a href=\"tg://user?id={}\">선생님</a>", item.owner_user_id)
+    };
     let title = html::escape(&item.title);
     match item.kind {
         ScheduleKind::Schedule => format!("알림.\n{owner}.\n{title}"),
@@ -507,25 +540,60 @@ fn normalize_items(items: Vec<ScheduleItem>, now: i64) -> Vec<ScheduleItem> {
         .collect()
 }
 
-fn prune_history(items: &mut Vec<ScheduleItem>, now: i64) {
-    let cutoff = now - 30 * 24 * 60 * 60 * 1000;
-    items.retain(|item| {
-        item.status == ScheduleStatus::Pending
-            || item.status == ScheduleStatus::Sending
-            || item.updated_at_ms >= cutoff
-    });
-    if items.len() > MAX_SCHEDULE_ITEMS {
-        sort_items(items);
-        let overflow = items.len() - MAX_SCHEDULE_ITEMS;
-        items.drain(0..overflow);
+fn is_active(item: &ScheduleItem) -> bool {
+    matches!(
+        item.status,
+        ScheduleStatus::Pending | ScheduleStatus::Sending
+    )
+}
+
+fn retry_ready(item: &ScheduleItem, now: i64) -> bool {
+    item.attempts == 0
+        || now >= item.updated_at_ms + RETRY_BASE_MS * (1i64 << (item.attempts - 1).min(4))
+}
+
+fn is_transient_send_error(err: &anyhow::Error) -> bool {
+    match err.downcast_ref::<teloxide::RequestError>() {
+        Some(teloxide::RequestError::Api(teloxide::ApiError::Unknown(text))) => {
+            let text = text.to_lowercase();
+            text.contains("internal server error")
+                || text.contains("bad gateway")
+                || text.contains("gateway timeout")
+                || text.contains("too many requests")
+        }
+        Some(teloxide::RequestError::Api(_) | teloxide::RequestError::MigrateToChatId(_)) => false,
+        _ => true,
     }
 }
 
-fn list_pending_for_user(items: &[ScheduleItem], owner_user_id: u64) -> Vec<ScheduleItem> {
+fn prune_history(items: &mut Vec<ScheduleItem>, now: i64) {
+    let cutoff = now - 30 * 24 * 60 * 60 * 1000;
+    items.retain(|item| is_active(item) || item.updated_at_ms >= cutoff);
+    let mut overflow = items.len().saturating_sub(MAX_SCHEDULE_ITEMS);
+    if overflow == 0 {
+        return;
+    }
+    sort_items(items);
+    items.retain(|item| {
+        if overflow == 0 || is_active(item) {
+            return true;
+        }
+        overflow -= 1;
+        false
+    });
+}
+
+fn list_pending_for_user(
+    items: &[ScheduleItem],
+    owner_user_id: u64,
+    chat_id: i64,
+) -> Vec<ScheduleItem> {
     let mut out = items
         .iter()
         .filter(|item| {
-            item.owner_user_id == owner_user_id && item.status == ScheduleStatus::Pending
+            item.owner_user_id == owner_user_id
+                && item.status == ScheduleStatus::Pending
+                && (chat_id > 0 || item.chat_id == chat_id)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -535,7 +603,7 @@ fn list_pending_for_user(items: &[ScheduleItem], owner_user_id: u64) -> Vec<Sche
 
 fn find_schedule_match(items: &[ScheduleItem], query: &str) -> Option<ScheduleItem> {
     let normalized = normalize_match_text(query);
-    if let Some(index) = parse_selector_index(&normalized, items.len()) {
+    if let Some(index) = parse_selector_index(&normalized.replace(' ', ""), items.len()) {
         return items.get(index).cloned();
     }
     if normalized.is_empty() {
@@ -742,6 +810,7 @@ mod tests {
                 sent_at_ms: None,
                 canceled_at_ms: None,
                 last_error: None,
+                attempts: 0,
             },
             super::ScheduleItem {
                 id: "b".to_string(),
@@ -758,11 +827,20 @@ mod tests {
                 sent_at_ms: None,
                 canceled_at_ms: None,
                 last_error: None,
+                attempts: 0,
             },
         ];
-        let pending = list_pending_for_user(&items, 1);
+        let pending = list_pending_for_user(&items, 1, 10);
         let item = find_schedule_match(&pending, "첫번째거").unwrap();
         assert_eq!(item.id, "a");
+        assert_eq!(find_schedule_match(&pending, "두 번째").unwrap().id, "b");
+        let canceled = super::render_schedule_cancel_result(&super::ScheduleMutation {
+            ok: true,
+            item: Some(pending[1].clone()),
+            items: vec![pending[0].clone()],
+            error: None,
+        });
+        assert!(canceled.contains("취소한 항목: [타이머]") && canceled.contains("두 번째"));
     }
 
     #[tokio::test]
@@ -786,22 +864,22 @@ mod tests {
         };
         std::fs::create_dir(&path).unwrap();
         assert!(store.add(input.clone()).await.is_err());
-        assert!(store.list_user_pending(1).is_empty());
+        assert!(store.list_user_pending(1, 10).is_empty());
         std::fs::remove_dir(&path).unwrap();
         let item = store.add(input).await.unwrap().item.unwrap();
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
 
-        assert!(store.cancel(1, &item.id).await.is_err());
+        assert!(store.cancel(1, 10, &item.id).await.is_err());
         assert!(store.claim_due(item.due_at_ms).await.is_err());
-        assert_eq!(store.list_user_pending(1).len(), 1);
+        assert_eq!(store.list_user_pending(1, 10).len(), 1);
 
         std::fs::remove_dir(&path).unwrap();
         assert_eq!(store.claim_due(item.due_at_ms).await.unwrap().len(), 1);
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
         assert!(store.mark_sent(&item.id).await.is_err());
-        assert!(store.mark_failed(&item.id, "실패").await.is_err());
+        assert!(store.mark_failed(&item.id, "실패", false).await.is_err());
         assert_eq!(
             super::lock_items(&store.items)[0].status,
             super::ScheduleStatus::Sending
@@ -836,6 +914,98 @@ mod tests {
             .unwrap();
         assert!(!result.ok);
         let _ = std::fs::remove_file(store.path);
+    }
+
+    fn pending_item(
+        id: &str,
+        owner_user_id: u64,
+        chat_id: i64,
+        due_at_ms: i64,
+    ) -> super::ScheduleItem {
+        super::ScheduleItem {
+            id: id.to_string(),
+            owner_user_id,
+            chat_id,
+            message_thread_id: None,
+            source_message_id: None,
+            kind: ScheduleKind::Schedule,
+            title: format!("{id} 일정"),
+            due_at_ms,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            status: super::ScheduleStatus::Pending,
+            sent_at_ms: None,
+            canceled_at_ms: None,
+            last_error: None,
+            attempts: 0,
+        }
+    }
+
+    #[test]
+    fn due_messages_skip_the_mention_link_for_synthetic_owners() {
+        let person = pending_item("a", 42, -100, 1);
+        let anonymous = pending_item("b", (1 << 60) | 100, -100, 1);
+        assert!(super::render_due_message(&person).contains("tg://user?id=42"));
+        assert!(!super::render_due_message(&anonymous).contains("tg://user"));
+    }
+
+    #[test]
+    fn groups_only_see_their_own_reminders_while_private_chats_see_all() {
+        let items = vec![
+            pending_item("dm", 1, 1, 10),
+            pending_item("group", 1, -100, 20),
+        ];
+        let ids = |chat_id| {
+            list_pending_for_user(&items, 1, chat_id)
+                .into_iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(-100), ["group"]);
+        assert_eq!(ids(-200), Vec::<String>::new());
+        assert_eq!(ids(1), ["dm", "group"]);
+    }
+
+    #[test]
+    fn pruning_never_drops_pending_reminders() {
+        let mut items: Vec<_> = (0..super::MAX_SCHEDULE_ITEMS + 3)
+            .map(|index| pending_item(&format!("p{index}"), 1, -100, index as i64))
+            .collect();
+        let mut sent = pending_item("sent", 1, -100, 0);
+        sent.status = super::ScheduleStatus::Sent;
+        sent.updated_at_ms = now_ms();
+        items.push(sent);
+        super::prune_history(&mut items, now_ms());
+        assert_eq!(items.len(), super::MAX_SCHEDULE_ITEMS + 3);
+        assert!(items.iter().all(super::is_active));
+    }
+
+    #[tokio::test]
+    async fn transient_send_failures_are_retried_before_failing() {
+        let path = std::env::temp_dir().join(format!(
+            "planabot_schedule_retry_{}_{}.json",
+            std::process::id(),
+            super::create_schedule_id()
+        ));
+        let store = ScheduleStore::with_items(path.clone(), vec![pending_item("r", 1, -100, 1)]);
+        let mut now = now_ms();
+        for attempt in 1..super::MAX_SEND_ATTEMPTS {
+            assert_eq!(store.claim_due(now).await.unwrap().len(), 1);
+            store.mark_failed("r", "network", true).await.unwrap();
+            assert_eq!(
+                super::lock_items(&store.items)[0].status,
+                super::ScheduleStatus::Pending
+            );
+            assert!(store.claim_due(now_ms()).await.unwrap().is_empty());
+            now = now_ms() + super::RETRY_BASE_MS * (1 << (attempt - 1).min(4)) + 1;
+        }
+        assert_eq!(store.claim_due(now).await.unwrap().len(), 1);
+        store.mark_failed("r", "network", true).await.unwrap();
+        assert_eq!(
+            super::lock_items(&store.items)[0].status,
+            super::ScheduleStatus::Failed
+        );
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

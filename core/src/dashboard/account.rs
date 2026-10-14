@@ -1,8 +1,13 @@
-use axum::Json;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+use axum::extract::ConnectInfo;
 use axum::http::header::SET_COOKIE;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
+use axum::{Extension, Json};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
 
 use super::credentials::{self, Outcome};
 use super::{CSRF_HEADER, auth, error, is_https, json, reject, session_cookie};
@@ -47,6 +52,15 @@ struct RecoveryView {
     recovery_code: String,
 }
 
+type Peer = Option<Extension<ConnectInfo<SocketAddr>>>;
+
+static VERIFY: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(1));
+
+fn client_ip(peer: Peer) -> IpAddr {
+    peer.map(|Extension(ConnectInfo(addr))| addr.ip())
+        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+}
+
 pub(crate) fn announce_setup_code() {
     if !auth::is_enabled() {
         return;
@@ -85,16 +99,22 @@ pub(crate) async fn session(headers: HeaderMap) -> Response {
     )
 }
 
-pub(crate) async fn setup(headers: HeaderMap, Json(body): Json<SetupRequest>) -> Response {
-    if let Some(response) = precheck(&headers) {
+pub(crate) async fn setup(
+    headers: HeaderMap,
+    peer: Peer,
+    Json(body): Json<SetupRequest>,
+) -> Response {
+    let client = client_ip(peer);
+    if let Some(response) = precheck(&headers, client) {
         return response;
     }
-    let result = blocking(move || credentials::setup(&body.setup_code, &body.password)).await;
+    let result = verify(move || credentials::setup(&body.setup_code, &body.password)).await;
     match result {
         Some(Ok(Outcome::Done(code))) => {
             log::info!("대시보드 비밀번호 최초 설정 완료");
             signed_in(
                 &headers,
+                client,
                 StatusCode::OK,
                 &RecoveryView {
                     recovery_code: code,
@@ -110,27 +130,43 @@ pub(crate) async fn setup(headers: HeaderMap, Json(body): Json<SetupRequest>) ->
     }
 }
 
-pub(crate) async fn login(headers: HeaderMap, Json(body): Json<LoginRequest>) -> Response {
-    if let Some(response) = precheck(&headers) {
+pub(crate) async fn login(
+    headers: HeaderMap,
+    peer: Peer,
+    Json(body): Json<LoginRequest>,
+) -> Response {
+    let client = client_ip(peer);
+    if let Some(response) = precheck(&headers, client) {
         return response;
     }
-    match blocking(move || credentials::verify_password(&body.password)).await {
-        Some(true) => signed_in(&headers, StatusCode::OK, &serde_json::json!({ "ok": true })),
+    match verify(move || credentials::verify_password(&body.password)).await {
+        Some(true) => signed_in(
+            &headers,
+            client,
+            StatusCode::OK,
+            &serde_json::json!({ "ok": true }),
+        ),
         Some(false) => failed("비밀번호 불일치."),
         None => internal(),
     }
 }
 
-pub(crate) async fn recover(headers: HeaderMap, Json(body): Json<RecoverRequest>) -> Response {
-    if let Some(response) = precheck(&headers) {
+pub(crate) async fn recover(
+    headers: HeaderMap,
+    peer: Peer,
+    Json(body): Json<RecoverRequest>,
+) -> Response {
+    let client = client_ip(peer);
+    if let Some(response) = precheck(&headers, client) {
         return response;
     }
-    let result = blocking(move || credentials::recover(&body.recovery_code, &body.password)).await;
+    let result = verify(move || credentials::recover(&body.recovery_code, &body.password)).await;
     match result {
         Some(Ok(Outcome::Done(code))) => {
             log::warn!("대시보드 비밀번호를 복구 코드로 재설정했습니다");
             signed_in(
                 &headers,
+                client,
                 StatusCode::OK,
                 &RecoveryView {
                     recovery_code: code,
@@ -160,18 +196,24 @@ pub(crate) async fn logout(headers: HeaderMap) -> Response {
 
 pub(crate) async fn change_password(
     headers: HeaderMap,
+    peer: Peer,
     Json(body): Json<ChangeRequest>,
 ) -> Response {
-    if let Some(response) = reject(&headers, true).or_else(locked) {
+    let client = client_ip(peer);
+    if let Some(response) = reject(&headers, true).or_else(|| locked(client)) {
         return response;
     }
     let result =
-        blocking(move || credentials::change_password(&body.current_password, &body.password))
-            .await;
+        verify(move || credentials::change_password(&body.current_password, &body.password)).await;
     match result {
         Some(Ok(Outcome::Done(()))) => {
             log::info!("대시보드 비밀번호 변경 완료");
-            signed_in(&headers, StatusCode::OK, &serde_json::json!({ "ok": true }))
+            signed_in(
+                &headers,
+                client,
+                StatusCode::OK,
+                &serde_json::json!({ "ok": true }),
+            )
         }
         Some(Ok(Outcome::Rejected)) => failed("현재 비밀번호 불일치."),
         Some(Ok(Outcome::Invalid(message))) => error(StatusCode::BAD_REQUEST, &message),
@@ -181,14 +223,16 @@ pub(crate) async fn change_password(
 
 pub(crate) async fn regenerate_recovery(
     headers: HeaderMap,
+    peer: Peer,
     Json(body): Json<ConfirmRequest>,
 ) -> Response {
-    if let Some(response) = reject(&headers, true).or_else(locked) {
+    let client = client_ip(peer);
+    if let Some(response) = reject(&headers, true).or_else(|| locked(client)) {
         return response;
     }
-    match blocking(move || credentials::regenerate_recovery(&body.password)).await {
+    match verify(move || credentials::regenerate_recovery(&body.password)).await {
         Some(Ok(Outcome::Done(code))) => {
-            auth::record_success();
+            auth::record_success(client);
             log::info!("대시보드 복구 코드 재발급");
             json(
                 StatusCode::OK,
@@ -202,18 +246,18 @@ pub(crate) async fn regenerate_recovery(
     }
 }
 
-fn precheck(headers: &HeaderMap) -> Option<Response> {
+fn precheck(headers: &HeaderMap, client: IpAddr) -> Option<Response> {
     if headers.get(CSRF_HEADER).and_then(|v| v.to_str().ok()) != Some("1") {
         return Some(error(StatusCode::FORBIDDEN, "요청 형식 오류."));
     }
     if !auth::is_enabled() {
         return Some(error(StatusCode::NOT_FOUND, "대시보드 비활성."));
     }
-    locked()
+    locked(client)
 }
 
-fn locked() -> Option<Response> {
-    auth::is_locked().then(|| {
+fn locked(client: IpAddr) -> Option<Response> {
+    (!auth::begin_attempt(client)).then(|| {
         error(
             StatusCode::TOO_MANY_REQUESTS,
             "시도 횟수 초과. 10분 뒤 다시 시도하십시오.",
@@ -222,7 +266,6 @@ fn locked() -> Option<Response> {
 }
 
 fn failed(message: &str) -> Response {
-    auth::record_failure();
     error(StatusCode::FORBIDDEN, message)
 }
 
@@ -233,8 +276,13 @@ fn internal() -> Response {
     )
 }
 
-fn signed_in<T: Serialize>(headers: &HeaderMap, status: StatusCode, body: &T) -> Response {
-    auth::record_success();
+fn signed_in<T: Serialize>(
+    headers: &HeaderMap,
+    client: IpAddr,
+    status: StatusCode,
+    body: &T,
+) -> Response {
+    auth::record_success(client);
     let session = match auth::create_session() {
         Ok(session) => session,
         Err(err) => {
@@ -256,4 +304,13 @@ where
     F: FnOnce() -> T + Send + 'static,
 {
     tokio::task::spawn_blocking(task).await.ok()
+}
+
+async fn verify<T, F>(task: F) -> Option<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let _permit = VERIFY.acquire().await.ok()?;
+    blocking(task).await
 }

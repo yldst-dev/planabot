@@ -45,6 +45,7 @@ where
     <B as teloxide::net::Download>::StreamErr: std::fmt::Debug + Send,
     <B as teloxide::net::Download>::Stream: Unpin + Send,
 {
+    media::clear_image_dir();
     let private_commands = commands::Command::bot_commands();
     let shared_commands: Vec<_> = private_commands
         .iter()
@@ -56,14 +57,7 @@ where
         .scope(BotCommandScope::AllPrivateChats)
         .await?;
 
-    let error_handler = Arc::new(|err| async move {
-        if should_reboot_on_handler_error(&err) {
-            error!("치명적인 통신 오류 감지: {:?}", err);
-            crate::reboot::trigger_failure_reboot("통신 불능 오류로 인한 재시동");
-        } else {
-            error!("핸들러 오류: {:?}", err);
-        }
-    });
+    let error_handler = Arc::new(|err| async move { report_handler_error(&err) });
 
     let handler = dptree::entry()
         .branch(
@@ -135,6 +129,15 @@ where
         return should_reboot_on_request_error(request_error);
     }
     false
+}
+
+pub(crate) fn report_handler_error(err: &anyhow::Error) {
+    if should_reboot_on_handler_error(err) {
+        error!("치명적인 통신 오류 감지: {:?}", err);
+        crate::reboot::trigger_failure_reboot("통신 불능 오류로 인한 재시동");
+    } else {
+        error!("핸들러 오류: {:?}", err);
+    }
 }
 
 fn should_reboot_on_handler_error(err: &anyhow::Error) -> bool {

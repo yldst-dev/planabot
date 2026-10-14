@@ -8,6 +8,7 @@ use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
 use teloxide::types::{InlineKeyboardMarkup, InputFile, ParseMode};
 
+#[derive(Clone)]
 pub(super) enum ReplyContent {
     Text(String),
     Photo {
@@ -42,6 +43,7 @@ impl ReplyContent {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct LinkReply {
     pub content: ReplyContent,
     pub markup: Option<InlineKeyboardMarkup>,
@@ -141,15 +143,13 @@ where
     <B as Requester>::SendVideo: Send,
 {
     if privileged {
-        match bot.delete_message(msg.chat.id, msg.id).await {
-            Ok(_) => {
-                for reply in plan.admin {
-                    send_new_message(bot, msg, reply).await?;
-                }
-                return Ok(());
-            }
-            Err(e) => warn!("{} 메시지 삭제 실패: {:?}", label, e),
+        for reply in plan.admin {
+            send_new_message(bot, msg, reply).await?;
         }
+        if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
+            warn!("{} 메시지 삭제 실패: {:?}", label, e);
+        }
+        return Ok(());
     }
 
     for reply in plan.reply {
@@ -159,6 +159,30 @@ where
 }
 
 async fn send_new_message<B>(bot: &B, msg: &Message, reply: LinkReply) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: std::error::Error + Send + Sync + 'static,
+    <B as Requester>::SendMessage: Send,
+    <B as Requester>::SendPhoto: Send,
+    <B as Requester>::SendVideo: Send,
+{
+    match send_new_message_once(bot, msg, reply.clone()).await {
+        Err(err)
+            if msg.thread_id.is_some()
+                && err
+                    .to_string()
+                    .to_lowercase()
+                    .contains("message thread not found") =>
+        {
+            let mut in_chat = msg.clone();
+            in_chat.thread_id = None;
+            send_new_message_once(bot, &in_chat, reply).await
+        }
+        result => result,
+    }
+}
+
+async fn send_new_message_once<B>(bot: &B, msg: &Message, reply: LinkReply) -> HandlerResult
 where
     B: Requester + ?Sized,
     B::Err: std::error::Error + Send + Sync + 'static,

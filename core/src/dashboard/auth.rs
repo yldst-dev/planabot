@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -27,16 +28,14 @@ struct SessionFile {
 }
 
 struct Limiter {
-    failures: u32,
+    attempts: u32,
     locked_until: Option<Instant>,
+    last_attempt: Instant,
 }
 
 static SESSIONS: Lazy<Mutex<SessionFile>> =
     Lazy::new(|| Mutex::new(read_json_or_default(&sessions_path())));
-static LIMITER: Mutex<Limiter> = Mutex::new(Limiter {
-    failures: 0,
-    locked_until: None,
-});
+static LIMITERS: Lazy<Mutex<HashMap<IpAddr, Limiter>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub(crate) fn is_enabled() -> bool {
     !matches!(
@@ -49,31 +48,36 @@ pub(crate) fn is_enabled() -> bool {
     )
 }
 
-pub(crate) fn is_locked() -> bool {
-    let limiter = LIMITER.lock().unwrap_or_else(|p| p.into_inner());
-    limiter
-        .locked_until
-        .is_some_and(|until| until > Instant::now())
-}
-
-pub(crate) fn record_failure() {
-    let mut limiter = LIMITER.lock().unwrap_or_else(|p| p.into_inner());
+pub(crate) fn begin_attempt(client: IpAddr) -> bool {
+    let mut limiters = LIMITERS.lock().unwrap_or_else(|p| p.into_inner());
     let now = Instant::now();
-    if limiter.locked_until.is_some_and(|until| until <= now) {
-        limiter.locked_until = None;
-        limiter.failures = 0;
+    limiters.retain(|_, limiter| {
+        limiter.locked_until.is_some_and(|until| until > now)
+            || now.duration_since(limiter.last_attempt) < LOCKOUT
+    });
+    let limiter = limiters.entry(client).or_insert(Limiter {
+        attempts: 0,
+        locked_until: None,
+        last_attempt: now,
+    });
+    if limiter.locked_until.is_some_and(|until| until > now) {
+        return false;
     }
-    limiter.failures += 1;
-    if limiter.failures >= MAX_FAILURES {
+    limiter.attempts += 1;
+    limiter.last_attempt = now;
+    if limiter.attempts >= MAX_FAILURES {
         limiter.locked_until = Some(now + LOCKOUT);
-        log::warn!("대시보드 인증 실패 누적: {}분 잠금", LOCKOUT.as_secs() / 60);
+        log::warn!(
+            "대시보드 인증 시도 누적({client}): {}분 잠금",
+            LOCKOUT.as_secs() / 60
+        );
     }
+    true
 }
 
-pub(crate) fn record_success() {
-    let mut limiter = LIMITER.lock().unwrap_or_else(|p| p.into_inner());
-    limiter.failures = 0;
-    limiter.locked_until = None;
+pub(crate) fn record_success(client: IpAddr) {
+    let mut limiters = LIMITERS.lock().unwrap_or_else(|p| p.into_inner());
+    limiters.remove(&client);
 }
 
 pub(crate) fn create_session() -> Result<String> {
@@ -173,8 +177,23 @@ pub(crate) fn restrict_permissions(_path: &std::path::Path) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{COOKIE_NAME, session_from};
+    use super::{COOKIE_NAME, MAX_FAILURES, begin_attempt, record_success, session_from};
     use axum::http::{HeaderMap, HeaderValue, header::COOKIE};
+
+    #[test]
+    fn each_client_gets_its_own_attempt_budget() {
+        let attacker = "203.0.113.7".parse().unwrap();
+        let owner = "203.0.113.8".parse().unwrap();
+        for _ in 0..MAX_FAILURES {
+            assert!(begin_attempt(attacker));
+        }
+        assert!(!begin_attempt(attacker));
+        assert!(begin_attempt(owner));
+        record_success(owner);
+        record_success(attacker);
+        assert!(begin_attempt(attacker));
+        record_success(attacker);
+    }
 
     #[test]
     fn reads_session_cookie_among_others() {

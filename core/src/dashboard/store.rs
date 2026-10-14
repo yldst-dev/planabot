@@ -63,7 +63,7 @@ pub(crate) fn apply_startup_overrides() {
     let mut baseline = BTreeMap::new();
     let mut applied = BTreeMap::new();
     for (key, value) in file.values {
-        if let Err(err) = validate_entry(&key, &value) {
+        if let Err(err) = validate_stored_entry(&key, &value) {
             warn!("대시보드 설정 무시: {key} ({err})");
             continue;
         }
@@ -180,13 +180,25 @@ pub(crate) fn validate_key(key: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_entry(key: &str, value: &str) -> Result<()> {
+fn validate_stored_entry(key: &str, value: &str) -> Result<()> {
     validate_key(key)?;
     if value.len() > MAX_VALUE_BYTES {
         bail!("값이 너무 깁니다");
     }
     if value.contains('\0') {
         bail!("값에 NUL 문자");
+    }
+    Ok(())
+}
+
+fn validate_entry(key: &str, value: &str) -> Result<()> {
+    validate_stored_entry(key, value)?;
+    if matches!(
+        key,
+        "PLANABRAIN_ALLOWED_USER_IDS" | "PLANABRAIN_ALLOWED_CHAT_IDS"
+    ) && crate::planabrain::id_list_tokens(value).any(|token| token.parse::<i64>().is_err())
+    {
+        bail!("숫자 ID만 쉼표로 구분해 입력하십시오");
     }
     Ok(())
 }
@@ -228,6 +240,19 @@ mod tests {
         assert!(validate_entry("PLANABRAIN_CODEX_MODEL", "a\0b").is_err());
         assert!(validate_entry("PLANABRAIN_CODEX_MODEL", &"a".repeat(40_000)).is_err());
         assert!(validate_entry("PLANABRAIN_SYSTEM_PROMPT", "줄 하나\n줄 둘").is_ok());
+    }
+
+    #[test]
+    fn allowed_id_lists_accept_only_numeric_ids() {
+        assert!(validate_entry("PLANABRAIN_ALLOWED_USER_IDS", "123456789, 42").is_ok());
+        assert!(validate_entry("PLANABRAIN_ALLOWED_CHAT_IDS", "-1001234567890").is_ok());
+        assert!(validate_entry("PLANABRAIN_ALLOWED_USER_IDS", "").is_ok());
+        for value in ["\"123456789\"", "@name", "[123]", "１２３", "123，456"] {
+            assert!(
+                validate_entry("PLANABRAIN_ALLOWED_USER_IDS", value).is_err(),
+                "{value}"
+            );
+        }
     }
 
     #[test]

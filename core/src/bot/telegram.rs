@@ -2,7 +2,6 @@ use anyhow::Result;
 use teloxide::prelude::*;
 use teloxide::sugar::request::RequestLinkPreviewExt;
 use teloxide::types::{InlineKeyboardMarkup, InputFile, Message, ParseMode, ReplyParameters};
-use teloxide::utils::markdown;
 
 #[derive(Clone, Default)]
 pub(crate) struct SendOptions {
@@ -63,6 +62,11 @@ where
     B::Err: std::error::Error + Send + Sync + 'static,
 {
     let text = text.into();
+    let text = if opts.parse_mode.is_none() {
+        crate::planabrain::truncate_message(&text, 4000)
+    } else {
+        text
+    };
     let request = apply_send_options::<B>(reply_in_thread(bot, msg, text.clone()), &opts);
 
     match request.await {
@@ -96,30 +100,6 @@ where
             }
 
             Err(err.into())
-        }
-    }
-}
-
-pub(crate) async fn send_reply_markdown_with_fallback<B>(
-    bot: &B,
-    msg: &Message,
-    text: impl Into<String>,
-    mut opts: SendOptions,
-) -> Result<Message>
-where
-    B: Requester + ?Sized,
-    B::Err: std::error::Error + Send + Sync + 'static,
-{
-    let text = text.into();
-    opts.parse_mode = Some(ParseMode::MarkdownV2);
-    match send_reply_with_fallback(bot, msg, text.clone(), opts.clone()).await {
-        Ok(message) => Ok(message),
-        Err(err) => {
-            if is_parse_entities_error(&err) {
-                let escaped = markdown::escape(&text);
-                return send_reply_with_fallback(bot, msg, escaped, opts).await;
-            }
-            Err(err)
         }
     }
 }

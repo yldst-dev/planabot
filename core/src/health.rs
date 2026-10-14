@@ -67,6 +67,7 @@ pub async fn run_health_server() {
         }
     };
 
+    let app = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
     if let Err(e) = axum::serve(listener, app).await {
         log::error!("헬스체크 서버 오류: {}", e);
     }

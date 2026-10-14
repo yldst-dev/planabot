@@ -332,7 +332,7 @@ fn line_break_index(
         }
     }
     let end = low;
-    (start + 1..=end)
+    (start + 1..end)
         .rev()
         .find(|index| chars[*index] == ' ')
         .unwrap_or(end)
@@ -479,6 +479,12 @@ mod tests {
     fn wrap_lines_keeps_short_text_on_one_line() {
         let lines = wrap_lines("  hello   world ", 200.0, 2, &char_measure);
         assert_eq!(lines, vec!["hello world".to_string()]);
+    }
+
+    #[test]
+    fn a_single_character_that_does_not_fit_breaks_without_panicking() {
+        assert_eq!(line_break_index(&['\u{1}'], 0, 5.0, &char_measure), 1);
+        assert!(!wrap_lines(" \u{FFFF} ", 5.0, 2, &char_measure).is_empty());
     }
 
     #[test]

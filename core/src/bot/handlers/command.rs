@@ -6,6 +6,7 @@ use teloxide::types::{InputFile, Message, ParseMode};
 use teloxide::utils::html;
 
 use super::super::commands::Command;
+use super::super::state::{conversation_reply, requester_user_id};
 use super::super::telegram::{SendOptions, send_reply_with_fallback};
 use super::super::{AppState, HandlerResult};
 use super::callback::*;
@@ -17,7 +18,7 @@ use crate::{planabrain, token};
 
 pub(super) static DONATION_QR: &[u8] = include_bytes!("../assets/donation_qr.png");
 
-pub(super) const DONATION_CAPTION: &str = "선생님. 후원을 해 주시려는 것인가요.\n선생님의 따뜻한 마음에 감동했습니다.\n\n후원 방식은 USDT를 통해 하실 수 있습니다.\n아래에 주소를 보내드리겠습니다. 네트워크는 TRC20 이니, 헷갈리지 않게 주의해 주세요.\n(선생님의 소매를 잡고 살짝 미소지으며 고개를 끄덕입니다.)\n\n<code>TFZuvEU4UjYYmMZont2EwVtZ61weqEFHD9</code>";
+pub(super) const DONATION_CAPTION: &str = "선생님. 후원을 해 주시려는 것인가요.\n선생님의 따뜻한 마음에 감동했습니다.\n\n후원 방식은 USDT를 통해 하실 수 있습니다.\n아래에 주소를 보내드리겠습니다. 네트워크는 TRC20 이니, 헷갈리지 않게 주의해 주십시오.\n(선생님의 소매를 잡고 살짝 미소지으며 고개를 끄덕입니다.)\n\n<code>TFZuvEU4UjYYmMZont2EwVtZ61weqEFHD9</code>";
 
 #[allow(clippy::collapsible_if)]
 pub(crate) async fn handle_command<B>(
@@ -39,11 +40,19 @@ where
 
     match cmd {
         Command::Start => {
-            if let Some(text) = msg.text() {
-                if let Some(token) = crate::hiromi_share::start_share_token(text) {
+            if let Some(token) = msg.text().and_then(crate::hiromi_share::start_share_token) {
+                if msg.chat.is_private() {
                     deliver_share_claim(&bot, &state, msg.chat.id, token, true).await?;
-                    return Ok(());
+                } else {
+                    send_reply_with_fallback(
+                        &bot,
+                        &msg,
+                        "불가.\n선생님.\n다운로드는 개인 대화에서만 받을 수 있습니다.",
+                        SendOptions::default(),
+                    )
+                    .await?;
                 }
+                return Ok(());
             }
 
             let mut text = String::from(
@@ -59,7 +68,7 @@ where
                 ));
             }
 
-            text.push_str("\nID를 입력해 주세요.");
+            text.push_str("\nID를 입력해 주십시오.");
 
             let _ = send_reply_with_fallback(
                 &bot,
@@ -104,11 +113,11 @@ where
                 return Ok(());
             }
 
-            let Some(reply) = msg.reply_to_message() else {
+            let Some(reply) = conversation_reply(&msg) else {
                 send_reply_with_fallback(
                     &bot,
                     &msg,
-                    "불가.\n선생님.\n측정할 메시지에 답장한 뒤 /token을 입력해 주세요.",
+                    "불가.\n선생님.\n측정할 메시지에 답장한 뒤 /token을 입력해 주십시오.",
                     SendOptions::default(),
                 )
                 .await?;
@@ -140,7 +149,7 @@ where
                     send_reply_with_fallback(
                         &bot,
                         &msg,
-                        "오류.\n선생님.\n토큰 측정에 실패했습니다.\n모델 설정과 로컬 실행 환경을 확인해 주세요.",
+                        "오류.\n선생님.\n토큰 측정에 실패했습니다.\n모델 설정과 로컬 실행 환경을 확인해 주십시오.",
                         SendOptions::default(),
                     )
                     .await?;
@@ -198,7 +207,7 @@ where
                 return Ok(());
             }
 
-            let Some(user) = msg.from.as_ref() else {
+            let Some(user_id) = requester_user_id(&msg) else {
                 send_reply_with_fallback(
                     &bot,
                     &msg,
@@ -209,7 +218,7 @@ where
                 return Ok(());
             };
 
-            match planabrain::reset_user_memory(&user.id.to_string()).await {
+            match planabrain::reset_user_memory(&user_id.to_string()).await {
                 Ok(true) => {
                     send_reply_with_fallback(
                         &bot,
@@ -233,7 +242,7 @@ where
                     send_reply_with_fallback(
                         &bot,
                         &msg,
-                        "오류.\n선생님.\n메모리 초기화에 실패했습니다.\n잠시 후 다시 시도해 주세요.",
+                        "오류.\n선생님.\n메모리 초기화에 실패했습니다.\n잠시 후 다시 시도해 주십시오.",
                         SendOptions::default(),
                     )
                     .await?;
@@ -252,7 +261,7 @@ where
                 return Ok(());
             }
 
-            let Some(user) = msg.from.as_ref() else {
+            let Some(user_id) = requester_user_id(&msg) else {
                 send_reply_with_fallback(
                     &bot,
                     &msg,
@@ -263,7 +272,7 @@ where
                 return Ok(());
             };
 
-            let user_id_i64 = i64::try_from(user.id.0).ok();
+            let user_id_i64 = i64::try_from(user_id).ok();
             if !planabrain::is_planabrain_allowed(msg.chat.id.0, user_id_i64, msg.chat.is_private())
             {
                 send_reply_with_fallback(
@@ -276,7 +285,7 @@ where
                 return Ok(());
             }
 
-            match planabrain::list_user_todos(&user.id.to_string()).await {
+            match planabrain::list_user_todos(&user_id.to_string()).await {
                 Ok(result) => {
                     let sent = send_reply_with_fallback(
                         &bot,
@@ -288,8 +297,8 @@ where
                     state
                         .record_planabrain_reply_for_user(
                             &sent,
-                            &format!("todo_{}", user.id.0),
-                            user.id.0,
+                            &format!("todo_{user_id}"),
+                            user_id,
                         )
                         .await;
                 }
@@ -298,7 +307,7 @@ where
                     send_reply_with_fallback(
                         &bot,
                         &msg,
-                        "오류.\n선생님.\n할 일 목록을 확인하지 못했습니다.\n잠시 후 다시 시도해 주세요.",
+                        "오류.\n선생님.\n할 일 목록을 확인하지 못했습니다.\n잠시 후 다시 시도해 주십시오.",
                         SendOptions::default(),
                     )
                     .await?;
@@ -376,7 +385,7 @@ where
         return Ok(());
     }
 
-    let Some(user) = msg.from.as_ref() else {
+    let Some(user_id) = requester_user_id(msg) else {
         send_reply_with_fallback(
             bot,
             msg,
@@ -387,7 +396,7 @@ where
         return Ok(());
     };
 
-    let user_id_i64 = i64::try_from(user.id.0).ok();
+    let user_id_i64 = i64::try_from(user_id).ok();
     if !planabrain::is_planabrain_allowed(msg.chat.id.0, user_id_i64, msg.chat.is_private()) {
         send_reply_with_fallback(
             bot,
@@ -401,7 +410,9 @@ where
 
     let payload = command_payload(msg, mode, &state.bot_username);
     if payload.trim().is_empty() {
-        let items = state.schedule_store.list_user_pending(user.id.0);
+        let items = state
+            .schedule_store
+            .list_user_pending(user_id, msg.chat.id.0);
         let sent = send_reply_with_fallback(
             bot,
             msg,
@@ -410,7 +421,7 @@ where
         )
         .await?;
         state
-            .record_planabrain_reply_for_user(&sent, &format!("schedule_{}", user.id.0), user.id.0)
+            .record_planabrain_reply_for_user(&sent, &format!("schedule_{user_id}"), user_id)
             .await;
         return Ok(());
     }
@@ -420,8 +431,7 @@ where
     } else {
         payload
     };
-    let requester_user_id = Some(user.id.0);
-    let handled = handle_schedule_interpretation(bot, msg, state, requester_user_id, &text).await?;
+    let handled = handle_schedule_interpretation(bot, msg, state, Some(user_id), &text).await?;
     if handled {
         return Ok(());
     }
@@ -485,9 +495,8 @@ fn memory_user(msg: &Message) -> Result<String, &'static str> {
     if !planabrain::is_planabrain_enabled() {
         return Err("불가.\n선생님.\n프라나브레인 기능이 비활성화 상태입니다.");
     }
-    msg.from
-        .as_ref()
-        .map(|user| user.id.to_string())
+    requester_user_id(msg)
+        .map(|user_id| user_id.to_string())
         .ok_or("확인 불가.\n선생님.\n사용자 정보를 확인하지 못했습니다.")
 }
 

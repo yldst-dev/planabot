@@ -4,9 +4,8 @@ use crate::urlchanger::google_share::resolve_google_share_link;
 use crate::urlchanger::instagram::{InstagramMedia, InstagramMediaKind, fetch_instagram_media};
 use crate::urlchanger::link_utils::{
     LinkConversion, MusicLink, MusicPlatform, contains_google_share_link, contains_instagram_link,
-    contains_music_link, contains_threads_link, contains_x_link, convert_instagram_links,
-    convert_threads_links, convert_x_links, extract_google_share_links, extract_music_links,
-    is_youtube_short_link,
+    contains_threads_link, contains_x_link, convert_instagram_links, convert_threads_links,
+    convert_x_links, extract_google_share_links, extract_music_links, is_youtube_short_link,
 };
 use crate::urlchanger::music_card::build_music_card;
 use chrono::Utc;
@@ -43,10 +42,8 @@ where
             state.is_after_boot(&msg) && is_recent_message(&msg, 30)
         })
         .branch(
-            dptree::filter(|msg: Message| {
-                msg.text().is_some() && contains_music_link(msg.text().unwrap())
-            })
-            .endpoint(handle_music_links::<B>),
+            dptree::filter(|msg: Message| msg.text().is_some_and(music_links_need_reply))
+                .endpoint(handle_music_links::<B>),
         )
         .branch(
             dptree::filter(|msg: Message| {
@@ -82,7 +79,7 @@ where
     <B as Requester>::GetChatMember: Send,
 {
     match bot.get_chat_member(msg.chat.id, state.bot_user_id).await {
-        Ok(member) => member.kind.is_privileged(),
+        Ok(member) => member.kind.can_delete_messages(),
         Err(e) => {
             error!("관리자 권한 확인 중 오류 발생({}): {:?}", label, e);
             false
@@ -109,20 +106,11 @@ where
         return Ok(());
     }
 
-    let youtube_only = is_youtube_only(&links);
     let any_tracking = links.iter().any(|link| link.had_tracking);
-    let any_short = links
-        .iter()
-        .any(|link| is_youtube_short_link(&link.original));
-
-    if youtube_only && !any_tracking && !any_short {
-        return Ok(());
-    }
-
     let privileged = is_privileged(&bot, &msg, &state, "음악").await;
     let username = display_name(&msg);
-    let plan = if youtube_only {
-        youtube_plan(&username, &links, any_tracking)
+    let plan = if is_youtube_only(&links) {
+        youtube_plan(&username, text, &links, any_tracking)
     } else {
         let card = build_music_card(&links).await;
         music_plan(&username, text, &links, card)
@@ -137,20 +125,19 @@ fn music_plan(
     links: &[MusicLink],
     card: Option<Vec<u8>>,
 ) -> LinkPlan {
-    let message = format!(
-        "정리 완료.\n선생님.\n{}: {}",
-        username,
-        build_cleaned_message_text(original_text, links)
-    );
+    let cleaned = build_cleaned_message_text(original_text, links);
+    let message = format!("정리 완료.\n선생님.\n{username}: {cleaned}");
     let reply_text = build_cleaned_links_text(links);
     let caption = music_card_caption(username);
+    let admin_caption = format!("{caption} {cleaned}");
     let markup = build_links_keyboard(links);
 
-    let card = card.filter(|_| fits_caption(&caption)).map(music_card_file);
-    let admin = match card.clone() {
-        Some(file) => LinkReply::photo(file, caption.clone()).with_text_fallback(message),
+    let card = card.map(music_card_file);
+    let admin = match card.clone().filter(|_| fits_caption(&admin_caption)) {
+        Some(file) => LinkReply::photo(file, admin_caption).with_text_fallback(message),
         None => LinkReply::text(message),
     };
+    let card = card.filter(|_| fits_caption(&caption));
     let reply = match card {
         Some(file) => LinkReply::photo(file, caption).with_text_fallback(reply_text),
         None => LinkReply::text(reply_text),
@@ -162,12 +149,18 @@ fn music_plan(
     }
 }
 
-fn youtube_plan(username: &str, links: &[MusicLink], had_tracking: bool) -> LinkPlan {
+fn youtube_plan(
+    username: &str,
+    original_text: &str,
+    links: &[MusicLink],
+    had_tracking: bool,
+) -> LinkPlan {
     let cleaned_text = youtube_cleaned_text(links);
-    let message = if cleaned_text.contains('\n') {
-        format!("정리 완료.\n선생님.\n{}:\n{}", username, cleaned_text)
+    let reposted = build_cleaned_message_text(original_text, links);
+    let message = if reposted.contains('\n') {
+        format!("정리 완료.\n선생님.\n{}:\n{}", username, reposted)
     } else {
-        format!("정리 완료.\n선생님.\n{}: {}", username, cleaned_text)
+        format!("정리 완료.\n선생님.\n{}: {}", username, reposted)
     };
     let expanded = links
         .iter()
@@ -292,7 +285,16 @@ fn instagram_plan(
         };
     }
 
-    let mut admin = Vec::with_capacity(previews.len());
+    let converted_text = replace_converted_links(original_text, links);
+    let mut admin = Vec::with_capacity(previews.len() + 1);
+    admin.push(
+        LinkReply::text(format!(
+            "정리 완료.\n선생님.\n{}: {}",
+            username, converted_text
+        ))
+        .with_markup(build_social_keyboard(links))
+        .with_disable_preview(true),
+    );
     let mut reply = Vec::with_capacity(previews.len());
     for (link, media) in previews {
         let caption = instagram_caption(media.kind);
@@ -490,6 +492,15 @@ fn youtube_cleaned_text(links: &[MusicLink]) -> String {
     }
 }
 
+fn music_links_need_reply(text: &str) -> bool {
+    let links = extract_music_links(text);
+    !links.is_empty()
+        && (!is_youtube_only(&links)
+            || links
+                .iter()
+                .any(|link| link.had_tracking || is_youtube_short_link(&link.original)))
+}
+
 fn is_youtube_only(links: &[MusicLink]) -> bool {
     !links.is_empty()
         && links
@@ -626,6 +637,7 @@ fn display_name(msg: &Message) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::urlchanger::delivery::ReplyContent;
     use crate::urlchanger::link_utils::{convert_x_links, extract_music_links};
 
     fn text_of(reply: &LinkReply) -> &str {
@@ -635,13 +647,23 @@ mod tests {
     #[test]
     fn youtube_plan_texts_depend_on_tracking() {
         let links = extract_music_links("https://www.youtube.com/watch?v=Vc-ByDGOuQE&si=abc");
-        let tracked = youtube_plan("sensei", &links, true);
+        let tracked = youtube_plan(
+            "sensei",
+            "https://www.youtube.com/watch?v=Vc-ByDGOuQE&si=abc",
+            &links,
+            true,
+        );
         assert_eq!(
             text_of(&tracked.admin[0]),
             "정리 완료.\n선생님.\nsensei: https://www.youtube.com/watch?v=Vc-ByDGOuQE"
         );
         assert!(text_of(&tracked.reply[0]).contains("추적 파라미터를 제거했습니다."));
-        let plain = youtube_plan("sensei", &links, false);
+        let plain = youtube_plan(
+            "sensei",
+            "https://www.youtube.com/watch?v=Vc-ByDGOuQE&si=abc",
+            &links,
+            false,
+        );
         assert!(text_of(&plain.reply[0]).contains("유튜브 링크입니다."));
         assert!(plain.admin[0].markup.is_some());
     }
@@ -659,7 +681,7 @@ mod tests {
             ),
         ] {
             let links = extract_music_links(short);
-            let plan = youtube_plan("sensei", &links, false);
+            let plan = youtube_plan("sensei", short, &links, false);
             assert_eq!(
                 text_of(&plan.admin[0]),
                 format!("정리 완료.\n선생님.\nsensei: {full}")
@@ -710,6 +732,59 @@ mod tests {
                 .unwrap()
                 .contains("open.spotify.com")
         );
+    }
+
+    fn reposted(reply: &LinkReply) -> String {
+        match &reply.content {
+            ReplyContent::Text(text) => text.clone(),
+            ReplyContent::Photo { caption, .. } | ReplyContent::Video { caption, .. } => {
+                caption.clone()
+            }
+        }
+    }
+
+    #[test]
+    fn admin_reposts_keep_the_users_words_and_other_links() {
+        let youtube = "이 노래 좋다 https://youtu.be/d7hGpiHLSRI?si=abc";
+        let plan = youtube_plan("sensei", youtube, &extract_music_links(youtube), true);
+        assert!(
+            reposted(&plan.admin[0])
+                .contains("이 노래 좋다 https://www.youtube.com/watch?v=d7hGpiHLSRI")
+        );
+
+        let spotify = "출근길 추천 https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT?si=x 그리고 https://x.com/u/status/1";
+        let plan = music_plan(
+            "sensei",
+            spotify,
+            &extract_music_links(spotify),
+            Some(vec![1]),
+        );
+        let caption = reposted(&plan.admin[0]);
+        assert!(caption.contains("출근길 추천") && caption.contains("https://x.com/u/status/1"));
+
+        let instagram = "둘 다 봐 https://www.instagram.com/p/AAAAAAAAAAA/ https://www.instagram.com/p/BBBBBBBBBBB/";
+        let links = convert_instagram_links(instagram);
+        let media = InstagramMedia {
+            kind: InstagramMediaKind::Photo,
+            bytes: vec![0xFF, 0xD8, 0xFF],
+            file_name: "instagram.jpg",
+            size: None,
+        };
+        let plan = instagram_plan("sensei", instagram, &links, vec![(links[0].clone(), media)]);
+        let lead = reposted(&plan.admin[0]);
+        assert!(lead.contains("sensei: 둘 다 봐") && lead.contains("BBBBBBBBBBB"));
+        assert_eq!(plan.admin.len(), 2);
+    }
+
+    #[test]
+    fn a_clean_youtube_link_leaves_other_links_to_their_handlers() {
+        assert!(!music_links_need_reply(
+            "https://www.youtube.com/watch?v=d7hGpiHLSRI https://x.com/user/status/123?s=20"
+        ));
+        assert!(music_links_need_reply("https://youtu.be/d7hGpiHLSRI"));
+        assert!(music_links_need_reply(
+            "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT"
+        ));
     }
 
     #[test]

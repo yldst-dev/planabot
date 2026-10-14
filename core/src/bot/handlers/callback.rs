@@ -10,8 +10,8 @@ use url::Url;
 
 use super::super::gallery::{
     build_gallery_keyboard, build_gallery_preparing_keyboard, build_share_ready_keyboard,
-    download_action_button, fetch_action_button, preparing_action_button, render_gallery_message,
-    replace_gallery_action_button,
+    download_action_button, fetch_action_button, is_gallery_id, preparing_action_button,
+    render_gallery_message, replace_gallery_action_button,
 };
 use super::super::{AppState, HandlerResult};
 
@@ -37,11 +37,15 @@ where
         return Ok(());
     }
 
-    if data.starts_with("prep_") {
-        let _ = bot
-            .answer_callback_query(query.id)
-            .text("대기 중.\n선생님.\n뷰어를 준비합니다.")
-            .await;
+    if let Some(gallery_id) = data.strip_prefix("prep_") {
+        if state.is_gallery_job_running(gallery_id) {
+            let _ = bot
+                .answer_callback_query(query.id)
+                .text("대기 중.\n선생님.\n뷰어를 준비합니다.")
+                .await;
+        } else {
+            handle_fetch_callback(&bot, &query, &state, gallery_id).await?;
+        }
         return Ok(());
     }
 
@@ -51,6 +55,10 @@ where
     }
 
     if let Some(gallery_id) = data.strip_prefix("save_") {
+        if !is_gallery_id(gallery_id) {
+            bot.answer_callback_query(query.id).await?;
+            return Ok(());
+        }
         let info = match state.gallery_client.get_gallery_info(gallery_id).await {
             Ok(info) => info,
             Err(err) => {
@@ -58,7 +66,7 @@ where
                 let _ = bot
                     .answer_callback_query(query.id)
                     .text(
-                        "오류.\n선생님.\n갤러리 정보를 불러오지 못했습니다.\n잠시 후 다시 시도해 주세요.",
+                        "오류.\n선생님.\n갤러리 정보를 불러오지 못했습니다.\n잠시 후 다시 시도해 주십시오.",
                     )
                     .show_alert(true)
                     .await;
@@ -86,7 +94,7 @@ where
 
                     let _ = bot
                         .answer_callback_query(query.id)
-                        .text("불가.\n선생님.\n개인 대화를 먼저 시작해 주세요.\n차단 해제가 필요합니다.")
+                        .text("불가.\n선생님.\n개인 대화를 먼저 시작해 주십시오.\n차단 해제가 필요합니다.")
                         .show_alert(true)
                         .await;
                 } else {
@@ -123,11 +131,26 @@ where
     B::EditMessageText: Send,
     B::EditMessageReplyMarkup: Send,
 {
+    if !is_gallery_id(gallery_id) {
+        let _ = bot
+            .answer_callback_query(query.id.clone())
+            .text("확인 불가.\n선생님.\n갤러리 번호가 올바르지 않습니다.")
+            .show_alert(true)
+            .await;
+        return Ok(());
+    }
     let Some(msg) = query.regular_message() else {
         let _ = bot
             .answer_callback_query(query.id.clone())
             .text("불가.\n선생님.\n메시지를 찾지 못했습니다.")
             .show_alert(true)
+            .await;
+        return Ok(());
+    };
+    let Some(job) = state.start_gallery_job(gallery_id) else {
+        let _ = bot
+            .answer_callback_query(query.id.clone())
+            .text("대기 중.\n선생님.\n이미 뷰어를 준비하고 있습니다.")
             .await;
         return Ok(());
     };
@@ -166,6 +189,10 @@ where
     let message_id = msg.id;
 
     tokio::spawn(async move {
+        let _job = job;
+        let Some(_slot) = state.gallery_job_slot().await else {
+            return;
+        };
         match crate::hiromi_share::share_gallery(&state.hiromi_bin, &gallery_id).await {
             Ok(claim) => {
                 let info = match state.gallery_client.get_gallery_info(&gallery_id).await {
@@ -251,7 +278,7 @@ where
             error!("뷰어 개인 메시지 전송 실패: {}", err);
             let _ = bot
                 .answer_callback_query(query.id.clone())
-                .text("불가.\n선생님.\n개인 대화를 먼저 시작해 주세요.\n차단 해제가 필요합니다.")
+                .text("불가.\n선생님.\n개인 대화를 먼저 시작해 주십시오.\n차단 해제가 필요합니다.")
                 .show_alert(true)
                 .await;
             if !state.bot_username.is_empty() {
@@ -266,7 +293,7 @@ where
                         let _ = bot
                             .send_message(
                                 msg.chat.id,
-                                "불가.\n선생님.\n개인 대화를 먼저 시작해 주세요.",
+                                "불가.\n선생님.\n개인 대화를 먼저 시작해 주십시오.",
                             )
                             .reply_markup(keyboard)
                             .await;

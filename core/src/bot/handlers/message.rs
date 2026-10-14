@@ -55,7 +55,7 @@ where
         &bot,
         &msg,
         format!(
-            "검색 시작.\n선생님.\nID {} 조회 중입니다.\n잠시만 대기해 주세요.",
+            "검색 시작.\n선생님.\nID {} 조회 중입니다.\n잠시만 대기해 주십시오.",
             gallery_id
         ),
         SendOptions {
@@ -73,7 +73,7 @@ where
                 .edit_message_text(
                     chat_id,
                     initial.id,
-                    "오류.\n선생님.\n갤러리 정보를 불러오지 못했습니다.\n잠시 후 다시 시도해 주세요.",
+                    "오류.\n선생님.\n갤러리 정보를 불러오지 못했습니다.\n잠시 후 다시 시도해 주십시오.",
                 )
                 .await;
             return Ok(());

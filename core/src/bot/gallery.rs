@@ -21,24 +21,22 @@ pub(crate) struct GalleryIdMatch {
     pub(crate) source: GalleryIdSource,
 }
 
+static HITOMI_READER_RE: Lazy<regex::Regex> = Lazy::new(|| {
+    regex::Regex::new(r"(?:https?://)?(?:www\.)?hitomi\.la/(?:reader|galleries)/(\d+)").unwrap()
+});
+static HITOMI_SLUG_RE: Lazy<regex::Regex> = Lazy::new(|| {
+    regex::Regex::new(r"(?:https?://)?(?:www\.)?hitomi\.la/[^\s#]*?(\d+)\.html").unwrap()
+});
+static K_HENTAI_URL_RE: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(r"(?:https?://)?(?:www\.)?k-hentai\.org/r/(\d+)").unwrap());
+
 pub(crate) fn extract_gallery_id(
     text: &str,
     msg: &Message,
     bot_username: &str,
 ) -> Option<GalleryIdMatch> {
     static BANG_RE: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"^!(\d+)$").unwrap());
-    static HITOMI_READER_RE: Lazy<regex::Regex> = Lazy::new(|| {
-        regex::Regex::new(r"(?:https?://)?(?:www\.)?hitomi\.la/(?:reader|galleries)/(\d+)").unwrap()
-    });
-    static HITOMI_SLUG_RE: Lazy<regex::Regex> = Lazy::new(|| {
-        regex::Regex::new(r"(?:https?://)?(?:www\.)?hitomi\.la/[^\s#]*(\d+)\.html").unwrap()
-    });
-    static K_HENTAI_URL_RE: Lazy<regex::Regex> =
-        Lazy::new(|| regex::Regex::new(r"(?:https?://)?(?:www\.)?k-hentai\.org/r/(\d+)").unwrap());
-
-    if let Some(id) =
-        extract_gallery_id_from_url(text, &HITOMI_READER_RE, &HITOMI_SLUG_RE, &K_HENTAI_URL_RE)
-    {
+    if let Some(id) = extract_gallery_id_from_url(text) {
         return Some(GalleryIdMatch {
             id,
             source: GalleryIdSource::Url,
@@ -85,21 +83,16 @@ pub(crate) fn extract_gallery_id(
     None
 }
 
-fn extract_gallery_id_from_url(
-    text: &str,
-    hitomi_reader_re: &regex::Regex,
-    hitomi_slug_re: &regex::Regex,
-    k_hentai_re: &regex::Regex,
-) -> Option<String> {
-    if let Some(cap) = hitomi_reader_re.captures(text) {
+fn extract_gallery_id_from_url(text: &str) -> Option<String> {
+    if let Some(cap) = HITOMI_READER_RE.captures(text) {
         return Some(cap[1].to_string());
     }
 
-    if let Some(cap) = hitomi_slug_re.captures(text) {
+    if let Some(cap) = HITOMI_SLUG_RE.captures(text) {
         return Some(cap[1].to_string());
     }
 
-    if let Some(cap) = k_hentai_re.captures(text) {
+    if let Some(cap) = K_HENTAI_URL_RE.captures(text) {
         return Some(cap[1].to_string());
     }
 
@@ -200,6 +193,10 @@ fn with_save_row(
         )]);
     }
     InlineKeyboardMarkup::new(rows)
+}
+
+pub(crate) fn is_gallery_id(gallery_id: &str) -> bool {
+    (1..=12).contains(&gallery_id.len()) && gallery_id.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 pub(crate) fn fetch_action_button(gallery_id: &str) -> InlineKeyboardButton {
@@ -407,39 +404,50 @@ mod tests {
     #[test]
     fn extracts_hitomi_gallery_id_from_url() {
         let text = "https://hitomi.la/reader/3723891.html#1";
-        let id = extract_gallery_id_from_url(
-            text,
-            &regex::Regex::new(r"(?:https?://)?(?:www\.)?hitomi\.la/(?:reader|galleries)/(\d+)")
-                .unwrap(),
-            &regex::Regex::new(r"(?:https?://)?(?:www\.)?hitomi\.la/[^\s#]*(\d+)\.html").unwrap(),
-            &regex::Regex::new(r"(?:https?://)?(?:www\.)?k-hentai\.org/r/(\d+)").unwrap(),
-        );
+        let id = extract_gallery_id_from_url(text);
         assert_eq!(id.as_deref(), Some("3723891"));
+    }
+
+    #[test]
+    fn gallery_ids_must_be_short_digit_strings() {
+        assert!(super::is_gallery_id("3723891"));
+        assert!(!super::is_gallery_id(""));
+        assert!(!super::is_gallery_id("12a4"));
+        assert!(!super::is_gallery_id("1234567890123"));
+        assert!(!super::is_gallery_id("--help"));
+    }
+
+    #[test]
+    fn title_style_hitomi_urls_keep_the_whole_gallery_id() {
+        for (text, expected) in [
+            (
+                "https://hitomi.la/doujinshi/some-title-korean-1234567.html",
+                "1234567",
+            ),
+            (
+                "https://hitomi.la/manga/%ED%95%9C%EA%B5%AD%EC%96%B4-3723891.html#1",
+                "3723891",
+            ),
+            (
+                "https://hitomi.la/doujinshi/title-2024-1234567.html",
+                "1234567",
+            ),
+        ] {
+            assert_eq!(extract_gallery_id_from_url(text).as_deref(), Some(expected));
+        }
     }
 
     #[test]
     fn extracts_k_hentai_gallery_id_from_url() {
         let text = "https://k-hentai.org/r/3723891#1";
-        let id = extract_gallery_id_from_url(
-            text,
-            &regex::Regex::new(r"(?:https?://)?(?:www\.)?hitomi\.la/(?:reader|galleries)/(\d+)")
-                .unwrap(),
-            &regex::Regex::new(r"(?:https?://)?(?:www\.)?hitomi\.la/[^\s#]*(\d+)\.html").unwrap(),
-            &regex::Regex::new(r"(?:https?://)?(?:www\.)?k-hentai\.org/r/(\d+)").unwrap(),
-        );
+        let id = extract_gallery_id_from_url(text);
         assert_eq!(id.as_deref(), Some("3723891"));
     }
 
     #[test]
     fn extracts_k_hentai_gallery_id_without_scheme() {
         let text = "k-hentai.org/r/3723891";
-        let id = extract_gallery_id_from_url(
-            text,
-            &regex::Regex::new(r"(?:https?://)?(?:www\.)?hitomi\.la/(?:reader|galleries)/(\d+)")
-                .unwrap(),
-            &regex::Regex::new(r"(?:https?://)?(?:www\.)?hitomi\.la/[^\s#]*(\d+)\.html").unwrap(),
-            &regex::Regex::new(r"(?:https?://)?(?:www\.)?k-hentai\.org/r/(\d+)").unwrap(),
-        );
+        let id = extract_gallery_id_from_url(text);
         assert_eq!(id.as_deref(), Some("3723891"));
     }
 }

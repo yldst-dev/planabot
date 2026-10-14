@@ -3,35 +3,83 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use url::Url;
 
-static MUSIC_YOUTUBE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"https?://(?:www\.|m\.)?youtu(?:\.be|be\.com)/\S+").unwrap());
-static MUSIC_YOUTUBE_MUSIC_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"https?://(?:www\.)?music\.youtube\.com/\S+").unwrap());
-static MUSIC_SPOTIFY_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"https?://(?:www\.)?open\.spotify\.com/\S+").unwrap());
-static MUSIC_APPLE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"https?://(?:www\.)?music\.apple\.com/\S+").unwrap());
-static MUSIC_YOUTUBE_CAPTURE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(https?://(?:www\.|m\.)?youtu(?:\.be|be\.com)/\S+)").unwrap());
-static MUSIC_YOUTUBE_MUSIC_CAPTURE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(https?://(?:www\.)?music\.youtube\.com/\S+)").unwrap());
-static MUSIC_SPOTIFY_CAPTURE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(https?://(?:www\.)?open\.spotify\.com/\S+)").unwrap());
-static MUSIC_APPLE_CAPTURE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(https?://(?:www\.)?music\.apple\.com/\S+)").unwrap());
-static X_LINK_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\.?https?://(?:www\.)?(?:x|twitter)\.com/\S+").unwrap());
-static X_LINK_CAPTURE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(\.?)(https?://(?:www\.)?(?:x|twitter)\.com/\S+)").unwrap());
+macro_rules! url_tail {
+    () => {
+        r"[!-~]*[A-Za-z0-9/_~#@$&*+=%-]"
+    };
+}
+
+static MUSIC_YOUTUBE_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(concat!(
+        r"(https?://(?:www\.|m\.)?youtu(?:\.be|be\.com)/",
+        url_tail!(),
+        ")"
+    ))
+    .unwrap()
+});
+static MUSIC_YOUTUBE_MUSIC_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(concat!(
+        r"(https?://(?:www\.)?music\.youtube\.com/",
+        url_tail!(),
+        ")"
+    ))
+    .unwrap()
+});
+static MUSIC_SPOTIFY_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(concat!(
+        r"(https?://(?:www\.)?open\.spotify\.com/",
+        url_tail!(),
+        ")"
+    ))
+    .unwrap()
+});
+static MUSIC_APPLE_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(concat!(
+        r"(https?://(?:www\.)?music\.apple\.com/",
+        url_tail!(),
+        ")"
+    ))
+    .unwrap()
+});
+static X_LINK_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(concat!(
+        r"\.?https?://(?:www\.)?(?:x|twitter)\.com/",
+        url_tail!()
+    ))
+    .unwrap()
+});
+static X_LINK_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(concat!(
+        r"(\.?)(https?://(?:www\.)?(?:x|twitter)\.com/",
+        url_tail!(),
+        ")"
+    ))
+    .unwrap()
+});
 static INSTAGRAM_LINK_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"https?://(?:www\.)?instagram\.com/\S+").unwrap());
-static INSTAGRAM_CAPTURE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(https?://(?:www\.)?instagram\.com/\S+)").unwrap());
+    Lazy::new(|| Regex::new(concat!(r"https?://(?:www\.)?instagram\.com/", url_tail!())).unwrap());
+static INSTAGRAM_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(concat!(
+        r"(https?://(?:www\.)?instagram\.com/",
+        url_tail!(),
+        ")"
+    ))
+    .unwrap()
+});
 static THREADS_LINK_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"https?://(?:www\.)?threads\.(?:com|net)/(?:@[\w.]+/post|t)/\S+").unwrap()
+    Regex::new(concat!(
+        r"https?://(?:www\.)?threads\.(?:com|net)/(?:@[\w.]+/post|t)/",
+        url_tail!()
+    ))
+    .unwrap()
 });
 static THREADS_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(https?://(?:www\.)?threads\.(?:com|net)/(?:@[\w.]+/post|t)/\S+)").unwrap()
+    Regex::new(concat!(
+        r"(https?://(?:www\.)?threads\.(?:com|net)/(?:@[\w.]+/post|t)/",
+        url_tail!(),
+        ")"
+    ))
+    .unwrap()
 });
 static GOOGLE_SHARE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"https?://share\.google/[A-Za-z0-9_-]+").unwrap());
@@ -62,13 +110,6 @@ pub struct MusicLink {
     pub cleaned: String,
     pub platform: MusicPlatform,
     pub had_tracking: bool,
-}
-
-pub fn contains_music_link(text: &str) -> bool {
-    MUSIC_YOUTUBE_RE.is_match(text)
-        || MUSIC_YOUTUBE_MUSIC_RE.is_match(text)
-        || MUSIC_SPOTIFY_RE.is_match(text)
-        || MUSIC_APPLE_RE.is_match(text)
 }
 
 pub fn contains_x_link(text: &str) -> bool {
@@ -698,6 +739,27 @@ mod tests {
             "https://example.com/a"
         );
         assert_eq!(clean_tracking_params("not a url"), "not a url");
+    }
+
+    #[test]
+    fn links_stop_at_trailing_punctuation_and_attached_text() {
+        assert_eq!(
+            convert_x_links("이거 봐 (https://x.com/user/status/123)")[0].converted,
+            "https://fxtwitter.com/user/status/123"
+        );
+        assert_eq!(
+            convert_x_links("https://x.com/user/status/123?s=20이거 봐")[0].original,
+            "https://x.com/user/status/123?s=20"
+        );
+        assert_eq!(
+            extract_music_links("https://music.youtube.com/watch?v=nmYDYalgb5w, 이것도")[0].cleaned,
+            "https://music.youtube.com/watch?v=nmYDYalgb5w"
+        );
+        assert_eq!(
+            convert_instagram_links("https://www.instagram.com/reel/Dcx3ct3CWX_/).")[0]
+                .cleaned_original,
+            "https://www.instagram.com/reel/Dcx3ct3CWX_/"
+        );
     }
 
     #[test]
