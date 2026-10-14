@@ -3,6 +3,7 @@ import { fitContextMessages, imageTokenEstimate } from "../chat/contextBudget.js
 import { runPreSearch } from "./search.js";
 import { sanitizeAssistantOutput } from "../chat/sanitizeOutput.js";
 import { normalizeContinuationArtifacts, mergeContinuationContent, shouldContinueChat } from "./continuation.js";
+import { invokeAnthropicChat } from "./providers/anthropic.js";
 import { invokeCodexChat } from "./providers/codex.js";
 import { measureStage } from "../runtime/execution.js";
 import { mergeWebCitations } from "./evidence.js";
@@ -62,8 +63,10 @@ export async function invokeChatWithMetadata(
     };
   };
 
+  const provider = params.settings.aiProvider;
+  const invoke = provider === "anthropic" ? invokeAnthropicChat : invokeCodexChat;
   for (let attempt = 0; attempt <= maxContinuations; attempt += 1) {
-    const result = await measureStage("provider:codex", () => invokeCodexChat(params.settings, workingMessages));
+    const result = await measureStage(`provider:${provider}`, () => invoke(params.settings, workingMessages));
     combined = combined
       ? mergeContinuationContent(combined, result.content)
       : result.content.trim();

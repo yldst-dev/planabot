@@ -1,6 +1,8 @@
 import { resolveDefaultSystemPrompt } from "./persona/index.js";
 
 export type Settings = {
+  aiProvider: AiProvider;
+  anthropicApiKey: string;
   codexApiKey: string;
   codexBaseUrl: string;
   codexFast: boolean;
@@ -31,27 +33,38 @@ export const CODEX_IMAGE_DETAILS = ["low", "high", "auto"] as const;
 
 export type CodexImageDetail = (typeof CODEX_IMAGE_DETAILS)[number];
 
-export const DEFAULT_CODEX_MODEL = "gpt-6-astra";
+export type AiProvider = "codex" | "anthropic";
 
-const CODEX_PROVIDER_NAMES = new Set(["codex", "codex-gateway", "codex_gateway"]);
-const PROVIDER_KEYS = ["PLANABRAIN_AI_PROVIDER", "PLANABRAIN_AUX_PROVIDER", "PLANABRAIN_INTIMACY_FALLBACK_PROVIDER"];
+export const DEFAULT_CODEX_MODEL = "gpt-6-astra";
+export const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5";
+export const DEFAULT_ANTHROPIC_AUX_MODEL = "claude-haiku-5-5";
+
+const PROVIDER_ALIASES = new Map<string, AiProvider>([
+  ["codex", "codex"],
+  ["codex-gateway", "codex"],
+  ["codex_gateway", "codex"],
+  ["anthropic", "anthropic"],
+  ["claude", "anthropic"],
+]);
 
 export function loadSettings(): Settings {
-  for (const key of PROVIDER_KEYS) {
-    const value = readOptionalEnv(key)?.toLowerCase();
-    if (value && !CODEX_PROVIDER_NAMES.has(value)) {
-      throw new Error(`${key} must be codex (codex-gateway, codex_gateway)`);
-    }
+  const aiProvider = resolveAiProvider();
+  const anthropic = aiProvider === "anthropic";
+  const anthropicApiKey = readOptionalEnv("ANTHROPIC_API_KEY") ?? "";
+  const codexApiKey = readOptionalEnv("CODEX_GATEWAY_API_KEY") ?? "";
+  if (anthropic && !anthropicApiKey) {
+    throw new Error("ANTHROPIC_API_KEY is required when PLANABRAIN_AI_PROVIDER=anthropic");
   }
-  const codexApiKey = readOptionalEnv("CODEX_GATEWAY_API_KEY");
-  if (!codexApiKey) {
+  if (!anthropic && !codexApiKey) {
     throw new Error("CODEX_GATEWAY_API_KEY is required");
   }
   const ollamaApiKeys = resolveOllamaApiKeys();
   const personaProfile = resolvePersonaProfile();
   return {
+    aiProvider,
+    anthropicApiKey,
     codexApiKey,
-    codexBaseUrl: normalizeGatewayBaseUrl(
+    codexBaseUrl: anthropic ? "" : normalizeGatewayBaseUrl(
       readOptionalEnv("PLANABRAIN_CODEX_BASE_URL") ?? readOptionalEnv("CODEX_GATEWAY_BASE_URL"),
       "PLANABRAIN_CODEX_BASE_URL",
     ),
@@ -66,7 +79,9 @@ export function loadSettings(): Settings {
     webFetchMaxBytes: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_MAX_BYTES", 1000000, 1024, 5000000),
     webFetchMaxChars: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_MAX_CHARS", 12000, 500, 50000),
     webFetchMaxTotalChars: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_MAX_TOTAL_CHARS", 18000, 500, 100000),
-    chatModel: readOptionalEnv("PLANABRAIN_CODEX_MODEL") ?? DEFAULT_CODEX_MODEL,
+    chatModel: anthropic
+      ? readOptionalEnv("PLANABRAIN_ANTHROPIC_MODEL") ?? DEFAULT_ANTHROPIC_MODEL
+      : readOptionalEnv("PLANABRAIN_CODEX_MODEL") ?? DEFAULT_CODEX_MODEL,
     deliveryMaxOutputTokens: parseOptionalPositiveIntEnv("PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS", 1024),
     deliveryRewriteEnabled: parseBooleanEnv("PLANABRAIN_DELIVERY_REWRITE_ENABLED", true),
     chatThinkingMode: parseThinkingModeEnv("PLANABRAIN_CHAT_THINKING_MODE"),
@@ -75,9 +90,23 @@ export function loadSettings(): Settings {
     intimacyEnabled: parseBooleanEnv("PLANABRAIN_INTIMACY_ENABLED", true),
     continuousChat: parseBooleanEnv("PLANABRAIN_CONTINUOUS_CHAT", false),
     searchQueryRewriteEnabled: parseBooleanEnv("PLANABRAIN_SEARCH_QUERY_REWRITE", true),
-    intimacyFallbackModel: readOptionalEnv("PLANABRAIN_INTIMACY_FALLBACK_MODEL"),
-    auxModel: readOptionalEnv("PLANABRAIN_AUX_MODEL"),
+    intimacyFallbackModel: anthropic ? undefined : readOptionalEnv("PLANABRAIN_INTIMACY_FALLBACK_MODEL"),
+    auxModel: anthropic
+      ? readOptionalEnv("PLANABRAIN_ANTHROPIC_AUX_MODEL") ?? DEFAULT_ANTHROPIC_AUX_MODEL
+      : readOptionalEnv("PLANABRAIN_AUX_MODEL"),
   };
+}
+
+function resolveAiProvider(): AiProvider {
+  const raw = readOptionalEnv("PLANABRAIN_AI_PROVIDER")?.toLowerCase();
+  if (!raw) {
+    return "codex";
+  }
+  const provider = PROVIDER_ALIASES.get(raw);
+  if (!provider) {
+    throw new Error("PLANABRAIN_AI_PROVIDER must be one of: codex, anthropic");
+  }
+  return provider;
 }
 
 function resolvePersonaProfile(): "live" | "original" {

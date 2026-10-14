@@ -23,7 +23,7 @@
 - 메시지에 포함된 웹 링크의 안전한 본문 직접 수집
 - 장기 메모리와 그룹 공용 메모리
 - 응답 잘림 감지 후 자동 이어쓰기
-- codex 게이트웨이 하나로 모델 호출, OpenRouter는 판단 모델(Jev)에만 사용
+- codex 게이트웨이 또는 Claude API(platform.claude.com)로 모델 호출, OpenRouter는 판단 모델(Jev)에만 사용
 
 ## 저장소 구조
 
@@ -142,8 +142,16 @@ npm run dev
 - 생각 모드 `off`와 `minimal`은 `reasoning.effort: low`로 보냅니다. `default`면 모델 기본값을 씁니다.
 - `PLANABRAIN_CODEX_FAST=1`이면 답변 호출에 `service_tier: "priority"`를 붙여 fast 모드로 보냅니다. Codex 사용량을 표준의 2.5배 쓰므로 검색어 재작성, 전달문 재작성, 기억 작성 같은 보조 호출에는 붙이지 않습니다.
 - 이미지 입력은 `input_image` data URL로 보냅니다.
-- `PLANABRAIN_AI_PROVIDER`, `PLANABRAIN_AUX_PROVIDER`는 비우거나 `codex`로 둡니다. 다른 값이면 시작할 때 오류가 납니다.
+- `PLANABRAIN_AI_PROVIDER`를 비우거나 `codex`로 두면 이 게이트웨이를 씁니다.
 - 권장 타임아웃: `PLANABRAIN_HTTP_TIMEOUT_MS=180000`
+
+### Claude API (platform.claude.com)
+
+- `PLANABRAIN_AI_PROVIDER=anthropic`(또는 `claude`)과 `ANTHROPIC_API_KEY`로 켭니다. 이때 codex 설정은 읽지 않습니다.
+- 기본 모델: 주 모델 `claude-opus-5-5`(`PLANABRAIN_ANTHROPIC_MODEL`), 보조 모델 `claude-haiku-5-5`(`PLANABRAIN_ANTHROPIC_AUX_MODEL`). 판단, 검색어 재작성, 전달문 재작성, 기억 작성은 보조 모델로 합니다.
+- Messages API(`POST https://api.anthropic.com/v1/messages`)를 `anthropic-version: 2023-06-01`로 부릅니다. 시스템 프롬프트에는 프롬프트 캐시를 걸고, 이미지는 base64 블록으로 텍스트 앞에 붙입니다.
+- 생각 모드는 `output_config.effort`로 보냅니다. `off`와 `minimal`은 `low`, `default`면 모델 기본값입니다. Claude 5 모델이 거부하는 `temperature`, `top_p`, `thinking.type: enabled`는 보내지 않습니다.
+- 429, 500대, 529 응답은 최대 2번 다시 시도합니다. 본문 없이 `refusal`로 끝나면 차단된 응답으로 처리합니다.
 
 ### 웹 검색 (Ollama)
 
@@ -174,8 +182,9 @@ OPENROUTER_API_KEY=YOUR_OPENROUTER_API_KEY_HERE
 
 - `TELEGRAM_API_TOKEN`
 - `PLANABRAIN_ENABLED`
-- `PLANABRAIN_AI_PROVIDER` (비우거나 `codex`)
+- `PLANABRAIN_AI_PROVIDER` (`codex` 기본, `anthropic`)
 - `CODEX_GATEWAY_API_KEY`, `PLANABRAIN_CODEX_BASE_URL`, `PLANABRAIN_CODEX_MODEL`
+- `ANTHROPIC_API_KEY`, `PLANABRAIN_ANTHROPIC_MODEL`, `PLANABRAIN_ANTHROPIC_AUX_MODEL`
 - `PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS`
 - `PLANABRAIN_DELIVERY_REWRITE_ENABLED`
 - `PLANABRAIN_CHAT_THINKING_MODE`
@@ -348,7 +357,7 @@ cd planabrain && npm run typecheck && npm run build
 
 - 그룹 대화 답장 체인 맥락 유지
 - 이미지 분석을 planabrain 멀티모달 경로로 통합
-- codex 게이트웨이 단일 모델 연결과 Ollama 사전 검색
+- codex 게이트웨이와 Claude API 중 하나를 고르는 모델 연결, Ollama 사전 검색
 - OpenRouter Jev 판단 모델로 턴 판단과 기억 관련성 판단
 - Ollama 다중 API 키 fallback 지원
 - 30초 응답 지연 감지

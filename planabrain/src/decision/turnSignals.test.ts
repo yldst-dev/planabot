@@ -125,6 +125,8 @@ test("codex takes over decisions when jev is not configured", () => {
   assert.equal(loadDecisionEvaluator({ PLANABRAIN_DECISION_PROVIDER: "codex", OPENROUTER_API_KEY: "key" }, settings)?.name, "codex");
   assert.equal(loadDecisionEvaluator({ PLANABRAIN_DECISION_PROVIDER: "off", OPENROUTER_API_KEY: "key" }, settings), undefined);
   assert.equal(loadDecisionEvaluator({}, () => testSettings({ codexApiKey: "" })), undefined);
+  assert.equal(loadDecisionEvaluator({}, () => testSettings({ aiProvider: "anthropic", anthropicApiKey: "sk-ant-test", codexApiKey: "" }))?.name, "anthropic");
+  assert.equal(loadDecisionEvaluator({}, () => testSettings({ aiProvider: "anthropic", anthropicApiKey: "" })), undefined);
   assert.equal(loadDecisionEvaluator({}, () => { throw new Error("no settings"); }), undefined);
 });
 

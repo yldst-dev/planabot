@@ -10,7 +10,7 @@ export function readUsage(value: unknown): void {
   recordUsage(
     usage.input_tokens ?? usage.prompt_tokens ?? usage.promptTokenCount ?? root.prompt_eval_count,
     usage.output_tokens ?? usage.completion_tokens ?? usage.candidatesTokenCount ?? root.eval_count,
-    record(usage.prompt_tokens_details).cached_tokens ?? usage.cachedContentTokenCount,
+    record(usage.prompt_tokens_details).cached_tokens ?? usage.cachedContentTokenCount ?? usage.cache_read_input_tokens,
     record(usage.completion_tokens_details).reasoning_tokens ?? usage.thoughtsTokenCount,
   );
 }

@@ -2,6 +2,8 @@ import type { Settings } from "../config/settings.js";
 
 export function testSettings(overrides: Partial<Settings> = {}): Settings {
   return {
+    aiProvider: "codex",
+    anthropicApiKey: "",
     codexApiKey: "cg_test",
     codexBaseUrl: "http://codex.example/v1",
     codexFast: false,

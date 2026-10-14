@@ -77,7 +77,7 @@ function toResponsesContent(message: ChatMessage, detail: Settings["codexImageDe
   ];
 }
 
-function resolveReasoningEffort(mode: Settings["chatThinkingMode"]): string | undefined {
+export function resolveReasoningEffort(mode: Settings["chatThinkingMode"]): string | undefined {
   if (mode === "default") return undefined;
   return mode === "off" || mode === "minimal" ? "low" : mode;
 }

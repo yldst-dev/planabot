@@ -42,7 +42,10 @@ export function loadDecisionEvaluator(
   } catch {
     return undefined;
   }
-  if (!settings.codexApiKey || !settings.codexBaseUrl) {
+  const ready = settings.aiProvider === "anthropic"
+    ? Boolean(settings.anthropicApiKey)
+    : Boolean(settings.codexApiKey && settings.codexBaseUrl);
+  if (!ready) {
     return undefined;
   }
   return codexEvaluator(settings, readTimeout(env.PLANABRAIN_DECISION_CODEX_TIMEOUT_MS, DEFAULT_CODEX_TIMEOUT_MS, 30_000));
@@ -53,7 +56,7 @@ export function jevEvaluator(config: SystemOneConfig): DecisionEvaluator {
 }
 
 export function codexEvaluator(settings: Settings, timeoutMs = DEFAULT_CODEX_TIMEOUT_MS): DecisionEvaluator {
-  return { name: "codex", evaluate: (state, questions) => evaluateWithCodex(settings, state, questions, timeoutMs) };
+  return { name: settings.aiProvider, evaluate: (state, questions) => evaluateWithCodex(settings, state, questions, timeoutMs) };
 }
 
 function readProvider(env: NodeJS.ProcessEnv): string {

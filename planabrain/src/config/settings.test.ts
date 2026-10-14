@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { DEFAULT_CODEX_MODEL, loadSettings, normalizeGatewayBaseUrl } from "./settings.js";
+import { DEFAULT_ANTHROPIC_AUX_MODEL, DEFAULT_ANTHROPIC_MODEL, DEFAULT_CODEX_MODEL, loadSettings, normalizeGatewayBaseUrl } from "./settings.js";
 
 function withEnv<T>(env: Record<string, string>, run: () => T): T {
   const saved = { ...process.env };
   for (const key of Object.keys(process.env)) {
-    if (key.startsWith("PLANABRAIN_") || key.startsWith("CODEX_") || key.startsWith("OLLAMA_")) {
+    if (key.startsWith("PLANABRAIN_") || key.startsWith("CODEX_") || key.startsWith("OLLAMA_") || key.startsWith("ANTHROPIC_")) {
       delete process.env[key];
     }
   }
@@ -42,13 +42,28 @@ test("codex requires a key and a gateway URL, accepting the handoff variable nam
   assert.equal(settings.codexBaseUrl, "http://gateway:8080/v1");
 });
 
-test("provider variables accept only codex aliases", () => {
-  for (const key of ["PLANABRAIN_AI_PROVIDER", "PLANABRAIN_AUX_PROVIDER", "PLANABRAIN_INTIMACY_FALLBACK_PROVIDER"]) {
-    for (const alias of ["codex", "Codex-Gateway", "codex_gateway"]) {
-      assert.doesNotThrow(() => withEnv({ ...CODEX_ENV, [key]: alias }, loadSettings));
-    }
-    assert.throws(() => withEnv({ ...CODEX_ENV, [key]: "openrouter" }, loadSettings), new RegExp(key));
+test("the provider variable picks codex or anthropic and ignores the old aux provider keys", () => {
+  for (const alias of ["codex", "Codex-Gateway", "codex_gateway"]) {
+    assert.equal(withEnv({ ...CODEX_ENV, PLANABRAIN_AI_PROVIDER: alias }, loadSettings).aiProvider, "codex");
   }
+  assert.throws(() => withEnv({ ...CODEX_ENV, PLANABRAIN_AI_PROVIDER: "openrouter" }, loadSettings), /PLANABRAIN_AI_PROVIDER/);
+  assert.throws(() => withEnv({ ...CODEX_ENV, PLANABRAIN_AI_PROVIDER: "constructor" }, loadSettings), /PLANABRAIN_AI_PROVIDER/);
+  assert.equal(withEnv({ ...CODEX_ENV, PLANABRAIN_AUX_PROVIDER: "openrouter" }, loadSettings).aiProvider, "codex");
+});
+
+test("anthropic needs only its own key and uses Claude model defaults", () => {
+  const env = { PLANABRAIN_AI_PROVIDER: "Claude", ANTHROPIC_API_KEY: "sk-ant-test", PLANABRAIN_CODEX_MODEL: "gpt-6-luna", PLANABRAIN_AUX_MODEL: "gpt-5.6-sol", PLANABRAIN_INTIMACY_FALLBACK_MODEL: "gpt-5.5" };
+  const settings = withEnv(env, loadSettings);
+  assert.equal(settings.aiProvider, "anthropic");
+  assert.equal(settings.anthropicApiKey, "sk-ant-test");
+  assert.equal(settings.codexBaseUrl, "");
+  assert.equal(settings.chatModel, DEFAULT_ANTHROPIC_MODEL);
+  assert.equal(settings.auxModel, DEFAULT_ANTHROPIC_AUX_MODEL);
+  assert.equal(settings.intimacyFallbackModel, undefined);
+  const custom = withEnv({ ...env, PLANABRAIN_ANTHROPIC_MODEL: "claude-sonnet-5-5", PLANABRAIN_ANTHROPIC_AUX_MODEL: "claude-sonnet-5-5" }, loadSettings);
+  assert.equal(custom.chatModel, "claude-sonnet-5-5");
+  assert.equal(custom.auxModel, "claude-sonnet-5-5");
+  assert.throws(() => withEnv({ ...env, ANTHROPIC_API_KEY: " ", ...CODEX_ENV }, loadSettings), /ANTHROPIC_API_KEY/);
 });
 
 test("fast mode is off unless enabled", () => {
