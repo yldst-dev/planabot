@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
     init: true
     stop_signal: SIGINT
-    stop_grace_period: 210s
+    stop_grace_period: 240s
     env_file:
       - .env
     extra_hosts:
