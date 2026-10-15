@@ -1,5 +1,6 @@
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -29,6 +30,50 @@ pub(crate) fn read_json_or_default<T: DeserializeOwned + Default>(path: &Path) -
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) struct TempFile(PathBuf);
+
+impl TempFile {
+    pub(crate) fn create(prefix: &str, contents: &[u8]) -> io::Result<Self> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or(0);
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "{prefix}_{}_{nanos}_{sequence}.tmp",
+            std::process::id()
+        ));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        private_mode(&mut options);
+        let mut file = options.open(&path)?;
+        let temp = Self(path);
+        file.write_all(contents)?;
+        Ok(temp)
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[cfg(unix)]
+fn private_mode(options: &mut std::fs::OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+    options.mode(0o600);
+}
+
+#[cfg(not(unix))]
+fn private_mode(_options: &mut std::fs::OpenOptions) {}
+
 fn temp_path(path: &Path) -> PathBuf {
     let file_name = path
         .file_name()
@@ -39,8 +84,28 @@ fn temp_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_json_or_default, write_json_atomic};
+    use super::{TempFile, read_json_or_default, write_json_atomic};
     use serde::{Deserialize, Serialize};
+
+    #[test]
+    fn temp_files_are_private_unique_and_removed_on_drop() {
+        let first = TempFile::create("planabot_persist_temp", b"secret").expect("first");
+        let second = TempFile::create("planabot_persist_temp", b"secret").expect("second");
+        assert_ne!(first.path(), second.path());
+        assert_eq!(std::fs::read(first.path()).unwrap(), b"secret");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(first.path())
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        let path = first.path().to_path_buf();
+        drop(first);
+        assert!(!path.exists());
+    }
 
     #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
     struct Sample {

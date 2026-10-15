@@ -209,7 +209,6 @@ mod tests {
 
     #[test]
     fn accepts_catalog_and_prefixed_keys() {
-        assert!(validate_key("TELEGRAM_API_TOKEN").is_ok());
         assert!(validate_key("PLANABRAIN_NEW_FLAG").is_ok());
         assert!(validate_key("CODEX_GATEWAY_BASE_URL").is_ok());
         assert!(validate_key("ANTHROPIC_API_KEY").is_ok());
@@ -232,6 +231,7 @@ mod tests {
         assert!(validate_key("HIROMI_BIN").is_err());
         assert!(validate_key("HEALTH_PORT").is_err());
         assert!(validate_key("HEALTH_SECRET_BRAIN").is_err());
+        assert!(validate_key("TELEGRAM_API_TOKEN").is_err());
         assert!(validate_key(&"PLANABOT_X".repeat(10)).is_err());
     }
 

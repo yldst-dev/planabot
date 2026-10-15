@@ -9,6 +9,8 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
+use crate::persist::TempFile;
+
 pub(crate) mod server;
 use tokio::process::Command as TokioCommand;
 
@@ -121,6 +123,7 @@ impl std::error::Error for PlanabrainError {}
 const PLANABRAIN_ERROR_JSON_PREFIX: &str = "PLANABRAIN_ERROR_JSON:";
 const PLANABRAIN_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const PLANABRAIN_ASK_TIMEOUT: Duration = Duration::from_secs(200);
+const MAX_RECENT_TURNS: usize = 40;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -378,6 +381,7 @@ pub(crate) async fn run_planabrain_ask(
         return Err(anyhow!("planabrain 비활성화"));
     }
 
+    let recent_turns = &recent_turns[recent_turns.len().saturating_sub(MAX_RECENT_TURNS)..];
     let _image_cleanup = ImageCleanup(
         images
             .inputs
@@ -507,9 +511,7 @@ pub(crate) async fn remember_planabrain_exchange(
     }
     let result =
         run_planabrain_output(command, None, PLANABRAIN_COMMAND_TIMEOUT, "memory-exchange").await;
-    for path in temp_files {
-        let _ = std::fs::remove_file(path);
-    }
+    drop(temp_files);
     success_stdout(result?, "memory-exchange")?;
     Ok(())
 }
@@ -608,17 +610,10 @@ pub(crate) async fn interpret_schedule_request(text: &str) -> Result<ScheduleInt
 
     let mut text_file = None;
     if text.chars().count() > MAX_CLI_TEXT_CHARS {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!(
-            "planabrain_schedule_text_{}_{timestamp}.txt",
-            std::process::id()
-        ));
-        std::fs::write(&path, text).context("planabrain 텍스트 파일 저장 실패")?;
-        command.env("PLANABRAIN_SCHEDULE_TEXT_FILE", &path);
-        text_file = Some(path);
+        let file = TempFile::create("planabrain_schedule_text", text.as_bytes())
+            .context("planabrain 텍스트 파일 저장 실패")?;
+        command.env("PLANABRAIN_SCHEDULE_TEXT_FILE", file.path());
+        text_file = Some(file);
     } else {
         command.arg(text);
     }
@@ -630,9 +625,7 @@ pub(crate) async fn interpret_schedule_request(text: &str) -> Result<ScheduleInt
         "schedule-interpret",
     )
     .await;
-    if let Some(path) = text_file.as_ref() {
-        let _ = std::fs::remove_file(path);
-    }
+    drop(text_file);
     let stdout = success_stdout(result?, "schedule-interpret")?;
     serde_json::from_str(stdout.trim()).context("schedule-interpret 결과 파싱 실패")
 }
@@ -788,19 +781,8 @@ impl Drop for ImageCleanup {
 
 struct PreparedPlanabrainAsk {
     command: Option<ProcessCommand>,
-    question_file: Option<PathBuf>,
-    recent_turns_file: Option<PathBuf>,
-}
-
-impl Drop for PreparedPlanabrainAsk {
-    fn drop(&mut self) {
-        for path in [self.question_file.as_ref(), self.recent_turns_file.as_ref()]
-            .into_iter()
-            .flatten()
-        {
-            let _ = std::fs::remove_file(path);
-        }
-    }
+    _question_file: Option<TempFile>,
+    _recent_turns_file: Option<TempFile>,
 }
 
 fn prepare_planabrain_ask(
@@ -850,32 +832,20 @@ fn prepare_planabrain_ask(
     }
     let mut recent_turns_file = None;
     if !recent_turns.is_empty() {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!(
-            "planabrain_recent_turns_{}_{timestamp}.json",
-            std::process::id()
-        ));
-        std::fs::write(&path, serde_json::to_vec(recent_turns)?)
-            .context("planabrain 최근 턴 파일 저장 실패")?;
-        command.env("PLANABRAIN_RECENT_TURNS_FILE", &path);
-        recent_turns_file = Some(path);
+        let file = TempFile::create(
+            "planabrain_recent_turns",
+            &serde_json::to_vec(recent_turns)?,
+        )
+        .context("planabrain 최근 턴 파일 저장 실패")?;
+        command.env("PLANABRAIN_RECENT_TURNS_FILE", file.path());
+        recent_turns_file = Some(file);
     }
 
     if question.chars().count() > MAX_CLI_QUESTION_CHARS {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!(
-            "planabrain_question_{}_{timestamp}.txt",
-            std::process::id()
-        ));
-        std::fs::write(&path, question).context("planabrain 질문 파일 저장 실패")?;
-        command.env("PLANABRAIN_QUESTION_FILE", &path);
-        question_file = Some(path);
+        let file = TempFile::create("planabrain_question", question.as_bytes())
+            .context("planabrain 질문 파일 저장 실패")?;
+        command.env("PLANABRAIN_QUESTION_FILE", file.path());
+        question_file = Some(file);
         command.arg("ask");
     } else {
         command.arg("ask").arg(question);
@@ -883,8 +853,8 @@ fn prepare_planabrain_ask(
 
     Ok(PreparedPlanabrainAsk {
         command: Some(command),
-        question_file,
-        recent_turns_file,
+        _question_file: question_file,
+        _recent_turns_file: recent_turns_file,
     })
 }
 
@@ -929,7 +899,7 @@ fn build_memory_exchange_command(
     user_id: &str,
     chat_scope: &str,
     conversation_scope_id: Option<&str>,
-) -> Result<(ProcessCommand, Vec<PathBuf>)> {
+) -> Result<(ProcessCommand, Vec<TempFile>)> {
     const MAX_LOCAL_MEMORY_TEXT_CHARS: usize = 2000;
     let mut command = build_planabrain_command(planabrain_root)?;
     command
@@ -945,30 +915,18 @@ fn build_memory_exchange_command(
     if current_turn_text.chars().count() > MAX_LOCAL_MEMORY_TEXT_CHARS
         || answer.chars().count() > MAX_LOCAL_MEMORY_TEXT_CHARS
     {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let process_id = std::process::id();
-        let user_path =
-            std::env::temp_dir().join(format!("local_memory_user_{process_id}_{timestamp}.txt"));
-        let assistant_path = std::env::temp_dir().join(format!(
-            "local_memory_assistant_{process_id}_{timestamp}.txt"
-        ));
-        std::fs::write(&user_path, current_turn_text)
+        let user_file = TempFile::create("local_memory_user", current_turn_text.as_bytes())
             .context("로컬 장기 메모리 사용자 질문 파일 저장 실패")?;
-        if let Err(err) = std::fs::write(&assistant_path, answer) {
-            let _ = std::fs::remove_file(&user_path);
-            return Err(err).context("로컬 장기 메모리 응답 파일 저장 실패");
-        }
+        let assistant_file = TempFile::create("local_memory_assistant", answer.as_bytes())
+            .context("로컬 장기 메모리 응답 파일 저장 실패")?;
         command
-            .env("PLANABRAIN_LOCAL_MEMORY_USER_TEXT_FILE", &user_path)
+            .env("PLANABRAIN_LOCAL_MEMORY_USER_TEXT_FILE", user_file.path())
             .env(
                 "PLANABRAIN_LOCAL_MEMORY_ASSISTANT_TEXT_FILE",
-                &assistant_path,
+                assistant_file.path(),
             );
-        temp_files.push(user_path);
-        temp_files.push(assistant_path);
+        temp_files.push(user_file);
+        temp_files.push(assistant_file);
     } else {
         command.arg(current_turn_text).arg(answer);
     }

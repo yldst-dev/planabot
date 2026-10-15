@@ -381,7 +381,9 @@ async fn restart(headers: HeaderMap) -> Response {
     }
     tokio::spawn(async {
         tokio::time::sleep(Duration::from_millis(700)).await;
-        crate::reboot::trigger_scheduled_reboot("대시보드 설정 적용");
+        if !crate::bot::request_shutdown() {
+            crate::reboot::trigger_scheduled_reboot("대시보드 설정 적용");
+        }
     });
     json(StatusCode::ACCEPTED, &serde_json::json!({ "ok": true }))
 }

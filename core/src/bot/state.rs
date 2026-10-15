@@ -9,6 +9,7 @@ use teloxide::types::{ChatId, ChatKind, Message, MessageId, PublicChatKind, User
 use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 
 use super::media::{ImageSource, MediaGroupCache, extract_image_source};
+use super::notice::NoticeBoard;
 use crate::hiromi_share::ShareClaim;
 use crate::hitomi::GalleryClient;
 use crate::persist::{read_json_or_default, write_json_atomic};
@@ -86,6 +87,7 @@ pub struct AppState {
     pub gallery_client: GalleryClient,
     pub notice_chat_id: Option<ChatId>,
     pub notice_url: Option<String>,
+    pub(crate) notices: Arc<NoticeBoard>,
     booted_at: i64,
     planabrain_replies: Arc<RwLock<PlanabrainReplyTracker>>,
     planabrain_replies_path: PathBuf,
@@ -125,6 +127,7 @@ impl Drop for GalleryJob {
 }
 
 const SHARE_CLAIM_TTL_MS: i64 = 24 * 60 * 60 * 1000;
+const PLANABRAIN_PERMITS: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredShareClaim {
@@ -172,6 +175,7 @@ impl AppState {
             gallery_client,
             notice_chat_id,
             notice_url,
+            notices: Arc::new(NoticeBoard::load()),
             booted_at,
             planabrain_replies: Arc::new(RwLock::new(planabrain_replies)),
             planabrain_replies_path,
@@ -179,7 +183,7 @@ impl AppState {
             group_registry_path,
             image_rate_limiter: Arc::new(Mutex::new(image_rate_limiter)),
             media_groups: Arc::new(Mutex::new(MediaGroupCache::default())),
-            planabrain_semaphore: Arc::new(Semaphore::new(4)),
+            planabrain_semaphore: Arc::new(Semaphore::new(PLANABRAIN_PERMITS as usize)),
             planabrain_conversations: Arc::new(Mutex::new(HashMap::new())),
             schedule_store,
             share_claims: Arc::new(RwLock::new(share_claims)),
@@ -409,6 +413,26 @@ impl AppState {
         }
     }
 
+    pub(crate) async fn forget_group_chat(&self, chat_id: ChatId, replacement: Option<ChatId>) {
+        let _guard = self.write_lock.lock().await;
+        let snapshot = {
+            let mut registry = match self.group_registry.write() {
+                Ok(registry) => registry,
+                Err(_) => return,
+            };
+            let removed = registry.remove(&chat_id);
+            let added = replacement.is_some_and(|new_id| registry.insert(new_id));
+            if !removed && !added {
+                return;
+            }
+            registry.iter().map(|id| id.0).collect::<Vec<_>>()
+        };
+
+        if let Err(err) = persist_group_registry(&self.group_registry_path, &snapshot).await {
+            warn!("그룹 목록 저장 실패: {}", err);
+        }
+    }
+
     pub(crate) async fn allow_image_request(&self, user_id: i64) -> bool {
         let mut limiter = match self.image_rate_limiter.lock() {
             Ok(limiter) => limiter,
@@ -433,6 +457,13 @@ impl AppState {
 
     pub(crate) fn try_acquire_planabrain_permit(&self) -> Option<OwnedSemaphorePermit> {
         self.planabrain_semaphore.clone().try_acquire_owned().ok()
+    }
+
+    pub(crate) async fn wait_for_planabrain_turns(&self, limit: Duration) {
+        let all = self.planabrain_semaphore.acquire_many(PLANABRAIN_PERMITS);
+        if tokio::time::timeout(limit, all).await.is_err() {
+            warn!("처리 중인 AI 답변을 기다리다 시간이 지나 종료합니다.");
+        }
     }
 }
 

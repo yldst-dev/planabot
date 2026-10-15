@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use log::error;
+use log::{error, warn};
 use teloxide::prelude::*;
 use teloxide::types::{InputFile, Message, ParseMode};
 use teloxide::utils::html;
@@ -42,7 +42,18 @@ where
         Command::Start => {
             if let Some(token) = msg.text().and_then(crate::hiromi_share::start_share_token) {
                 if msg.chat.is_private() {
-                    deliver_share_claim(&bot, &state, msg.chat.id, token, true).await?;
+                    if let Err(err) =
+                        deliver_share_claim(&bot, &state, msg.chat.id, token, true).await
+                    {
+                        error!("다운로드 파일 전송 실패: {:?}", err);
+                        send_reply_with_fallback(
+                            &bot,
+                            &msg,
+                            "오류.\n선생님.\n파일을 보내지 못했습니다.\n잠시 후 다시 시도해 주십시오.",
+                            SendOptions::default(),
+                        )
+                        .await?;
+                    }
                 } else {
                     send_reply_with_fallback(
                         &bot,
@@ -102,14 +113,8 @@ where
             .await?;
         }
         Command::Token => {
-            if !planabrain::is_planabrain_enabled() {
-                send_reply_with_fallback(
-                    &bot,
-                    &msg,
-                    "불가.\n선생님.\n프라나브레인 기능이 비활성화 상태입니다.",
-                    SendOptions::default(),
-                )
-                .await?;
+            if let Err(reply) = planabrain_requester(&msg) {
+                send_reply_with_fallback(&bot, &msg, reply, SendOptions::default()).await?;
                 return Ok(());
             }
 
@@ -196,26 +201,12 @@ where
             send_reply_with_fallback(&bot, &msg, reply, SendOptions::default()).await?;
         }
         Command::MemoryReset => {
-            if !planabrain::is_planabrain_enabled() {
-                send_reply_with_fallback(
-                    &bot,
-                    &msg,
-                    "불가.\n선생님.\n프라나브레인 기능이 비활성화 상태입니다.",
-                    SendOptions::default(),
-                )
-                .await?;
-                return Ok(());
-            }
-
-            let Some(user_id) = requester_user_id(&msg) else {
-                send_reply_with_fallback(
-                    &bot,
-                    &msg,
-                    "확인 불가.\n선생님.\n사용자 정보를 확인하지 못했습니다.",
-                    SendOptions::default(),
-                )
-                .await?;
-                return Ok(());
+            let user_id = match planabrain_requester(&msg) {
+                Ok(user_id) => user_id,
+                Err(reply) => {
+                    send_reply_with_fallback(&bot, &msg, reply, SendOptions::default()).await?;
+                    return Ok(());
+                }
             };
 
             match planabrain::reset_user_memory(&user_id.to_string()).await {
@@ -250,43 +241,16 @@ where
             }
         }
         Command::Todo => {
-            if !planabrain::is_planabrain_enabled() {
-                send_reply_with_fallback(
-                    &bot,
-                    &msg,
-                    "불가.\n선생님.\n프라나브레인 기능이 비활성화 상태입니다.",
-                    SendOptions::default(),
-                )
-                .await?;
-                return Ok(());
-            }
-
-            let Some(user_id) = requester_user_id(&msg) else {
-                send_reply_with_fallback(
-                    &bot,
-                    &msg,
-                    "확인 불가.\n선생님.\n사용자 정보를 확인하지 못했습니다.",
-                    SendOptions::default(),
-                )
-                .await?;
-                return Ok(());
+            let user_id = match planabrain_requester(&msg) {
+                Ok(user_id) => user_id,
+                Err(reply) => {
+                    send_reply_with_fallback(&bot, &msg, reply, SendOptions::default()).await?;
+                    return Ok(());
+                }
             };
 
-            let user_id_i64 = i64::try_from(user_id).ok();
-            if !planabrain::is_planabrain_allowed(msg.chat.id.0, user_id_i64, msg.chat.is_private())
-            {
-                send_reply_with_fallback(
-                    &bot,
-                    &msg,
-                    "접근 불가.\n선생님.\n프라나브레인 기능은 베타입니다.\n허용된 채팅만 지원합니다.",
-                    SendOptions::default(),
-                )
-                .await?;
-                return Ok(());
-            }
-
             match planabrain::list_user_todos(&user_id.to_string()).await {
-                Ok(result) => {
+                Ok(result) if msg.chat.is_private() || msg.sender_chat.is_some() => {
                     let sent = send_reply_with_fallback(
                         &bot,
                         &msg,
@@ -301,6 +265,27 @@ where
                             user_id,
                         )
                         .await;
+                }
+                Ok(result) => {
+                    let private_chat = ChatId(user_id as i64);
+                    let text = planabrain::truncate_message(&result.markdown, 4000);
+                    let reply = match bot.send_message(private_chat, text).await {
+                        Ok(sent) => {
+                            state
+                                .record_planabrain_reply_for_user(
+                                    &sent,
+                                    &format!("todo_{user_id}"),
+                                    user_id,
+                                )
+                                .await;
+                            "확인했습니다.\n선생님.\n할 일 목록은 개인 대화로 보냈습니다."
+                        }
+                        Err(err) => {
+                            warn!("할 일 목록 개인 전송 실패: {}", err);
+                            "불가.\n선생님.\n할 일 목록은 개인 대화로만 보냅니다.\n봇과 개인 대화를 먼저 시작해 주십시오."
+                        }
+                    };
+                    send_reply_with_fallback(&bot, &msg, reply, SendOptions::default()).await?;
                 }
                 Err(err) => {
                     error!("todo 목록 조회 실패: {}", err);
@@ -492,12 +477,25 @@ pub(super) fn resolve_token_limit() -> u32 {
 }
 
 fn memory_user(msg: &Message) -> Result<String, &'static str> {
+    planabrain_requester(msg).map(|user_id| user_id.to_string())
+}
+
+fn planabrain_requester(msg: &Message) -> Result<u64, &'static str> {
     if !planabrain::is_planabrain_enabled() {
         return Err("불가.\n선생님.\n프라나브레인 기능이 비활성화 상태입니다.");
     }
-    requester_user_id(msg)
-        .map(|user_id| user_id.to_string())
-        .ok_or("확인 불가.\n선생님.\n사용자 정보를 확인하지 못했습니다.")
+    let user_id =
+        requester_user_id(msg).ok_or("확인 불가.\n선생님.\n사용자 정보를 확인하지 못했습니다.")?;
+    if !planabrain::is_planabrain_allowed(
+        msg.chat.id.0,
+        i64::try_from(user_id).ok(),
+        msg.chat.is_private(),
+    ) {
+        return Err(
+            "접근 불가.\n선생님.\n프라나브레인 기능은 베타입니다.\n허용된 채팅만 지원합니다.",
+        );
+    }
+    Ok(user_id)
 }
 
 fn render_memory_list(memories: &[planabrain::MemoryItem]) -> String {

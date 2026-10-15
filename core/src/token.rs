@@ -32,14 +32,10 @@ pub(crate) async fn count_text_tokens(text: &str) -> Result<TokenCount> {
     let mut text_file = None;
     command.arg("tokens").arg(&model);
     if text.chars().count() > MAX_INLINE_TEXT_CHARS {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_millis())
-            .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!("planabot_tokens_{timestamp}.txt"));
-        std::fs::write(&path, text).context("토큰 측정 입력 파일 저장 실패")?;
-        command.env("PLANABOT_TOKEN_TEXT_FILE", &path);
-        text_file = Some(path);
+        let file = crate::persist::TempFile::create("planabot_tokens", text.as_bytes())
+            .context("토큰 측정 입력 파일 저장 실패")?;
+        command.env("PLANABOT_TOKEN_TEXT_FILE", file.path());
+        text_file = Some(file);
     } else {
         command.arg(text);
     }
@@ -47,10 +43,7 @@ pub(crate) async fn count_text_tokens(text: &str) -> Result<TokenCount> {
     let result =
         crate::planabrain::run_planabrain_output(command, None, TOKEN_COMMAND_TIMEOUT, "tokens")
             .await;
-
-    if let Some(path) = text_file.as_ref() {
-        let _ = std::fs::remove_file(path);
-    }
+    drop(text_file);
     let output = result?;
 
     if !output.status.success() {

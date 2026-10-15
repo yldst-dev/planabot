@@ -1,14 +1,21 @@
+use std::time::Duration;
+
 use log::{error, warn};
 use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, Message, ParseMode};
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageId, ParseMode};
 use url::Url;
 
 use super::super::gallery::{
     GalleryIdSource, build_gallery_keyboard, extract_gallery_id, is_private_chat,
     render_gallery_message, render_gallery_message_for_user,
 };
+use super::super::notice::{
+    NoticeCopies, NoticeFailure, notice_failure, request_error, retry_after,
+};
 use super::super::telegram::{SendOptions, send_reply_with_fallback};
 use super::super::{AppState, HandlerResult};
+
+const NOTICE_ALBUM_SETTLE: Duration = Duration::from_millis(1500);
 
 pub(crate) async fn handle_message<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
 where
@@ -127,57 +134,174 @@ where
     B: Requester + Send + Sync + 'static,
     B::Err: std::error::Error + Send + Sync + 'static,
     B::CopyMessage: Send,
+    B::CopyMessages: Send,
 {
-    if !state.is_after_boot(&msg) {
+    if state.notice_chat_id != Some(msg.chat.id) || !state.notices.claim(msg.chat.id, msg.id).await
+    {
         return Ok(());
     }
 
-    let Some(notice_chat_id) = state.notice_chat_id else {
+    let Some(group) = msg.media_group_id().map(|group| group.0.clone()) else {
+        let _turn = state.notices.turn.lock().await;
+        broadcast_notice(&bot, &state, msg.chat.id, vec![msg.id]).await;
         return Ok(());
     };
-
-    if msg.chat.id != notice_chat_id {
+    if !state.notices.add_album_item(&group, msg.id) {
         return Ok(());
     }
-
-    let Some(markup) = build_notice_keyboard(&state) else {
-        return Ok(());
-    };
-
-    let targets = state.group_chat_ids();
-    if targets.is_empty() {
-        return Ok(());
-    }
-
-    for chat_id in targets {
-        let mut request = bot.copy_message(chat_id, msg.chat.id, msg.id);
-        request = request.reply_markup(markup.clone());
-
-        if let Err(err) = request.await {
-            warn!("공지 전달 실패 (chat {:?}): {}", chat_id, err);
-        }
-    }
-
+    let turn = state.notices.turn.clone().lock_owned().await;
+    tokio::spawn(async move {
+        tokio::time::sleep(NOTICE_ALBUM_SETTLE).await;
+        let ids = state.notices.take_album(&group);
+        broadcast_notice(&bot, &state, msg.chat.id, ids).await;
+        drop(turn);
+    });
     Ok(())
 }
 
-pub(crate) async fn handle_notice_edit<B>(_bot: B, msg: Message, state: AppState) -> HandlerResult
+async fn broadcast_notice<B>(bot: &B, state: &AppState, from: ChatId, ids: Vec<MessageId>)
+where
+    B: Requester + Send + Sync,
+    B::Err: std::error::Error + Send + Sync + 'static,
+    B::CopyMessage: Send,
+    B::CopyMessages: Send,
+{
+    if ids.is_empty() {
+        return;
+    }
+    let markup = if ids.len() == 1 {
+        build_notice_keyboard(state)
+    } else {
+        None
+    };
+    if ids.len() == 1 && markup.is_none() && state.notice_url.is_some() {
+        warn!("공지 링크가 올바른 주소가 아니라 버튼 없이 전달합니다.");
+    }
+
+    let mut copies: Vec<Vec<(ChatId, MessageId)>> = vec![Vec::new(); ids.len()];
+    for chat_id in state.group_chat_ids() {
+        let mut target = chat_id;
+        let mut result = copy_notice(bot, target, from, &ids, markup.clone()).await;
+        if let Err(err) = &result {
+            match notice_failure(request_error(err)) {
+                NoticeFailure::Gone => {
+                    warn!("공지 대상에서 제외합니다 (chat {:?}): {}", chat_id, err);
+                    state.forget_group_chat(chat_id, None).await;
+                    continue;
+                }
+                NoticeFailure::Moved(new_id) => {
+                    state.forget_group_chat(chat_id, Some(new_id)).await;
+                    target = new_id;
+                    result = copy_notice(bot, target, from, &ids, markup.clone()).await;
+                }
+                NoticeFailure::Other => {}
+            }
+        }
+        match result {
+            Ok(sent) => {
+                for (slot, copy) in copies.iter_mut().zip(sent) {
+                    slot.push((target, copy));
+                }
+            }
+            Err(err) => warn!("공지 전달 실패 (chat {:?}): {}", target, err),
+        }
+    }
+
+    let button = markup.is_some();
+    for (source, copies) in ids.into_iter().zip(copies) {
+        state
+            .notices
+            .remember(source, NoticeCopies { button, copies });
+    }
+}
+
+async fn copy_notice<B>(
+    bot: &B,
+    chat_id: ChatId,
+    from: ChatId,
+    ids: &[MessageId],
+    markup: Option<InlineKeyboardMarkup>,
+) -> Result<Vec<MessageId>, B::Err>
+where
+    B: Requester + Send + Sync,
+    B::Err: std::error::Error + Send + Sync + 'static,
+    B::CopyMessage: Send,
+    B::CopyMessages: Send,
+{
+    let send = || async {
+        match ids {
+            [id] => {
+                let mut request = bot.copy_message(chat_id, from, *id);
+                if let Some(markup) = markup.clone() {
+                    request = request.reply_markup(markup);
+                }
+                request.await.map(|copied| vec![copied])
+            }
+            _ => bot.copy_messages(chat_id, from, ids.iter().copied()).await,
+        }
+    };
+    match send().await {
+        Err(err) => match retry_after(request_error(&err)) {
+            Some(wait) => {
+                tokio::time::sleep(wait).await;
+                send().await
+            }
+            None => Err(err),
+        },
+        sent => sent,
+    }
+}
+
+pub(crate) async fn handle_notice_edit<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
 where
     B: Requester + Send + Sync + 'static,
     B::Err: std::error::Error + Send + Sync + 'static,
+    B::EditMessageText: Send,
+    B::EditMessageCaption: Send,
 {
-    if !state.is_after_boot(&msg) {
+    if state.notice_chat_id != Some(msg.chat.id) {
         return Ok(());
     }
-
-    let Some(notice_chat_id) = state.notice_chat_id else {
+    let _turn = state.notices.turn.lock().await;
+    let Some(record) = state.notices.copies_of(msg.id) else {
         return Ok(());
     };
+    let markup = if record.button {
+        build_notice_keyboard(&state)
+    } else {
+        None
+    };
 
-    if msg.chat.id != notice_chat_id {
-        return Ok(());
+    for (chat_id, copy_id) in record.copies {
+        let result = match msg.text() {
+            Some(text) => {
+                let mut request = bot.edit_message_text(chat_id, copy_id, text);
+                if let Some(entities) = msg.entities() {
+                    request = request.entities(entities.to_vec());
+                }
+                if let Some(markup) = markup.clone() {
+                    request = request.reply_markup(markup);
+                }
+                request.await.map(|_| ())
+            }
+            None => {
+                let mut request = bot.edit_message_caption(chat_id, copy_id);
+                if let Some(caption) = msg.caption() {
+                    request = request.caption(caption);
+                }
+                if let Some(entities) = msg.caption_entities() {
+                    request = request.caption_entities(entities.to_vec());
+                }
+                if let Some(markup) = markup.clone() {
+                    request = request.reply_markup(markup);
+                }
+                request.await.map(|_| ())
+            }
+        };
+        if let Err(err) = result {
+            warn!("공지 수정 반영 실패 (chat {:?}): {}", chat_id, err);
+        }
     }
-
     Ok(())
 }
 

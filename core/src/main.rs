@@ -126,7 +126,9 @@ fn spawn_reboot_scheduler() {
             next.format("%Y-%m-%d %H:%M:%S")
         );
         sleep(delay).await;
-        info!("재부팅 예약 시간 도달: 프로세스를 종료합니다.");
-        reboot::trigger_scheduled_reboot("KST 자정 정기 재시동");
+        info!("재부팅 예약 시간 도달: 처리 중인 답변을 마친 뒤 종료합니다.");
+        if !bot::request_shutdown() {
+            reboot::trigger_scheduled_reboot("KST 자정 정기 재시동");
+        }
     });
 }

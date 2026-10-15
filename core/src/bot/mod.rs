@@ -2,13 +2,15 @@ mod commands;
 mod gallery;
 mod handlers;
 mod media;
+mod notice;
 mod state;
 mod telegram;
 
 use anyhow::Result;
 use log::error;
-use std::sync::Arc;
-use teloxide::dispatching::UpdateFilterExt;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+use teloxide::dispatching::{ShutdownToken, UpdateFilterExt};
 use teloxide::filter_command;
 use teloxide::prelude::*;
 use teloxide::types::{BotCommandScope, Message};
@@ -24,6 +26,14 @@ pub(crate) use telegram::{
 
 pub type HandlerResult = Result<()>;
 
+const TURN_DRAIN_LIMIT: Duration = Duration::from_secs(190);
+
+static SHUTDOWN: OnceLock<ShutdownToken> = OnceLock::new();
+
+pub(crate) fn request_shutdown() -> bool {
+    SHUTDOWN.get().is_some_and(|token| token.shutdown().is_ok())
+}
+
 pub async fn run<B>(bot: B, state: AppState) -> Result<()>
 where
     B: Requester + teloxide::net::Download + Clone + Send + Sync + 'static,
@@ -32,6 +42,7 @@ where
     <B as Requester>::GetUpdates: Send,
     <B as Requester>::GetChatMember: Send,
     <B as Requester>::CopyMessage: Send,
+    <B as Requester>::CopyMessages: Send,
     <B as Requester>::GetFile: Send,
     <B as Requester>::DeleteMessage: Send,
     <B as Requester>::SendMessage: Send,
@@ -58,6 +69,7 @@ where
         .await?;
 
     let error_handler = Arc::new(|err| async move { report_handler_error(&err) });
+    let drain_state = state.clone();
 
     let handler = dptree::entry()
         .branch(
@@ -83,10 +95,15 @@ where
     let mut dispatcher = Dispatcher::builder(bot.clone(), handler)
         .dependencies(dptree::deps![state])
         .enable_ctrlc_handler()
-        .distribution_function(|upd| upd.from().map(|user| user.id))
+        .distribution_function(|upd| {
+            upd.from()
+                .map(|user| user.id.0 as i64)
+                .or_else(|| upd.chat().map(|chat| chat.id.0))
+        })
         .default_handler(|_| async move {})
         .error_handler(error_handler)
         .build();
+    let _ = SHUTDOWN.set(dispatcher.shutdown_token());
 
     let update_listener = teloxide::update_listeners::polling_default(bot).await;
     let update_listener_error_handler = Arc::new(|err| async move {
@@ -100,6 +117,9 @@ where
 
     dispatcher
         .dispatch_with_listener(update_listener, update_listener_error_handler)
+        .await;
+    drain_state
+        .wait_for_planabrain_turns(TURN_DRAIN_LIMIT)
         .await;
 
     Ok(())

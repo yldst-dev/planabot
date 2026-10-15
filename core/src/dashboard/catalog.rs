@@ -187,11 +187,11 @@ pub(crate) const FIELDS: &[Field] = &[
         "비우면 codex입니다. anthropic이면 Claude API로 답하고, 보조 호출과 판단도 Claude 보조 모델로 합니다.",
         &["codex", "anthropic"],
     ),
-    field(
+    env_only(
         "TELEGRAM_API_TOKEN",
         "telegram",
         "봇 토큰",
-        "BotFather에서 받은 토큰입니다.",
+        "BotFather에서 받은 토큰입니다. 잘못 저장하면 봇과 대시보드가 함께 켜지지 않으므로 env에서만 바꿉니다.",
         Kind::Secret,
     ),
     field(
@@ -208,6 +208,13 @@ pub(crate) const FIELDS: &[Field] = &[
         "공지 안내에 붙는 주소입니다.",
         Kind::Text,
         "https://t.me/planabot_noti",
+    ),
+    field(
+        "PLANABOT_ADMIN_CHAT_ID",
+        "telegram",
+        "관리자 채팅 ID",
+        "AI 서비스 오류 알림을 받을 관리자 채팅의 숫자 ID입니다. 비우면 로그에만 남깁니다.",
+        Kind::Number,
     ),
     field(
         "PLANABRAIN_ENABLED",
@@ -721,20 +728,6 @@ pub(crate) const FIELDS: &[Field] = &[
         "헬스체크 포트",
         "대시보드도 이 포트로 열리고 컨테이너 헬스체크가 env 값을 읽어서 env에서만 바꿉니다.",
         Kind::Number,
-    ),
-    env_only(
-        "BRAIN_HEALTH_PORT",
-        "system",
-        "planabrain 헬스체크 포트",
-        "봇보다 먼저 뜨는 planabrain 헬스체크 서버가 읽는 값이라 env에서만 바꿉니다.",
-        Kind::Number,
-    ),
-    env_only(
-        "HEALTH_SECRET_BRAIN",
-        "system",
-        "planabrain 헬스체크 비밀값",
-        "봇보다 먼저 뜨는 planabrain 헬스체크 서버가 읽는 값이라 env에서만 바꿉니다.",
-        Kind::Secret,
     ),
 ];
 
