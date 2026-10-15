@@ -144,9 +144,11 @@ where
 {
     let LinkPlan { admin, reply } = plan;
     if privileged {
+        let mut posted = 0;
         let reposted: HandlerResult = async {
             for item in admin {
                 send_new_message(bot, msg, item).await?;
+                posted += 1;
             }
             Ok(())
         }
@@ -158,6 +160,7 @@ where
                 }
                 return Ok(());
             }
+            Err(e) if posted > 0 => return Err(e),
             Err(e) => warn!(
                 "{} 새 메시지 전송 실패, 답장으로 대신합니다: {:?}",
                 label, e
@@ -383,6 +386,61 @@ mod tests {
         deliver_link_plan(&bot, &msg, true, "test", plan)
             .await
             .unwrap();
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                ("sendmessage".to_string(), false),
+                ("sendmessage".to_string(), true)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_partly_posted_admin_repost_is_not_repeated_as_replies() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let seen = calls.clone();
+        let api = axum::Router::new().fallback(move |uri: axum::http::Uri, body: String| {
+            let seen = seen.clone();
+            async move {
+                let method = uri
+                    .path()
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                let second = body.contains("second");
+                seen.lock().unwrap().push((method, second));
+                axum::Json(if second {
+                    serde_json::json!({
+                        "ok": false, "error_code": 400, "description": "Bad Request: IMAGE_PROCESS_FAILED"
+                    })
+                } else {
+                    serde_json::json!({"ok": true, "result": {
+                        "message_id": 2, "date": 0, "text": "first",
+                        "chat": {"id": -100, "title": "g", "type": "supergroup"}
+                    }})
+                })
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, api).await });
+        let bot = teloxide::Bot::new("1:test").set_api_url(url.parse().unwrap());
+        let msg: teloxide::types::Message = serde_json::from_value(serde_json::json!({
+            "message_id": 1, "date": 0, "text": "links",
+            "chat": {"id": -100, "title": "g", "type": "supergroup"},
+            "from": {"id": 42, "is_bot": false, "first_name": "A"}
+        }))
+        .unwrap();
+        let plan = LinkPlan {
+            admin: vec![LinkReply::text("first"), LinkReply::text("second")],
+            reply: vec![LinkReply::text("first"), LinkReply::text("second")],
+        };
+        assert!(
+            deliver_link_plan(&bot, &msg, true, "test", plan)
+                .await
+                .is_err()
+        );
         assert_eq!(
             *calls.lock().unwrap(),
             [

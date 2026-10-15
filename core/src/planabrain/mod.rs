@@ -50,6 +50,8 @@ pub(crate) struct TodoListOutput {
 #[derive(Debug, Deserialize)]
 pub(crate) struct TodoInterpretOutput {
     pub handled: bool,
+    #[serde(default)]
+    pub action: String,
     pub message: String,
 }
 
@@ -744,18 +746,15 @@ fn resolve_relative(base: &Path, raw: &str) -> PathBuf {
     }
 }
 
-static PLANABRAIN_ENABLED: Lazy<bool> = Lazy::new(|| {
-    let Ok(raw) = std::env::var("PLANABRAIN_ENABLED") else {
-        return true;
-    };
+static PLANABRAIN_ENABLED: Lazy<bool> = Lazy::new(|| is_flag_on("PLANABRAIN_ENABLED"));
 
-    let normalized = raw.trim().to_ascii_lowercase();
-    !(normalized.is_empty()
-        || normalized == "0"
-        || normalized == "false"
-        || normalized == "off"
-        || normalized == "no")
-});
+fn is_flag_on(key: &str) -> bool {
+    let raw = std::env::var(key).unwrap_or_default();
+    !matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "off" | "no"
+    )
+}
 
 pub(crate) fn is_planabrain_enabled() -> bool {
     *PLANABRAIN_ENABLED
@@ -971,12 +970,7 @@ async fn run_planabrain_memory_reset_user(
 }
 
 pub(crate) fn is_local_memory_enabled() -> bool {
-    let Ok(raw) = std::env::var("PLANABOT_LOCAL_MEMORY_ENABLED") else {
-        return true;
-    };
-
-    let normalized = raw.trim().to_ascii_lowercase();
-    !matches!(normalized.as_str(), "" | "0" | "false" | "off" | "no")
+    is_flag_on("PLANABOT_LOCAL_MEMORY_ENABLED")
 }
 
 pub(crate) fn resolve_local_memory_token_budget() -> Option<u32> {

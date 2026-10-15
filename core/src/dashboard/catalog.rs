@@ -391,12 +391,13 @@ pub(crate) const FIELDS: &[Field] = &[
         "말투 프로필을 고릅니다.",
         &["live", "original"],
     ),
-    field(
+    hinted(
         "PLANABRAIN_INTIMACY_ENABLED",
         "persona",
         "친밀 모드",
         "친밀 모드 분기를 켭니다.",
         Kind::Bool,
+        "1",
     ),
     field(
         "PLANABRAIN_INTIMACY_FALLBACK_MODEL",

@@ -7,7 +7,7 @@ mod state;
 mod telegram;
 
 use anyhow::Result;
-use log::{error, warn};
+use log::{error, info, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -39,6 +39,7 @@ pub(crate) fn request_shutdown() -> bool {
     if SHUTDOWN_REQUESTED.swap(true, Ordering::SeqCst) {
         return true;
     }
+    state::note_shutdown_start();
     token.shutdown().is_ok()
 }
 
@@ -80,6 +81,7 @@ where
     let drain_state = state.clone();
 
     let handler = dptree::entry()
+        .inspect(state::consume_shutdown_mark)
         .branch(
             Update::filter_message()
                 .inspect(|msg: Message, state: AppState| state.record_media_group(&msg))
@@ -102,7 +104,6 @@ where
 
     let mut dispatcher = Dispatcher::builder(bot.clone(), handler)
         .dependencies(dptree::deps![state])
-        .enable_ctrlc_handler()
         .distribution_function(|upd| {
             upd.from()
                 .map(|user| user.id.0 as i64)
@@ -112,6 +113,14 @@ where
         .error_handler(error_handler)
         .build();
     let _ = SHUTDOWN.set(dispatcher.shutdown_token());
+    tokio::spawn(async {
+        while tokio::signal::ctrl_c().await.is_ok() {
+            info!("종료 신호 수신: 처리 중인 답변을 마친 뒤 종료합니다.");
+            if !request_shutdown() {
+                crate::reboot::trigger_scheduled_reboot("종료 신호 수신");
+            }
+        }
+    });
 
     let update_listener = teloxide::update_listeners::polling_default(bot).await;
     let update_listener_error_handler = Arc::new(|err| async move {

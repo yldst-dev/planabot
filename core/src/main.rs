@@ -68,6 +68,7 @@ async fn run() -> Result<()> {
         log::error!("치명적인 오류 발생: {:?}", err);
         reboot::trigger_failure_reboot("치명적인 오류 발생");
     }
+    planabrain::server::stop().await;
 
     Ok(())
 }

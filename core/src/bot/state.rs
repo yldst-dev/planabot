@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -177,9 +178,7 @@ impl AppState {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-        let mark_path = resolve_shutdown_mark_path();
-        let booted_at = boot_cutoff(now, read_json_or_default(&mark_path));
-        let _ = std::fs::remove_file(&mark_path);
+        let booted_at = boot_cutoff(now, read_json_or_default(&resolve_shutdown_mark_path()));
 
         let group_registry_path = resolve_group_registry_path();
         let group_registry = load_group_registry(&group_registry_path);
@@ -558,13 +557,25 @@ fn is_group_chat(msg: &Message) -> bool {
     }
 }
 
+static SHUTDOWN_STARTED_AT: AtomicI64 = AtomicI64::new(0);
+static SHUTDOWN_MARK_CONSUMED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn note_shutdown_start() {
+    let now = unix_now_ms() / 1000;
+    let _ = SHUTDOWN_STARTED_AT.compare_exchange(0, now, Ordering::SeqCst, Ordering::SeqCst);
+}
+
 pub(crate) async fn record_shutdown_mark() {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    if let Err(err) = write_json_atomic(&resolve_shutdown_mark_path(), &now).await {
+    note_shutdown_start();
+    let started_at = SHUTDOWN_STARTED_AT.load(Ordering::SeqCst);
+    if let Err(err) = write_json_atomic(&resolve_shutdown_mark_path(), &started_at).await {
         warn!("종료 시각 저장 실패: {}", err);
+    }
+}
+
+pub(crate) fn consume_shutdown_mark() {
+    if !SHUTDOWN_MARK_CONSUMED.swap(true, Ordering::SeqCst) {
+        let _ = std::fs::remove_file(resolve_shutdown_mark_path());
     }
 }
 

@@ -1,5 +1,5 @@
-use std::process::Stdio;
-use std::sync::RwLock;
+use std::process::{ExitStatus, Stdio};
+use std::sync::{Mutex, RwLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
@@ -9,6 +9,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command as TokioCommand};
+use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 
 use super::{
     PlanabrainError, apply_dotenv_path, build_planabrain_command, find_planabrain_root,
@@ -18,6 +20,7 @@ use super::{
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const RESTART_MIN_BACKOFF: Duration = Duration::from_secs(2);
 const RESTART_MAX_BACKOFF: Duration = Duration::from_secs(60);
+const STOP_WAIT: Duration = Duration::from_secs(20);
 const TOKEN_HEADER: &str = "x-planabrain-token";
 
 #[derive(Clone, Debug)]
@@ -27,6 +30,8 @@ struct ServerEndpoint {
 }
 
 static ENDPOINT: Lazy<RwLock<Option<ServerEndpoint>>> = Lazy::new(|| RwLock::new(None));
+static STOP: Notify = Notify::const_new();
+static SUPERVISOR: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 static HTTP: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
         .no_proxy()
@@ -64,13 +69,21 @@ pub(crate) fn spawn_supervisor() {
         info!("planabrain 상주 서버를 사용하지 않습니다");
         return;
     }
-    tokio::spawn(async move {
+    let supervisor = tokio::spawn(async move {
         let mut backoff = RESTART_MIN_BACKOFF;
         loop {
             match launch().await {
                 Ok((mut child, stdin)) => {
                     backoff = RESTART_MIN_BACKOFF;
-                    let status = child.wait().await;
+                    let status = tokio::select! {
+                        status = child.wait() => status,
+                        () = STOP.notified() => {
+                            clear_endpoint();
+                            let status = close_and_wait(&mut child, stdin).await;
+                            info!("planabrain 서버 종료: {:?}", status);
+                            return;
+                        }
+                    };
                     drop(stdin);
                     clear_endpoint();
                     warn!("planabrain 서버가 종료되었습니다: {:?}", status);
@@ -80,10 +93,34 @@ pub(crate) fn spawn_supervisor() {
                     error!("planabrain 서버 시작 실패: {:#}", err);
                 }
             }
-            tokio::time::sleep(backoff).await;
+            if tokio::time::timeout(backoff, STOP.notified()).await.is_ok() {
+                return;
+            }
             backoff = (backoff * 2).min(RESTART_MAX_BACKOFF);
         }
     });
+    if let Ok(mut slot) = SUPERVISOR.lock() {
+        *slot = Some(supervisor);
+    }
+}
+
+pub(crate) async fn stop() {
+    STOP.notify_one();
+    let supervisor = SUPERVISOR.lock().ok().and_then(|mut slot| slot.take());
+    let Some(supervisor) = supervisor else {
+        return;
+    };
+    if tokio::time::timeout(STOP_WAIT, supervisor).await.is_err() {
+        warn!(
+            "planabrain 서버가 {}초 안에 끝나지 않아 강제로 종료합니다",
+            STOP_WAIT.as_secs()
+        );
+    }
+}
+
+async fn close_and_wait(child: &mut Child, stdin: ChildStdin) -> std::io::Result<ExitStatus> {
+    drop(stdin);
+    child.wait().await
 }
 
 async fn launch() -> Result<(Child, ChildStdin)> {
@@ -270,6 +307,33 @@ mod tests {
         drop(stdin);
         drop(child);
         clear_endpoint();
+    }
+
+    #[tokio::test]
+    async fn closing_stdin_lets_the_server_finish_before_it_exits() {
+        let marker = std::env::temp_dir().join(format!("planabrain-stop-{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let mut child = tokio::process::Command::new("sh")
+            .args(["-c", "cat >/dev/null; sleep 0.3; echo done > \"$1\"", "sh"])
+            .arg(&marker)
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn");
+        let stdin = child.stdin.take().expect("stdin");
+        let status = tokio::time::timeout(
+            Duration::from_secs(5),
+            super::close_and_wait(&mut child, stdin),
+        )
+        .await
+        .expect("exits after stdin closes")
+        .expect("wait");
+        assert!(status.success());
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap_or_default(),
+            "done\n"
+        );
+        let _ = std::fs::remove_file(&marker);
     }
 
     #[test]

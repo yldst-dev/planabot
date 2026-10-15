@@ -267,7 +267,8 @@ where
                         .await;
                 }
                 Ok(result) => {
-                    send_todo_privately(&bot, &msg, &state, user_id, &result.markdown).await?;
+                    send_todo_privately(&bot, &msg, &state, user_id, &result.markdown, None)
+                        .await?;
                 }
                 Err(err) => {
                     error!("todo 목록 조회 실패: {}", err);

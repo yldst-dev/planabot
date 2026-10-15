@@ -143,11 +143,9 @@ pub(crate) fn pending_keys(file: &OverrideFile) -> Vec<String> {
 }
 
 pub(crate) async fn update(changes: BTreeMap<String, Option<String>>) -> Result<OverrideFile> {
-    for (key, value) in &changes {
-        check_change(key, value.as_deref())?;
-    }
     let _guard = WRITE_LOCK.lock().await;
     let mut file = load();
+    check_changes(&file, &changes)?;
     for (key, value) in changes {
         match value {
             Some(value) => {
@@ -162,6 +160,16 @@ pub(crate) async fn update(changes: BTreeMap<String, Option<String>>) -> Result<
     write_json_atomic(&path, &file).await?;
     super::auth::restrict_permissions(&path);
     Ok(file)
+}
+
+fn check_changes(
+    file: &OverrideFile,
+    changes: &BTreeMap<String, Option<String>>,
+) -> Result<(), EntryError> {
+    changes
+        .iter()
+        .filter(|(key, value)| value.is_some() || !file.values.contains_key(*key))
+        .try_for_each(|(key, value)| check_change(key, value.as_deref()))
 }
 
 pub(crate) fn check_change(key: &str, value: Option<&str>) -> Result<(), EntryError> {
@@ -241,7 +249,10 @@ fn validate_entry(key: &str, value: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{OverrideFile, check_change, pending_keys, validate_entry, validate_key};
+    use super::{
+        OverrideFile, check_change, check_changes, pending_keys, validate_entry, validate_key,
+    };
+    use std::collections::BTreeMap;
 
     #[test]
     fn chat_ids_must_be_empty_or_a_number() {
@@ -267,6 +278,18 @@ mod tests {
             (err.key.as_str(), err.message.as_str()),
             ("bad key", "키 형식 오류")
         );
+    }
+
+    #[test]
+    fn a_stored_key_can_be_deleted_even_when_malformed() {
+        let mut file = OverrideFile::default();
+        file.values.insert("bad key".to_string(), "x".to_string());
+        let change = |key: &str, value: Option<&str>| {
+            BTreeMap::from([(key.to_string(), value.map(str::to_string))])
+        };
+        assert!(check_changes(&file, &change("bad key", None)).is_ok());
+        assert!(check_changes(&file, &change("other key", None)).is_err());
+        assert!(check_changes(&file, &change("bad key", Some("y"))).is_err());
     }
 
     #[test]

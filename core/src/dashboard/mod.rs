@@ -364,26 +364,31 @@ fn importable_env(
     file: &store::OverrideFile,
     env: impl Fn(&str) -> Option<String>,
 ) -> (BTreeMap<String, Option<String>>, Vec<store::EntryError>) {
+    let mut changes = BTreeMap::new();
     let mut skipped = Vec::new();
-    let changes = keys
+    let candidates = keys
         .iter()
         .filter(|key| catalog::find(key).is_some_and(|field| !field.env_only))
-        .filter(|key| !file.values.contains_key(*key))
-        .filter_map(|key| {
-            env(key)
-                .filter(|value| !value.trim().is_empty())
-                .map(|value| (key.clone(), Some(value)))
-        })
-        .filter(
-            |(key, value)| match store::check_change(key, value.as_deref()) {
-                Ok(()) => true,
-                Err(err) => {
-                    skipped.push(err);
-                    false
-                }
-            },
-        )
-        .collect();
+        .filter(|key| !file.values.contains_key(*key));
+    for key in candidates {
+        let Some(value) = env(key) else {
+            continue;
+        };
+        let checked = if value.trim().is_empty() {
+            Err(store::EntryError {
+                key: key.clone(),
+                message: "env 값이 비어 있습니다".to_string(),
+            })
+        } else {
+            store::check_change(key, Some(&value))
+        };
+        match checked {
+            Ok(()) => {
+                changes.insert(key.clone(), Some(value));
+            }
+            Err(err) => skipped.push(err),
+        }
+    }
     (changes, skipped)
 }
 
@@ -499,10 +504,10 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(&skipped).unwrap(),
-            serde_json::json!([{
-                "key": "PLANABOT_ADMIN_CHAT_ID",
-                "message": "채팅 ID는 숫자로 입력하십시오"
-            }])
+            serde_json::json!([
+                {"key": "PLANABRAIN_CODEX_FAST", "message": "env 값이 비어 있습니다"},
+                {"key": "PLANABOT_ADMIN_CHAT_ID", "message": "채팅 ID는 숫자로 입력하십시오"}
+            ])
         );
     }
 

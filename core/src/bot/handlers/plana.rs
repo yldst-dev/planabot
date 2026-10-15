@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use chrono::{Datelike, FixedOffset, Timelike, Weekday};
@@ -8,6 +8,7 @@ use once_cell::sync::Lazy;
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, Message, ReactionType};
 use teloxide::utils::html;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, oneshot};
 use tokio::time;
 use tokio::time::Duration;
 
@@ -24,6 +25,8 @@ use crate::time::kst_now;
 pub(super) const PLANABRAIN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(180);
 
 const MEDIA_GROUP_SETTLE: Duration = Duration::from_millis(1500);
+
+const TURN_QUEUE_WAIT: Duration = Duration::from_secs(2);
 
 pub(super) const ADMIN_NOTICE_MIN_INTERVAL: Duration = Duration::from_secs(600);
 
@@ -45,16 +48,36 @@ where
     }
     let task = state.tasks.enter().await;
     let turn_started_at = crate::schedule::now_ms();
+    let (queued, turn_queued) = oneshot::channel();
     tokio::spawn(async move {
         let _task = task;
         if album {
             time::sleep(MEDIA_GROUP_SETTLE).await;
         }
-        if let Err(err) = run_plana_turn(bot, msg, state, turn_started_at).await {
+        if let Err(err) = run_plana_turn(bot, msg, state, turn_started_at, queued).await {
             report_handler_error(&err);
         }
     });
+    if !album {
+        let _ = time::timeout(TURN_QUEUE_WAIT, turn_queued).await;
+    }
     Ok(())
+}
+
+async fn lock_in_arrival_order(
+    lock: Arc<AsyncMutex<()>>,
+    queued: oneshot::Sender<()>,
+) -> OwnedMutexGuard<()> {
+    let acquire = lock.lock_owned();
+    tokio::pin!(acquire);
+    tokio::select! {
+        biased;
+        guard = &mut acquire => guard,
+        () = std::future::ready(()) => {
+            let _ = queued.send(());
+            acquire.await
+        }
+    }
 }
 
 #[allow(clippy::collapsible_if)]
@@ -63,6 +86,7 @@ async fn run_plana_turn<B>(
     msg: Message,
     state: AppState,
     turn_started_at: i64,
+    queued: oneshot::Sender<()>,
 ) -> HandlerResult
 where
     B: Requester + teloxide::net::Download + Clone + Send + Sync + 'static,
@@ -172,7 +196,7 @@ where
 
     let conversation_lock =
         state.planabrain_conversation_lock(&format!("{}_{}", msg.chat.id.0, conversation_scope_id));
-    let _conversation_guard = conversation_lock.lock_owned().await;
+    let _conversation_guard = lock_in_arrival_order(conversation_lock, queued).await;
     let Some(planabrain_permit) = state.try_acquire_planabrain_permit() else {
         let sent = deliver_planabrain_answer(
             &bot,
@@ -221,7 +245,10 @@ where
             msg.sender_chat.as_ref(),
             requester_user_id,
         ) {
-            return send_todo_privately(&bot, &msg, &state, owner_user_id, &todo.message).await;
+            let status =
+                (todo.action != "list").then(|| todo.message.lines().next().unwrap_or_default());
+            return send_todo_privately(&bot, &msg, &state, owner_user_id, &todo.message, status)
+                .await;
         }
         let sent =
             send_reply_with_fallback(&bot, &msg, todo.message.clone(), SendOptions::default())
@@ -617,6 +644,7 @@ pub(super) async fn send_todo_privately<B>(
     state: &AppState,
     user_id: u64,
     text: &str,
+    status: Option<&str>,
 ) -> HandlerResult
 where
     B: Requester + ?Sized,
@@ -629,11 +657,14 @@ where
             state
                 .record_planabrain_reply_for_user(&sent, &format!("todo_{user_id}"), user_id)
                 .await;
-            "확인했습니다.\n선생님.\n할 일 내용은 개인 대화로 보냈습니다."
+            "확인했습니다.\n선생님.\n할 일 내용은 개인 대화로 보냈습니다.".to_string()
         }
         Err(err) => {
             warn!("할 일 개인 전송 실패: {}", err);
-            "전달 불가.\n선생님.\n할 일 내용은 개인 대화로만 보냅니다.\n봇과 개인 대화를 먼저 시작해 주십시오."
+            format!(
+                "{}\n선생님.\n할 일 내용은 개인 대화로만 보냅니다.\n봇과 개인 대화를 먼저 시작해 주십시오.",
+                status.unwrap_or("전달 불가.")
+            )
         }
     };
     send_reply_with_fallback(bot, msg, reply, SendOptions::default()).await?;
@@ -785,6 +816,93 @@ pub(super) fn build_planabrain_question(question: &str, msg: &Message, state: &A
 #[cfg(test)]
 mod tests {
     use super::render_answer_html;
+    use std::sync::{Arc, Mutex};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_burst_for_one_conversation_takes_the_lock_in_arrival_order() {
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let busy = lock.clone().lock_owned().await;
+        let mut turns = Vec::new();
+        for id in 0..8u32 {
+            let (queued, turn_queued) = tokio::sync::oneshot::channel();
+            let lock = lock.clone();
+            let order = order.clone();
+            turns.push(tokio::spawn(async move {
+                for _ in id..8 {
+                    tokio::task::yield_now().await;
+                }
+                let _guard = super::lock_in_arrival_order(lock, queued).await;
+                order.lock().unwrap().push(id);
+            }));
+            let queued_while_busy =
+                tokio::time::timeout(std::time::Duration::from_secs(1), turn_queued).await;
+            assert!(
+                matches!(queued_while_busy, Ok(Ok(()))),
+                "turn {id}: {queued_while_busy:?}"
+            );
+        }
+        drop(busy);
+        for turn in turns {
+            turn.await.unwrap();
+        }
+        assert_eq!(*order.lock().unwrap(), (0..8).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn a_failed_todo_dm_still_tells_the_group_the_change_happened() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let seen = sent.clone();
+        let api = axum::Router::new().fallback(move |body: String| {
+            let seen = seen.clone();
+            async move {
+                let request: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+                let chat = request["chat_id"].as_i64().unwrap_or_default();
+                let text = request["text"].as_str().unwrap_or_default().to_string();
+                seen.lock().unwrap().push((chat, text));
+                axum::Json(if chat == 42 {
+                    serde_json::json!({"ok": false, "error_code": 403,
+                        "description": "Forbidden: bot can't initiate conversation with a user"})
+                } else {
+                    serde_json::json!({"ok": true, "result": {"message_id": 5, "date": 0, "text": "x",
+                        "chat": {"id": -100, "title": "g", "type": "supergroup"}}})
+                })
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, api).await });
+        let bot = teloxide::Bot::new("1:test").set_api_url(url.parse().unwrap());
+        let msg: teloxide::types::Message = serde_json::from_value(serde_json::json!({
+            "message_id": 1, "date": 0, "text": "프라나야 할 일에 우유 사기 추가해줘",
+            "chat": {"id": -100, "title": "g", "type": "supergroup"},
+            "from": {"id": 42, "is_bot": false, "first_name": "A"}
+        }))
+        .unwrap();
+        let state = crate::bot::AppState::new(
+            "bot".into(),
+            teloxide::types::UserId(1),
+            crate::hitomi::GalleryClient::new(),
+            None,
+            None,
+        );
+        let todo = "등록 완료.\n선생님.\n\"우유 사기\" 항목을 추가했습니다.\n\n- [ ] 우유 사기";
+        super::send_todo_privately(&bot, &msg, &state, 42, todo, Some("등록 완료."))
+            .await
+            .unwrap();
+        let sent = sent.lock().unwrap().clone();
+        let group: Vec<&str> = sent
+            .iter()
+            .filter(|(chat, _)| *chat == -100)
+            .map(|(_, text)| text.as_str())
+            .collect();
+        assert_eq!(
+            group,
+            [
+                "등록 완료.\n선생님.\n할 일 내용은 개인 대화로만 보냅니다.\n봇과 개인 대화를 먼저 시작해 주십시오."
+            ]
+        );
+    }
 
     #[test]
     fn renders_labeled_sources_as_title_links() {
