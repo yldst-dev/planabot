@@ -35,6 +35,10 @@ export function createPlanabrainServer(options: ServerOptions): http.Server {
       writeJson(response, 401, { error: { kind: "auth_failed", message: "토큰이 올바르지 않습니다" } });
       return;
     }
+    if (!URL.canParse(request.url ?? "/", "http://127.0.0.1")) {
+      writeJson(response, 400, { error: { kind: "invalid_request", message: "요청 경로가 올바르지 않습니다." } });
+      return;
+    }
     const gated = request.method === "POST" && GATED_PATHS.has(new URL(request.url ?? "/", "http://127.0.0.1").pathname);
     if (gated && active >= 4) {
       writeJson(response, 503, { error: { kind: "rate_limited", message: "처리 중인 요청이 너무 많습니다.", retryable: true } });
@@ -256,6 +260,7 @@ export function parseExchangeInput(raw: string): ExchangeInput {
     assistantText: readRequiredString(record.assistantText, "assistantText"),
     ...(wireMessages ? { wireMessages } : {}),
     ...(epoch !== undefined ? { epoch } : {}),
+    ...(typeof record.turnStartedAt === "number" && Number.isFinite(record.turnStartedAt) && record.turnStartedAt > 0 ? { turnStartedAt: record.turnStartedAt } : {}),
   };
 }
 

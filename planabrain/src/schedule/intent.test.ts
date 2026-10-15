@@ -70,3 +70,17 @@ test("schedule commands register plain text and still list or cancel", () => {
   assert.equal(commandAction("1번 취소"), "cancel");
   assert.equal(kst(interpretScheduleRequest("내일 오후 3시 회의 준비", { nowMs: now, action: "add" }).dueAtMs), "2026-10-15T15:00");
 });
+
+test("clock minutes stay clock times and invalid dates are refused", () => {
+  const oct15 = Date.UTC(2026, 9, 15, 3, 0);
+  const at = (text: string, nowMs = oct15) => interpretScheduleRequest(text, { nowMs });
+  assert.equal(kst(at("오후 3시 30분 회의 알림 등록해줘").dueAtMs), "2026-10-15T15:30");
+  assert.equal(kst(at("금요일 오후 6시 30분 회식 알림 등록").dueAtMs), "2026-10-16T18:30");
+  assert.equal(at("오후 2시 10분 타이머 맞춰줘").kind, "schedule");
+  assert.equal(at("1시간 30분 타이머").durationMs, 90 * 60_000);
+  for (const [text, nowMs] of [["2월 30일 오후 3시 알림 등록해줘", Date.UTC(2027, 0, 10)], ["31일 오후 3시 알림 등록해줘", Date.UTC(2026, 10, 15)], ["2026-13-01 3시 회의 등록해줘", oct15]] as const) {
+    assert.equal(at(text, nowMs).error, "시각을 확인하지 못했습니다.", text);
+  }
+  assert.equal(kst(at("다음 달 5일 오후 3시 회의 등록해줘", Date.UTC(2026, 9, 2)).dueAtMs), "2026-11-05T15:00");
+});
+

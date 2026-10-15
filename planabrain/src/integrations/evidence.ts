@@ -68,8 +68,8 @@ export function normalizeCitationUrl(value: unknown): string | null {
       return null;
     }
     url.hash = "";
-    for (const key of Array.from(url.searchParams.keys())) {
-      if (isSecretParam(key)) {
+    for (const [key, value] of Array.from(url.searchParams.entries())) {
+      if (isSecretParam(key, value)) {
         url.searchParams.delete(key);
       }
     }
@@ -79,13 +79,16 @@ export function normalizeCitationUrl(value: unknown): string | null {
   }
 }
 
-const SECRET_PARAM_PATTERN = /token|secret|passw(?:or)?d|signature|credential|jwt|apikey|accesskey|privatekey|sessionid|phpsessid|authorization|authkey/u;
+const SECRET_PARAM_PATTERN = /token|secret|passw(?:or)?d|signature|credential|jwt|apikey|accesskey|privatekey|sessionid|phpsessid|authorization|authkey|verif|authcode|passcode/u;
 
-const SECRET_PARAM_WORDS = new Set(["auth", "key", "session", "sig"]);
+const SECRET_PARAM_WORDS = new Set(["auth", "key", "session", "sig", "otp", "reset"]);
 
-export function isSecretParam(name: string): boolean {
+export function isSecretParam(name: string, value = ""): boolean {
   const words = name.replace(/([a-z])([A-Z])/gu, "$1 $2").toLowerCase().split(/[^a-z0-9]+/u);
-  return SECRET_PARAM_PATTERN.test(name.toLowerCase()) || words.some((word) => SECRET_PARAM_WORDS.has(word));
+  if (SECRET_PARAM_PATTERN.test(name.toLowerCase()) || words.some((word) => SECRET_PARAM_WORDS.has(word))) {
+    return true;
+  }
+  return words.at(-1) === "code" && !/^\d{1,10}$/u.test(value);
 }
 
 export function normalizeCitationText(value: unknown, maxLength: number): string | undefined {

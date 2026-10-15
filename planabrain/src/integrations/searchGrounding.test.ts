@@ -122,6 +122,7 @@ test("citation URLs keep page identifiers and drop only secret parameters", asyn
   });
   assert.equal(answer, "본문입니다.\n\n출처: [삼성전자](https://finance.naver.com/item/main.naver?code=005930)");
   assert.equal(redactSensitiveUrl("https://finance.naver.com/item/main.naver?code=005930&token=x"), "https://finance.naver.com/item/main.naver?code=005930");
+  assert.equal(redactSensitiveUrl("https://a.example/cb?code=4%2F0AX-secret&oauth_verifier=v&passcode=1&state=s"), "https://a.example/cb?state=s");
 });
 
 test("replaces model-authored sources with verified HTTPS citation URLs", async () => {

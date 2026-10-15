@@ -140,6 +140,7 @@ export function removeModelSourceLines(input: string): string {
         const prefix = line.slice(0, source.index).trimEnd();
         if (/^[\s>*\-•]*$/u.test(prefix)) return "";
         if (/[.!?。…)\]]$/u.test(prefix)) return prefix;
+        if (prefix.endsWith("(") || /https?:\/\//iu.test(line.slice(source.index))) return prefix.replace(/\s*\($/u, "");
       }
       const trimmed = line.trim();
       if (

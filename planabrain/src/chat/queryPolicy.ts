@@ -192,7 +192,8 @@ const CLOCK_QUESTION_PATTERN =
   /^(?:오늘|지금|현재)\s*(?:은|이)?\s*(?:무슨\s*)?(?:날짜|요일|며칠|몇\s*(?:시|일)|시간|시각)(?:이|은|는|가)?\s*(?:이야|야|예요|에요|인가요|일까|지|냐|니|알려\s*(?:줘|주세요|주십시오)|말해\s*줘)?[\s?？.!~]*$/u;
 
 export function isClockQuestion(currentTurnText: string): boolean {
-  return CLOCK_QUESTION_PATTERN.test(stripCallName(normalizeCurrentTurnText(currentTurnText)));
+  const text = stripCallName(normalizeCurrentTurnText(currentTurnText));
+  return text.length <= 40 && CLOCK_QUESTION_PATTERN.test(text);
 }
 
 export const INFORMATION_REQUEST_FORM_PATTERN =

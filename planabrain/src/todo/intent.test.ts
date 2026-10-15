@@ -29,6 +29,14 @@ test("decided todo actions skip keyword detection", async (t) => {
       assert.deepEqual((await listTodos("questions")).items.map((item) => item.content), ["보고서 작성"]);
     });
 
+    await t.test("casual replies that sound like positions do not complete todos", async () => {
+      for (const content of ["메일", "보고서", "운동", "공부"]) await addTodo("casual", content);
+      for (const text of ["두 번 했어", "네, 했어.", "처음 했어", "마지막 했어"]) {
+        assert.equal((await interpretTodoRequest("casual", text)).handled, false, text);
+      }
+      assert.ok((await listTodos("casual")).items.every((item) => !item.completed));
+    });
+
     await t.test("a decided add registers without the todo keyword", async () => {
       const result = await interpretTodoRequest("decided", "우유 사기 추가해줘", "add");
       assert.equal(result.action, "add");

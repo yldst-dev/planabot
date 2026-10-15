@@ -371,3 +371,12 @@ test("a judged follow-up is rewritten with the earlier topic before searching", 
     mock.restore();
   }
 });
+
+test("a long whitespace-heavy message is not a clock question and is checked quickly", async () => {
+  const { isClockQuestion } = await import("../chat/queryPolicy.js");
+  const text = `오늘${"\u00a0".repeat(2040)}날짜${"\u00a0".repeat(2040)}x`;
+  const startedAt = Date.now();
+  assert.equal(isClockQuestion(text), false);
+  assert.ok(Date.now() - startedAt < 200);
+});
+

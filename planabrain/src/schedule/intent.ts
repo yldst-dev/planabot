@@ -42,7 +42,7 @@ export function interpretScheduleRequest(
     (!isHowToQuestion(normalized) &&
       (isScheduleRelated(normalized) ||
         isScheduleContextText(text) ||
-        Boolean(parsedTime && isAddRequest(normalized))));
+        Boolean(parsedTime !== undefined && isAddRequest(normalized))));
   if (!related) {
     return emptyOutput();
   }
@@ -100,10 +100,12 @@ export function interpretScheduleRequest(
   };
 }
 
-function parseScheduleTime(text: string, now: number, meridiem?: "am" | "pm"): ParsedTime | undefined {
-  return (
-    parseRelativeTime(text, now) ?? parseAbsoluteDateTime(text, meridiem) ?? parseKoreanDateTime(text, now, meridiem)
-  );
+function parseScheduleTime(text: string, now: number, meridiem?: "am" | "pm"): ParsedTime | null | undefined {
+  const absolute = parseAbsoluteDateTime(text, meridiem);
+  if (absolute === null) {
+    return null;
+  }
+  return parseRelativeTime(text, now) ?? absolute ?? parseKoreanDateTime(text, now, meridiem);
 }
 
 function parseRelativeTime(text: string, now: number): ParsedTime | undefined {
@@ -120,7 +122,7 @@ function parseRelativeTime(text: string, now: number): ParsedTime | undefined {
       return { dueAtMs: now + durationMs, durationMs, matchedText: match[0], kind: "timer" };
     }
   }
-  const units = [...normalized.matchAll(/(\d+)\s*(초|분|시간)(\s*반)?(?=.*(?:타이머|알림))/g)];
+  const units = [...normalized.matchAll(/(?<!\d)(?<!\d\s*시\s*)(\d+)\s*(초|분|시간)(\s*반)?(?=.*(?:타이머|알림))/g)];
   const durationMs = units.reduce(
     (total, unit) => total + unitToMs(Number(unit[1]), unit[2]) + (unit[3] ? unitToMs(30, unit[2] === "시간" ? "분" : "초") : 0),
     0,
@@ -138,11 +140,14 @@ function parseRelativeTime(text: string, now: number): ParsedTime | undefined {
   };
 }
 
-function parseAbsoluteDateTime(text: string, meridiem?: "am" | "pm"): ParsedTime | undefined {
+function parseAbsoluteDateTime(text: string, meridiem?: "am" | "pm"): ParsedTime | null | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
   const match = normalized.match(/(\d{4})[-.\/년]\s*(\d{1,2})[-.\/월]\s*(\d{1,2})일?\s*(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})분?|(반)))?/);
   if (!match) {
     return undefined;
+  }
+  if (!Number.isFinite(kstDateMs(Number(match[1]), Number(match[2]), Number(match[3]), 0, 0))) {
+    return null;
   }
   const hour = normalizeHour(Number(match[5]), match[4] ?? impliedMarker(Number(match[5]), meridiem));
   const minute = match[6] ? Number(match[6]) : match[7] ? 30 : 0;
@@ -158,7 +163,7 @@ function parseAbsoluteDateTime(text: string, meridiem?: "am" | "pm"): ParsedTime
   };
 }
 
-function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"): ParsedTime | undefined {
+function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"): ParsedTime | null | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
   const time = normalized.match(/(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})분?|(반)))?/);
   if (!time) {
@@ -184,8 +189,9 @@ function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"):
     }
   } else if (dayOnly) {
     day = Number(dayOnly[1]);
-    dateText = dayOnly[0];
-    if (kstDateMs(year, month, day, 23, 59) <= now) {
+    const nextMonth = normalized.match(/다음\s*달\s*/);
+    dateText = nextMonth ? `${nextMonth[0]}${dayOnly[0]}` : dayOnly[0];
+    if (nextMonth || kstDateMs(year, month, day, 23, 59) <= now) {
       year += month === 12 ? 1 : 0;
       month = month === 12 ? 1 : month + 1;
     }
@@ -211,6 +217,9 @@ function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"):
     dateText = weekday[0];
   }
 
+  if (dateText && !Number.isFinite(kstDateMs(year, month, day, 0, 0))) {
+    return null;
+  }
   const rawHour = Number(time[2]);
   const minute = time[3] ? Number(time[3]) : time[4] ? 30 : 0;
   const marker = time[1] ?? impliedMarker(rawHour, meridiem);

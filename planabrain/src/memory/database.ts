@@ -73,6 +73,11 @@ export class MemoryDatabase {
     this.db.close();
   }
 
+  private resetSince(userId: string, startedAt: number): boolean {
+    const reset = this.db.prepare("SELECT MAX(at) AS at FROM resets WHERE user_id IN (?, '*')").get(userId) as Row | undefined;
+    return reset?.at != null && Number(reset.at) >= startedAt;
+  }
+
   recordExchange(params: {
     requestId?: string;
     chatId: string;
@@ -80,8 +85,10 @@ export class MemoryDatabase {
     turns: ConversationTurn[];
     maxTurns: number;
     cutoffAt: number;
+    fence?: { userId: string; startedAt: number; };
   }): boolean {
     return this.transaction(() => {
+      if (params.fence && this.resetSince(params.fence.userId, params.fence.startedAt)) return false;
       if (params.requestId) {
         const inserted = this.db
           .prepare("INSERT OR IGNORE INTO exchanges (request_id, at) VALUES (?, ?)")
@@ -149,8 +156,7 @@ export class MemoryDatabase {
     maxMemoriesPerUser: number;
   }): number {
     return this.transaction(() => {
-      const reset = this.db.prepare("SELECT MAX(at) AS at FROM resets WHERE user_id IN (?, '*')").get(params.context.userId) as Row | undefined;
-      if (reset?.at != null && Number(reset.at) >= params.startedAt) return 0;
+      if (this.resetSince(params.context.userId, params.startedAt)) return 0;
       const now = Date.now();
       let applied = 0;
       for (const operation of params.operations) {

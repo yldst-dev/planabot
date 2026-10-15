@@ -19,6 +19,7 @@ export type ExchangeInput = {
   assistantText: string;
   wireMessages?: WireMessage[];
   epoch?: number;
+  turnStartedAt?: number;
 };
 
 export type ExchangeResult = {
@@ -100,6 +101,7 @@ export async function rememberExchange(
     conversationId: input.conversationId,
     maxTurns: config.maxConversationTurns,
     cutoffAt: startedAt - config.conversationTtlMs,
+    ...(input.turnStartedAt === undefined ? {} : { fence: { userId: input.userId, startedAt: input.turnStartedAt } }),
     turns: [
       { role: "user", text: userText, at: startedAt, ownerUserId: input.userId, ...(input.epoch === undefined ? {} : { epoch: input.epoch }) },
       {
@@ -116,7 +118,7 @@ export async function rememberExchange(
     return { recorded, writer: "skipped" };
   }
   const job = (): Promise<void> => runExecution("memory-write", () =>
-    serial(`memory-writer:${input.userId}`, () => writeLongTermMemory(input.userId, input.chatId, userText, assistantText, startedAt, config, options.settings)),
+    serial(`memory-writer:${input.userId}`, () => writeLongTermMemory(input.userId, input.chatId, userText, assistantText, input.turnStartedAt ?? startedAt, config, options.settings)),
   );
   if (!options.background) {
     await job();

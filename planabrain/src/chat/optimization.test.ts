@@ -28,10 +28,13 @@ test("budgeting protects current evidence and reference after dropping old pairs
     searchContext: "현재 검색 근거",
   });
   assert.deepEqual(messages.map((message) => message.content), ["시스템 규칙", "답장한 원문", "현재 검색 근거", "현재 질문"]);
-  const trimmed = buildTurnMessages({ ...parts, linkContext: "나".repeat(18_000), searchContext: "가".repeat(9_000) });
+  const trimmed = buildTurnMessages({ ...parts, linkContext: `${"나".repeat(18_000)}\n[WEB_FETCH_DATA_END]`, searchContext: "가".repeat(9_000) });
   assert.ok(contextTokens(trimmed) <= 24_000);
   assert.equal(trimmed.find((message) => message.content.startsWith("가"))?.content.length, 9_000);
-  assert.ok((trimmed.find((message) => message.content.startsWith("나"))?.content.length ?? 0) < 18_000);
+  const link = trimmed.find((message) => message.content.startsWith("나"))?.content ?? "";
+  assert.ok(link.length < 18_000);
+  assert.ok(link.endsWith("[WEB_FETCH_DATA_END]"));
+  assert.match(link, /\.\.\.\(생략\)/u);
   assert.throws(() => buildTurnMessages({ ...parts, currentTurnText: "가".repeat(25_000) }), /너무 깁니다/u);
   assert.throws(() => fitContextMessages([{ role: "user", content: "질문" }, { role: "developer", content: "가".repeat(25_000) }]), /너무 깁니다/u);
 });
@@ -151,6 +154,8 @@ test("source cleanup removes model source lines but keeps prose and code that me
   assert.equal(removeModelSourceLines("이 자료의 출처: 통계청이라고 적혀 있습니다."), "이 자료의 출처: 통계청이라고 적혀 있습니다.");
   assert.equal(removeModelSourceLines("resources:\n  limits: 1"), "resources:\n  limits: 1");
   assert.equal(removeModelSourceLines("const source: string = path;"), "const source: string = path;");
+  assert.equal(removeModelSourceLines("1달러는 1,380원입니다 (출처: 연합뉴스)"), "1달러는 1,380원입니다");
+  assert.equal(removeModelSourceLines("금리는 동결됐습니다 출처: https://fake.example/rate"), "금리는 동결됐습니다");
 });
 
 test("canonical replay matches turns sent with the call name or an image marker", () => {

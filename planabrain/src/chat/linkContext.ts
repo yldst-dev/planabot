@@ -161,8 +161,8 @@ async function attachPreviewImages(settings: Settings, links: FetchedLink[], max
 export function redactSensitiveUrl(rawUrl: string): string {
   try {
     const url = new URL(rawUrl);
-    for (const key of Array.from(url.searchParams.keys())) {
-      if (isSecretParam(key)) {
+    for (const [key, value] of Array.from(url.searchParams.entries())) {
+      if (isSecretParam(key, value)) {
         url.searchParams.delete(key);
       }
     }

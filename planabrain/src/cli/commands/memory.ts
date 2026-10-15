@@ -12,6 +12,7 @@ export async function runMemoryExchangeCommand(args: string[], settings: Setting
   const userText = await resolveExchangeText(userTextArg, "PLANABRAIN_LOCAL_MEMORY_USER_TEXT_FILE");
   const assistantText = await resolveExchangeText(assistantTextArg, "PLANABRAIN_LOCAL_MEMORY_ASSISTANT_TEXT_FILE");
   const transcript = readTranscript(process.env.PLANABRAIN_TRANSCRIPT_JSON);
+  const turnStartedAt = Number(process.env.PLANABRAIN_TURN_STARTED_AT);
   const result = await rememberExchange(
     {
       userId: String(userId),
@@ -21,6 +22,7 @@ export async function runMemoryExchangeCommand(args: string[], settings: Setting
       userText,
       assistantText,
       ...transcript,
+      ...(Number.isFinite(turnStartedAt) && turnStartedAt > 0 ? { turnStartedAt } : {}),
     },
     { settings, background: false },
   );

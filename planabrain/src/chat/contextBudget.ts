@@ -7,6 +7,8 @@ export const MAX_CONTEXT_TOKENS = 24_000;
 export const DEFAULT_IMAGE_TOKENS = 4096;
 const LOW_DETAIL_IMAGE_TOKENS = 256;
 const MIN_EVIDENCE_CHARS = 500;
+const EVIDENCE_TAIL_CHARS = 400;
+const TRIM_MARK = "\n...(생략)\n";
 
 export function imageTokenEstimate(detail: string | undefined): number {
   return detail === "low" ? LOW_DETAIL_IMAGE_TOKENS : DEFAULT_IMAGE_TOKENS;
@@ -46,7 +48,8 @@ export function fitContextMessages(messages: ChatMessage[], preserveReplay = fal
     if (index < 0) break;
     const message = result[index];
     const keep = Math.max(MIN_EVIDENCE_CHARS, message.content.length - Math.ceil((total - MAX_CONTEXT_TOKENS) * 1.1) - 1);
-    result[index] = { ...message, content: message.content.slice(0, keep) };
+    const content = message.content.slice(0, keep - EVIDENCE_TAIL_CHARS - TRIM_MARK.length) + TRIM_MARK + message.content.slice(-EVIDENCE_TAIL_CHARS);
+    result[index] = { ...message, content };
     const size = messageTokens(result[index], imageTokens);
     total += size - sizes[index];
     sizes[index] = size;

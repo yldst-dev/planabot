@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -255,4 +255,20 @@ test("oversized bodies get 413 and memory routes stay open while answers are bus
     }
     rmSync(dataRoot, { recursive: true, force: true });
   }
+});
+
+test("a malformed request target gets 400 instead of crashing the server", async () => {
+  await withServer("secret", async (base) => {
+    const { port } = new URL(base);
+    const statusLine = await new Promise<string>((resolve) => {
+      const socket = net.connect(Number(port), "127.0.0.1", () => {
+        socket.write("POST //:99999/v1/ask HTTP/1.1\r\nHost: x\r\nx-planabrain-token: secret\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+      });
+      let data = "";
+      socket.on("data", (chunk) => { data += chunk; });
+      socket.on("close", () => resolve(data.split("\r\n")[0] ?? ""));
+    });
+    assert.match(statusLine, / 400 /u);
+    assert.equal((await call(base, "/v1/health")).status, 200);
+  });
 });

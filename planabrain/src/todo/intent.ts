@@ -39,7 +39,8 @@ export async function interpretTodoRequest(
   }
 
   if (action ? action === "complete" : hasAny(normalized, ["완료", "끝냈", "끝낫", "처리했", "체크", "했어", "했습니다"])) {
-    const target = await resolveTodoTarget(userId, extractCompleteTarget(userText, text, todoRelated), text);
+    const picked = extractCompleteTarget(userText, text, todoRelated);
+    const target = todoRelated ? await resolveTodoTarget(userId, picked, text) : picked;
     const result = await completeTodo(userId, target);
     if (!result.ok && !todoRelated) {
       return emptyOutput();

@@ -8,6 +8,30 @@ import { testSettings } from "../testing/settings.js";
 import { codexStream } from "../testing/codex.js";
 import { buildMemoryContext, closeMemoryDatabases, forgetMemory, listMemories, listRecentTurns, recallMemories, rememberExchange, resetUserMemory, sanitizeAssistantTurn } from "./service.js";
 
+test("an exchange from a turn that started before a reset is not stored", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "planabot-memory-fence-"));
+  const previous = { db: process.env.PLANABRAIN_MEMORY_DB_PATH, writer: process.env.PLANABRAIN_MEMORY_WRITER_ENABLED };
+  process.env.PLANABRAIN_MEMORY_DB_PATH = path.join(dir, "memory.sqlite");
+  process.env.PLANABRAIN_MEMORY_WRITER_ENABLED = "0";
+  try {
+    const settings = testSettings({ ollamaWebSearchEnabled: false });
+    const turnStartedAt = Date.now() - 1000;
+    resetUserMemory("fence");
+    const stale = await rememberExchange({ userId: "fence", chatId: "chat_f", conversationId: "chat_f", userText: "질문", assistantText: "답", turnStartedAt }, { settings, background: false });
+    assert.deepEqual(stale, { recorded: false, writer: "skipped" });
+    assert.deepEqual(listRecentTurns("chat_f", "chat_f"), []);
+    const fresh = await rememberExchange({ userId: "fence", chatId: "chat_f", conversationId: "chat_f", userText: "질문", assistantText: "답", turnStartedAt: Date.now() + 1 }, { settings, background: false });
+    assert.equal(fresh.recorded, true);
+    assert.equal(listRecentTurns("chat_f", "chat_f").length, 2);
+  } finally {
+    closeMemoryDatabases();
+    for (const [key, value] of [["PLANABRAIN_MEMORY_DB_PATH", previous.db], ["PLANABRAIN_MEMORY_WRITER_ENABLED", previous.writer]] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("an exchange is stored, distilled into memories and recalled in later turns", async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "planabot-memory-"));
   const previous = { db: process.env.PLANABRAIN_MEMORY_DB_PATH, decision: process.env.PLANABRAIN_DECISION_PROVIDER };
