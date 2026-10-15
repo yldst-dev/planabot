@@ -3,7 +3,7 @@ import { LockIcon, RotateCcwIcon, Undo2Icon } from "lucide-react"
 import { SettingControl } from "@/components/settings/setting-control"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Field, FieldContent, FieldDescription, FieldLabel } from "@/components/ui/field"
+import { Field, FieldContent, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import type { Field as SettingField } from "@/lib/types"
@@ -22,8 +22,10 @@ export function SettingRow({
   const changes = useChanges((state) => state.changes)
   const edit = useChanges((state) => state.edit)
   const drop = useChanges((state) => state.drop)
+  const invalid = useChanges((state) => (state.invalid?.key === field.key ? state.invalid.message : null))
   const dirty = isDirty(changes, field.key)
   const restoring = dirty && changes[field.key] === null
+  const ignored = field.ignored ?? (field.env_only && field.source === "dashboard")
   const id = `field-${field.key}`
 
   return (
@@ -55,6 +57,7 @@ export function SettingRow({
               env
             </Badge>
           ) : null}
+          {ignored ? <Badge variant="outline">{restoring ? "대시보드 값 삭제 예정" : "대시보드 값 무시됨"}</Badge> : null}
           {field.pending ? (
             <Badge className="border-transparent bg-warning/12 text-warning">재시작 대기</Badge>
           ) : null}
@@ -67,10 +70,15 @@ export function SettingRow({
             {field.help}
           </FieldDescription>
         ) : null}
+        {invalid ? <FieldError>{invalid}</FieldError> : null}
       </FieldContent>
       <div className="flex w-full shrink-0 items-center gap-1.5 @md/rows:w-[46%] @md/rows:max-w-80">
         <div className="min-w-0 flex-1">
-          {field.env_only ? <EnvOnlyValue field={field} id={id} /> : <SettingControl field={field} id={id} />}
+          {field.env_only ? (
+            <EnvOnlyValue field={field} id={id} />
+          ) : (
+            <SettingControl field={field} id={id} invalid={invalid !== null} />
+          )}
         </div>
         {dirty ? (
           <Tooltip>
@@ -81,14 +89,21 @@ export function SettingRow({
             </TooltipTrigger>
             <TooltipContent>편집 취소</TooltipContent>
           </Tooltip>
-        ) : field.source === "dashboard" && !field.env_only ? (
+        ) : field.source === "dashboard" ? (
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label="env 값으로 되돌리기" onClick={() => edit(field, null)}>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={ignored ? "대시보드 값 지우기" : "env 값으로 되돌리기"}
+                onClick={() => edit(field, null)}
+              >
                 <RotateCcwIcon />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>대시보드 값을 지우고 env 값으로 되돌립니다</TooltipContent>
+            <TooltipContent>
+              {ignored ? "쓰이지 않는 대시보드 값을 지웁니다. 이 항목은 env 값만 씁니다" : "대시보드 값을 지우고 env 값으로 되돌립니다"}
+            </TooltipContent>
           </Tooltip>
         ) : (
           <span className="size-8 shrink-0" aria-hidden />

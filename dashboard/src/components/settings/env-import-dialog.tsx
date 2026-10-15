@@ -57,6 +57,12 @@ function ImportForm({ groups, fields, onDone }: { groups: Group[]; fields: Setti
     importEnv.mutate([...selected], {
       onSuccess: (data) => {
         toast.success("가져오기 완료.", { description: `${data.imported.length}개 값을 대시보드에 저장했습니다.` })
+        const skipped = data.skipped ?? []
+        if (skipped.length > 0) {
+          toast.warning(`${skipped.length}개는 가져오지 않았습니다.`, {
+            description: skipped.map((item) => `${item.key}: ${item.message}`).join(" · "),
+          })
+        }
         onDone()
       },
       onError: (error) => toast.error("가져오기 불가.", { description: error.message }),
@@ -107,7 +113,7 @@ function ImportForm({ groups, fields, onDone }: { groups: Group[]; fields: Setti
         </FieldGroup>
       </div>
       <p className="text-xs text-muted-foreground">
-        가져온 값은 Dokploy 환경 변수에서 지워도 됩니다. 저장 파일이 있는 볼륨을 지우면 값도 함께 사라집니다.
+        가져온 값은 Dokploy 환경 변수에서 지워도 됩니다. 봇 토큰과 상태 검사 비밀값 같은 env 전용 값은 가져오지 않으니 Dokploy에 그대로 두십시오. 저장 파일이 있는 볼륨을 지우면 가져온 값도 함께 사라집니다.
       </p>
       <DialogFooter>
         <DialogClose asChild>

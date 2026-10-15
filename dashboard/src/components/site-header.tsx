@@ -1,6 +1,6 @@
 import { SaveIcon, Undo2Icon } from "lucide-react"
 import { useEffect } from "react"
-import { useLocation } from "react-router"
+import { useLocation, useNavigate } from "react-router"
 import { toast } from "sonner"
 
 import { GroupIcon } from "@/components/group-icon"
@@ -17,14 +17,17 @@ import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Spinner } from "@/components/ui/spinner"
 import { useSave, useSettings } from "@/hooks/use-dashboard"
+import { ApiError } from "@/lib/api"
 import { findGroup } from "@/lib/groups"
 import { useChanges } from "@/stores/changes"
 
 export function SiteHeader() {
   const location = useLocation()
+  const navigate = useNavigate()
   const settings = useSettings()
   const changes = useChanges((state) => state.changes)
   const clear = useChanges((state) => state.clear)
+  const fail = useChanges((state) => state.fail)
   const save = useSave()
   const count = Object.keys(changes).length
 
@@ -35,7 +38,22 @@ export function SiteHeader() {
     if (count === 0 || save.isPending) return
     save.mutate(changes, {
       onSuccess: () => toast.success("저장 완료.", { description: "재시작하면 적용됩니다." }),
-      onError: (error) => toast.error("저장 불가.", { description: error.message }),
+      onError: (error) => {
+        const message = error.message.replace(/^저장 불가\.\s*/u, "")
+        const key = error instanceof ApiError ? error.key : undefined
+        const field = key ? settings.data?.fields.find((item) => item.key === key) : undefined
+        if (!key) {
+          toast.error("저장 불가.", { description: message })
+          return
+        }
+        fail(key, message)
+        toast.error("저장 불가.", {
+          description: `${field?.label ?? key}: ${message}`,
+          action: field
+            ? { label: "항목 보기", onClick: () => navigate(`/g/${field.group}?focus=${key}`) }
+            : undefined,
+        })
+      },
     })
   }
 

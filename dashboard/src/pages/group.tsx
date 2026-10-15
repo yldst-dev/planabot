@@ -4,6 +4,7 @@ import { Navigate, useParams, useSearchParams } from "react-router"
 import { toast } from "sonner"
 
 import { GroupIcon } from "@/components/group-icon"
+import { LoadError } from "@/components/load-error"
 import { SettingRow } from "@/components/settings/setting-row"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -32,7 +33,13 @@ export function GroupPage() {
   }, [focus, ready, setParams])
 
   if (settings.isPending) return <GroupSkeleton />
-  if (!settings.data) return null
+  if (!settings.data) {
+    return (
+      <div className="mx-auto flex w-full max-w-350 flex-col px-4 py-5 md:px-8">
+        <LoadError onRetry={() => settings.refetch()} retrying={settings.isFetching} />
+      </div>
+    )
+  }
 
   const group = findGroup(settings.data.groups, groupId)
   if (!group) return <Navigate to="/" replace />

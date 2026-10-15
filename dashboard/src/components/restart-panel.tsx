@@ -24,6 +24,8 @@ import { useChanges } from "@/stores/changes"
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+const RESTART_WAIT_MS = 240_000
+
 export function RestartPanel() {
   const overview = useOverview()
   const changes = useChanges((state) => state.changes)
@@ -40,19 +42,27 @@ export function RestartPanel() {
       toast.error("저장하지 않은 변경이 있습니다.", { description: "먼저 저장하십시오." })
       return
     }
+    setRestarting(true)
+    const baseline = await api.overview().then((data) => data.uptime).catch(() => undefined)
     try {
       await api.restart()
     } catch (error) {
+      setRestarting(false)
       toast.error("재시작 불가.", { description: (error as Error).message })
       return
     }
-    setRestarting(true)
-    const progress = toast.loading("재시작 중.", { description: "복귀를 기다리는 중입니다." })
-    await wait(2500)
-    for (let attempt = 0; attempt < 60; attempt += 1) {
+    const started = Date.now()
+    const progress = toast.loading("재시작 중.", {
+      description: "처리 중인 답변이 끝나면 다시 켜집니다. 몇 분 걸릴 수 있습니다.",
+    })
+    let unreachable = false
+    while (Date.now() - started < RESTART_WAIT_MS) {
+      await wait(2000)
       try {
         const next = await api.overview()
-        if (next.uptime < 30) {
+        const elapsed = (Date.now() - started) / 1000
+        const fresh = unreachable || (baseline !== undefined && next.uptime + 5 < baseline + elapsed)
+        if (fresh) {
           await client.invalidateQueries()
           setRestarting(false)
           toast.success("재시작 완료.", { id: progress, description: "저장한 설정이 적용되었습니다." })
@@ -61,12 +71,12 @@ export function RestartPanel() {
       } catch (error) {
         if (error instanceof AuthError) {
           setRestarting(false)
-          toast.dismiss(progress)
+          toast.success("재시작 완료.", { id: progress, description: "다시 로그인해 주십시오." })
           await client.invalidateQueries()
           return
         }
+        unreachable = true
       }
-      await wait(1500)
     }
     setRestarting(false)
     toast.error("응답 없음.", { id: progress, description: "컨테이너 재시작 정책을 확인하십시오." })
@@ -77,7 +87,12 @@ export function RestartPanel() {
       <SidebarMenu>
         <SidebarMenuItem>
           <AlertDialogTrigger asChild>
-            <SidebarMenuButton tooltip={`적용 대기 ${pending}개`} className="text-warning" disabled={restarting}>
+            <SidebarMenuButton
+              tooltip={`적용 대기 ${pending}개`}
+              aria-label={restarting ? "재시작 중" : `적용 대기 ${pending}개, 재시작`}
+              className="text-warning"
+              disabled={restarting}
+            >
               {restarting ? <Spinner /> : <RotateCwIcon />}
             </SidebarMenuButton>
           </AlertDialogTrigger>
@@ -110,7 +125,8 @@ export function RestartPanel() {
           </AlertDialogMedia>
           <AlertDialogTitle>봇을 재시작합니다</AlertDialogTitle>
           <AlertDialogDescription>
-            대기 중인 변경 {pending}개가 적용됩니다. 몇 초 동안 봇이 응답하지 않습니다.
+            대기 중인 변경 {pending}개가 적용됩니다. 처리 중인 답변이 끝날 때까지 기다린 뒤 다시 켜지므로 몇 분 동안 봇이
+            응답하지 않을 수 있습니다.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

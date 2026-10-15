@@ -3,6 +3,7 @@ import { useState } from "react"
 
 import { PromptEditor } from "@/components/settings/prompt-editor"
 import { Button } from "@/components/ui/button"
+import { FieldError } from "@/components/ui/field"
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -13,7 +14,9 @@ import { effectiveValue, isDirty, useChanges } from "@/stores/changes"
 
 const UNSET = "__unset__"
 
-export function SettingControl({ field, id }: { field: Field; id: string }) {
+const CHAT_ID = /^-?\d+$/
+
+export function SettingControl({ field, id, invalid }: { field: Field; id: string; invalid?: boolean }) {
   const changes = useChanges((state) => state.changes)
   const edit = useChanges((state) => state.edit)
   const value = effectiveValue(changes, field)
@@ -21,12 +24,13 @@ export function SettingControl({ field, id }: { field: Field; id: string }) {
 
   switch (field.kind) {
     case "bool": {
-      const on = truthy(value)
+      const on = truthy(value ?? field.placeholder)
       const unset = value == null && !dirty
+      const status = on ? "켬" : "끔"
       return (
         <div className="flex h-9 items-center gap-3">
           <Switch id={id} checked={on} onCheckedChange={(checked) => edit(field, checked ? "1" : "0")} />
-          <span className="text-sm text-muted-foreground">{unset ? "코드 기본값" : on ? "켬" : "끔"}</span>
+          <span className="text-sm text-muted-foreground">{unset ? `기본값 ${status}` : status}</span>
         </div>
       )
     }
@@ -34,7 +38,7 @@ export function SettingControl({ field, id }: { field: Field; id: string }) {
       const options = value && !field.options.includes(value) ? [value, ...field.options] : field.options
       return (
         <Select value={value || UNSET} onValueChange={(next) => edit(field, next === UNSET ? "" : next)}>
-          <SelectTrigger id={id} className="w-full">
+          <SelectTrigger id={id} className="w-full" aria-invalid={invalid || undefined}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent position="popper">
@@ -53,23 +57,31 @@ export function SettingControl({ field, id }: { field: Field; id: string }) {
     case "textarea":
       return <TextareaControl field={field} id={id} value={value} />
     case "secret":
-      return <SecretControl field={field} id={id} />
-    default:
+      return <SecretControl field={field} id={id} invalid={invalid} />
+    default: {
+      const chatId = field.key.endsWith("_CHAT_ID")
+      const text = (value ?? "").trim()
+      const wrong = chatId && text !== "" && !CHAT_ID.test(text)
       return (
-        <Input
-          id={id}
-          value={value ?? ""}
-          placeholder={field.placeholder}
-          inputMode={field.kind === "number" ? "decimal" : undefined}
-          spellCheck={false}
-          autoComplete="off"
-          onChange={(event) => edit(field, event.target.value)}
-        />
+        <>
+          <Input
+            id={id}
+            value={value ?? ""}
+            placeholder={field.placeholder}
+            inputMode={field.kind === "number" && !chatId ? "decimal" : undefined}
+            spellCheck={false}
+            autoComplete="off"
+            aria-invalid={invalid || wrong || undefined}
+            onChange={(event) => edit(field, event.target.value)}
+          />
+          {wrong ? <FieldError>숫자 ID만 넣을 수 있습니다. 그룹과 채널은 -100으로 시작합니다.</FieldError> : null}
+        </>
       )
+    }
   }
 }
 
-function SecretControl({ field, id }: { field: Field; id: string }) {
+function SecretControl({ field, id, invalid }: { field: Field; id: string; invalid?: boolean }) {
   const changes = useChanges((state) => state.changes)
   const edit = useChanges((state) => state.edit)
   const [visible, setVisible] = useState(false)
@@ -88,6 +100,7 @@ function SecretControl({ field, id }: { field: Field; id: string }) {
         value={typed}
         autoComplete="new-password"
         spellCheck={false}
+        aria-invalid={invalid || undefined}
         placeholder={hint ? `${hint}  새 값 입력` : "설정 안 됨"}
         onChange={(event) => edit(field, event.target.value === "" ? undefined : event.target.value)}
       />

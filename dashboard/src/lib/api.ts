@@ -4,10 +4,12 @@ export class AuthError extends Error {}
 
 export class ApiError extends Error {
   readonly status: number
+  readonly key?: string
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, key?: string) {
     super(message)
     this.status = status
+    this.key = key
   }
 }
 
@@ -18,12 +20,12 @@ async function request<T>(path: string, method = "GET", body?: unknown): Promise
     headers: { "content-type": "application/json", "x-planabot-dashboard": "1" },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
-  const data = (await response.json().catch(() => ({}))) as { error?: string }
+  const data = (await response.json().catch(() => ({}))) as { error?: string; key?: string }
   if (response.status === 401) {
     throw new AuthError(data.error ?? "인증 필요.")
   }
   if (!response.ok) {
-    throw new ApiError(data.error ?? `오류. ${response.status}`, response.status)
+    throw new ApiError(data.error ?? `오류. ${response.status}`, response.status, data.key)
   }
   return data as T
 }

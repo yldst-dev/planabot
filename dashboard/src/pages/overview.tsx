@@ -14,6 +14,7 @@ import { type ReactNode, useState } from "react"
 import { Link } from "react-router"
 
 import { GroupIcon } from "@/components/group-icon"
+import { LoadError } from "@/components/load-error"
 import { EnvImportDialog } from "@/components/settings/env-import-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -29,6 +30,20 @@ export function OverviewPage() {
   const overview = useOverview()
   const settings = useSettings()
   const [importing, setImporting] = useState(false)
+
+  if ((overview.isError && !overview.data) || (settings.isError && !settings.data)) {
+    return (
+      <div className="mx-auto flex w-full max-w-350 flex-col px-4 py-5 md:px-8">
+        <LoadError
+          onRetry={() => {
+            void overview.refetch()
+            void settings.refetch()
+          }}
+          retrying={overview.isFetching || settings.isFetching}
+        />
+      </div>
+    )
+  }
 
   if (!overview.data || !settings.data) {
     return (
@@ -84,7 +99,9 @@ export function OverviewPage() {
           </ItemMedia>
           <ItemContent>
             <ItemTitle>env에만 있는 값 {importable.length}개</ItemTitle>
-            <ItemDescription>대시보드로 가져오면 이 화면에서 바로 고칠 수 있고, Dokploy 환경 변수는 비워도 됩니다.</ItemDescription>
+            <ItemDescription>
+              대시보드로 가져오면 이 화면에서 바로 고칠 수 있습니다. 봇 토큰 같은 env 전용 값은 Dokploy에 그대로 두십시오.
+            </ItemDescription>
           </ItemContent>
           <ItemActions>
             <Button variant="outline" size="sm" onClick={() => setImporting(true)}>

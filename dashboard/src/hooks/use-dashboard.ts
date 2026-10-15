@@ -86,11 +86,11 @@ export function useImportEnv() {
 
 export function useSave() {
   const client = useQueryClient()
-  const drop = useChanges((state) => state.drop)
+  const settle = useChanges((state) => state.settle)
   return useMutation({
     mutationFn: (changes: Changes) => api.save(changes),
     onSuccess: (data, changes) => {
-      drop(Object.keys(changes))
+      settle(changes)
       client.setQueryData(queryKeys.settings, data)
       return client.invalidateQueries({ queryKey: queryKeys.overview })
     },

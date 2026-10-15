@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router"
 
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { HaloMark } from "@/components/halo-mark"
+import { LoadError } from "@/components/load-error"
 import { Spinner } from "@/components/ui/spinner"
 import { useSession } from "@/hooks/use-dashboard"
 import { useRecovery } from "@/stores/recovery"
@@ -27,7 +28,11 @@ export function App() {
   }
 
   if (!session.data) {
-    return <AuthPage session={{ enabled: true, configured: true, authenticated: false }} />
+    return (
+      <div className="grid min-h-svh place-items-center p-4">
+        <LoadError onRetry={() => session.refetch()} retrying={session.isFetching} />
+      </div>
+    )
   }
 
   if (!session.data.authenticated) return <AuthPage session={session.data} />
