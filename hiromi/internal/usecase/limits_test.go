@@ -138,7 +138,7 @@ func TestShareReportsSavedPagesAndFailsWhenTheJobEnds(t *testing.T) {
 	ds := NewDownloadService(fake, fake, partialFetch{}, store, "https://hitomi.la").WithViewer(stubViewer{})
 	instantSleep(ds)
 	share, err := NewShareService(gs, ds, &fakeUploader{url: "u"}, store, newMemClaims()).Deliver(context.Background(), 1234567)
-	if err != nil || share.Pages != 1 {
+	if err != nil || share.Pages != 1 || share.TotalPages != 2 {
 		t.Fatalf("partial share %v %+v", err, share)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

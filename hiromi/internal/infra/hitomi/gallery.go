@@ -25,7 +25,7 @@ func (c *Client) GetByID(ctx context.Context, id uint64) (*domain.Gallery, error
 		g.ID = id
 	}
 	if g.ID != id {
-		return nil, fmt.Errorf("%w: gallery id mismatch %d", domain.ErrRemote, g.ID)
+		return nil, fmt.Errorf("%w: %w %d", domain.ErrRemote, domain.ErrIDMismatch, g.ID)
 	}
 	if g.ReaderPath == "" {
 		g.ReaderPath = fmt.Sprintf("/reader/%d.html", g.ID)

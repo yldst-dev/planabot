@@ -22,13 +22,14 @@ type SharePreview struct {
 }
 
 type Share struct {
-	Token     string
-	GalleryID uint64
-	Title     string
-	Pages     int
-	URL       string
-	Path      string
-	Size      int64
+	Token      string
+	GalleryID  uint64
+	Title      string
+	Pages      int
+	TotalPages int
+	URL        string
+	Path       string
+	Size       int64
 }
 
 type ShareService struct {
@@ -103,11 +104,12 @@ func (s *ShareService) Deliver(ctx context.Context, id uint64) (*Share, error) {
 		return nil, err
 	}
 	share := &Share{
-		Token:     token,
-		GalleryID: res.GalleryID,
-		Title:     res.Title,
-		Pages:     len(res.Saved),
-		Size:      size,
+		Token:      token,
+		GalleryID:  res.GalleryID,
+		Title:      res.Title,
+		Pages:      len(res.Saved),
+		TotalPages: res.PageCount,
+		Size:       size,
 	}
 	if size <= s.telegramLimit {
 		staged := path.Join("shares", token+".html")

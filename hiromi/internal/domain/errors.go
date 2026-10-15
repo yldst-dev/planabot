@@ -22,6 +22,7 @@ var (
 	ErrPrivateChat        = errors.New("private chat required")
 	ErrBusy               = errors.New("job already running")
 	ErrTooLarge           = errors.New("gallery too large")
+	ErrIDMismatch         = errors.New("gallery id mismatch")
 	ErrClaim              = errors.New("claim not found")
 )
 

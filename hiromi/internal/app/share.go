@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -17,15 +18,17 @@ import (
 )
 
 type shareOutput struct {
-	Ok        bool   `json:"ok"`
-	Token     string `json:"token,omitempty"`
-	GalleryID uint64 `json:"gallery_id,omitempty"`
-	Title     string `json:"title,omitempty"`
-	Pages     int    `json:"pages,omitempty"`
-	URL       string `json:"url,omitempty"`
-	Path      string `json:"path,omitempty"`
-	Size      int64  `json:"size,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Ok         bool   `json:"ok"`
+	Token      string `json:"token,omitempty"`
+	GalleryID  uint64 `json:"gallery_id,omitempty"`
+	Title      string `json:"title,omitempty"`
+	Pages      int    `json:"pages,omitempty"`
+	TotalPages int    `json:"total_pages,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Path       string `json:"path,omitempty"`
+	Size       int64  `json:"size,omitempty"`
+	Code       string `json:"code,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 func RunShare(args []string) error {
@@ -57,18 +60,31 @@ func RunShare(args []string) error {
 		return writeShareErr(err)
 	}
 	return json.NewEncoder(os.Stdout).Encode(shareOutput{
-		Ok:        true,
-		Token:     share.Token,
-		GalleryID: share.GalleryID,
-		Title:     share.Title,
-		Pages:     share.Pages,
-		URL:       share.URL,
-		Path:      share.Path,
-		Size:      share.Size,
+		Ok:         true,
+		Token:      share.Token,
+		GalleryID:  share.GalleryID,
+		Title:      share.Title,
+		Pages:      share.Pages,
+		TotalPages: share.TotalPages,
+		URL:        share.URL,
+		Path:       share.Path,
+		Size:       share.Size,
 	})
 }
 
 func writeShareErr(err error) error {
-	_ = json.NewEncoder(os.Stdout).Encode(shareOutput{Ok: false, Error: err.Error()})
+	_ = json.NewEncoder(os.Stdout).Encode(shareOutput{Ok: false, Code: shareErrCode(err), Error: err.Error()})
 	return err
+}
+
+func shareErrCode(err error) string {
+	switch {
+	case errors.Is(err, domain.ErrTooLarge):
+		return "too_large"
+	case errors.Is(err, domain.ErrIDMismatch):
+		return "id_mismatch"
+	case errors.Is(err, domain.ErrBusy):
+		return "busy"
+	}
+	return ""
 }
