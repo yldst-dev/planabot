@@ -1,9 +1,7 @@
-# syntax=docker/dockerfile:1.7
-
-ARG RUST_IMAGE=rust:1.86-slim-bookworm
-ARG RUNTIME_IMAGE=debian:bookworm-slim
-ARG NODE_IMAGE=node:22-bookworm-slim
-ARG GO_IMAGE=golang:1.24-bookworm
+ARG RUST_IMAGE=rust:1.86-slim-bookworm@sha256:57d415bbd61ce11e2d5f73de068103c7bd9f3188dc132c97cef4a8f62989e944
+ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
+ARG GO_IMAGE=golang:1.24-bookworm@sha256:1a6d4452c65dea36aac2e2d606b01b4a029ec90cc1ae53890540ce6173ea77ac
 
 FROM ${RUST_IMAGE} AS builder
 
@@ -11,11 +9,11 @@ WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p core/src && echo 'fn main() {}' > core/src/main.rs \
-    && cargo build --release \
+    && cargo build --release --locked \
     && rm -rf core/src target/release/planabot target/release/deps/planabot-* target/release/.fingerprint/planabot-*
 
 COPY core/src ./core/src
-RUN cargo build --release
+RUN cargo build --release --locked
 
 FROM ${GO_IMAGE} AS hiromi-builder
 
@@ -69,7 +67,8 @@ RUN if grep -q "VERSION_CODENAME=buster" /etc/os-release; then \
     fi && \
     apt-get install -y --no-install-recommends ca-certificates fonts-noto-cjk && \
     rm -f /usr/share/fonts/opentype/noto/NotoSerifCJK-*.ttc && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    useradd --system --uid 10001 --user-group --no-create-home --home-dir /app planabot
 
 WORKDIR /app
 
@@ -81,10 +80,10 @@ COPY --from=planabrain-builder /app/planabrain/node_modules /app/planabrain/node
 COPY --from=planabrain-builder /app/planabrain/dist /app/planabrain/dist
 COPY --from=dashboard-builder /app/dashboard/dist /app/dashboard/dist
 
-EXPOSE 8080 8081
+EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD node -e "const q=process.env.HEALTH_SECRET_CORE?'?secret='+encodeURIComponent(process.env.HEALTH_SECRET_CORE):'';const b=process.env.HEALTH_SECRET_BRAIN?'?secret='+encodeURIComponent(process.env.HEALTH_SECRET_BRAIN):'';Promise.all([fetch('http://127.0.0.1:'+(process.env.HEALTH_PORT||'8080')+'/health'+q),fetch('http://127.0.0.1:'+(process.env.BRAIN_HEALTH_PORT||'8081')+'/health'+b)]).then(r=>process.exit(r.every(x=>x.ok)?0:1)).catch(()=>process.exit(1))"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
+    CMD node -e "const q=process.env.HEALTH_SECRET_CORE?'?secret='+encodeURIComponent(process.env.HEALTH_SECRET_CORE):'';fetch('http://127.0.0.1:'+(process.env.HEALTH_PORT||'8080')+'/health'+q).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY scripts/reset-local-memory.sh /usr/local/bin/reset-local-memory

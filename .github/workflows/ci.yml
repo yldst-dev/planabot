@@ -40,6 +40,8 @@ jobs:
             docker:
               - 'Dockerfile'
               - 'docker-compose*.yml'
+              - '.dockerignore'
+              - 'scripts/**'
               - '.github/workflows/ci.yml'
 
   test-rust:
@@ -107,7 +109,7 @@ jobs:
         run: npm ci
         working-directory: dashboard
       - name: Lint
-        run: npm run lint
+        run: npm run lint -- --max-warnings 121
         working-directory: dashboard
       - name: TypeScript typecheck
         run: npm run typecheck
