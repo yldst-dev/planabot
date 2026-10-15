@@ -4,9 +4,11 @@ import type { Changes, Field } from "@/lib/types"
 
 interface ChangesState {
   changes: Changes
+  sending: Changes
   invalid: { key: string; message: string } | null
   edit: (field: Field, value: string | null | undefined) => void
   drop: (keys: string[]) => void
+  send: (sent: Changes) => void
   settle: (sent: Changes) => void
   fail: (key: string, message: string) => void
   clear: () => void
@@ -14,11 +16,16 @@ interface ChangesState {
 
 export const useChanges = create<ChangesState>((set) => ({
   changes: {},
+  sending: {},
   invalid: null,
   edit: (field, value) =>
     set((state) => {
       const next = { ...state.changes }
-      const unchanged = field.kind !== "secret" && value !== null && value === (field.value ?? "")
+      const unchanged =
+        field.kind !== "secret" &&
+        value !== null &&
+        value === (field.value ?? "") &&
+        !Object.hasOwn(state.sending, field.key)
       if (value === undefined || unchanged) delete next[field.key]
       else next[field.key] = value
       return { changes: next, invalid: state.invalid?.key === field.key ? null : state.invalid }
@@ -29,13 +36,15 @@ export const useChanges = create<ChangesState>((set) => ({
       for (const key of keys) delete next[key]
       return { changes: next, invalid: state.invalid && keys.includes(state.invalid.key) ? null : state.invalid }
     }),
+  send: (sent) => set({ sending: sent }),
   settle: (sent) =>
     set((state) => {
       const next = { ...state.changes }
       for (const [key, value] of Object.entries(sent)) {
         if (Object.hasOwn(next, key) && next[key] === value) delete next[key]
       }
-      return { changes: next, invalid: null }
+      const invalid = state.invalid && Object.hasOwn(sent, state.invalid.key) ? null : state.invalid
+      return { changes: next, sending: {}, invalid }
     }),
   fail: (key, message) => set({ invalid: { key, message } }),
   clear: () => set({ changes: {}, invalid: null }),

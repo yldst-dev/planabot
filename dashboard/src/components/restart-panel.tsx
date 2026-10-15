@@ -24,7 +24,7 @@ import { useChanges } from "@/stores/changes"
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-const RESTART_WAIT_MS = 240_000
+const RESTART_WAIT_MS = 300_000
 
 export function RestartPanel() {
   const overview = useOverview()
@@ -43,7 +43,7 @@ export function RestartPanel() {
       return
     }
     setRestarting(true)
-    const baseline = await api.overview().then((data) => data.uptime).catch(() => undefined)
+    let baseline = await api.overview().then((data) => data.uptime).catch(() => undefined)
     try {
       await api.restart()
     } catch (error) {
@@ -61,7 +61,8 @@ export function RestartPanel() {
       try {
         const next = await api.overview()
         const elapsed = (Date.now() - started) / 1000
-        const fresh = unreachable || (baseline !== undefined && next.uptime + 5 < baseline + elapsed)
+        const fresh = baseline === undefined ? unreachable : next.uptime + 5 < baseline + elapsed
+        baseline ??= next.uptime - elapsed
         if (fresh) {
           await client.invalidateQueries()
           setRestarting(false)
@@ -71,7 +72,7 @@ export function RestartPanel() {
       } catch (error) {
         if (error instanceof AuthError) {
           setRestarting(false)
-          toast.success("재시작 완료.", { id: progress, description: "다시 로그인해 주십시오." })
+          toast.warning("인증 필요.", { id: progress, description: "다시 로그인한 뒤 재시작 결과를 확인하십시오." })
           await client.invalidateQueries()
           return
         }

@@ -24,8 +24,9 @@ export function SettingControl({ field, id, invalid }: { field: Field; id: strin
 
   switch (field.kind) {
     case "bool": {
-      const on = truthy(value ?? field.placeholder)
-      const unset = value == null && !dirty
+      const blank = !value?.trim()
+      const on = truthy(blank ? field.placeholder : value)
+      const unset = blank && !dirty
       const status = on ? "켬" : "끔"
       return (
         <div className="flex h-9 items-center gap-3">

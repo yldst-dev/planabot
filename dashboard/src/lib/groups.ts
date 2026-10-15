@@ -61,7 +61,13 @@ export function sections(groups: Group[]) {
 }
 
 export function importableFields(fields: Field[]) {
-  return fields.filter((field) => field.source === "env" && !field.env_only && !field.custom)
+  return fields.filter(
+    (field) =>
+      field.source === "env" &&
+      !field.env_only &&
+      !field.custom &&
+      (field.kind === "secret" || Boolean(field.env_value?.trim())),
+  )
 }
 
 export function fieldsIn(fields: Field[], groupId: string) {

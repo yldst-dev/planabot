@@ -86,9 +86,12 @@ export function useImportEnv() {
 
 export function useSave() {
   const client = useQueryClient()
+  const send = useChanges((state) => state.send)
   const settle = useChanges((state) => state.settle)
   return useMutation({
     mutationFn: (changes: Changes) => api.save(changes),
+    onMutate: send,
+    onError: () => send({}),
     onSuccess: (data, changes) => {
       settle(changes)
       client.setQueryData(queryKeys.settings, data)

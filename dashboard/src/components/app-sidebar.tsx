@@ -175,7 +175,7 @@ function AccountMenu() {
       <SidebarMenuItem>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <SidebarMenuButton size="lg" tooltip="계정과 테마" aria-label="계정과 테마">
+            <SidebarMenuButton size="lg" tooltip="계정과 테마" aria-label={`관리자, ${current.label} 테마`}>
               <span className="grid size-8 shrink-0 place-items-center rounded-md bg-sidebar-accent">
                 <UserRoundIcon className="size-4" />
               </span>
