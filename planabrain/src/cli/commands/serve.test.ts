@@ -200,3 +200,59 @@ test("expired deadlines reject an ask before its provider is contacted", async (
     assert.equal(calls, 0);
   });
 });
+
+test("a provider rate limit is returned as a structured error instead of an answer", async () => {
+  await withServer("secret", async (base) => {
+    globalThis.fetch = async () => new Response(JSON.stringify({ error: { message: "slow down" } }), {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": "0" },
+    });
+    const response = await call(base, "/v1/ask", { method: "POST", body: JSON.stringify({ userId: "actor", question: "질문" }) });
+    const body = (await response.json()) as { answer?: string; error?: { kind: string; }; };
+    assert.equal(response.ok, false);
+    assert.equal(body.answer, undefined);
+    assert.equal(body.error?.kind, "rate_limited");
+  });
+});
+
+test("oversized bodies get 413 and memory routes stay open while answers are busy", async () => {
+  const dataRoot = mkdtempSync(path.join(os.tmpdir(), "planabrain-serve-"));
+  const previous = process.env.PLANABRAIN_DATA_DIR;
+  process.env.PLANABRAIN_DATA_DIR = dataRoot;
+  try {
+    await withServer("secret", async (base) => {
+      const tooLarge = await call(base, "/v1/memory-list", { method: "POST", body: "x".repeat(4 * 1024 * 1024 + 1) });
+      assert.equal(tooLarge.status, 413);
+      assert.equal(((await tooLarge.json()) as { error: { kind: string; }; }).error.kind, "invalid_request");
+
+      let started = 0;
+      globalThis.fetch = async (_input, init) => {
+        started += 1;
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        });
+      };
+      const controller = new AbortController();
+      const asks = Array.from({ length: 4 }, (_, index) =>
+        call(base, "/v1/ask", { method: "POST", signal: controller.signal, body: JSON.stringify({ userId: `u${index}`, question: "질문" }) }).catch(() => undefined));
+      while (started < 4) await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const busy = await call(base, "/v1/ask", { method: "POST", body: JSON.stringify({ userId: "u5", question: "질문" }) });
+      assert.equal(busy.status, 503);
+      const memories = await call(base, "/v1/memory-list", { method: "POST", body: JSON.stringify({ userId: "u1", chatScope: "chat_1" }) });
+      assert.equal(memories.status, 200);
+      const anonymous = await call(base, "/v1/memory-list", { method: "POST", body: "{}" }, "wrong");
+      assert.equal(anonymous.status, 401);
+
+      controller.abort();
+      await Promise.all(asks);
+    });
+  } finally {
+    if (previous === undefined) {
+      delete process.env.PLANABRAIN_DATA_DIR;
+    } else {
+      process.env.PLANABRAIN_DATA_DIR = previous;
+    }
+    rmSync(dataRoot, { recursive: true, force: true });
+  }
+});

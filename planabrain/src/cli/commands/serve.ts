@@ -18,6 +18,7 @@ import type { CommandContext } from "../registry.js";
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const TOKEN_HEADER = "x-planabrain-token";
+const GATED_PATHS = new Set(["/v1/ask", "/v1/turn-prepare"]);
 
 export type ServerOptions = {
   settings: Settings;
@@ -30,23 +31,34 @@ export function createPlanabrainServer(options: ServerOptions): http.Server {
   const cache = new RequestCache();
   let active = 0;
   return http.createServer((request, response) => {
-    if (request.method === "POST" && active >= 4) {
+    if (!isAuthorized(request, options.token)) {
+      writeJson(response, 401, { error: { kind: "auth_failed", message: "토큰이 올바르지 않습니다" } });
+      return;
+    }
+    const gated = request.method === "POST" && GATED_PATHS.has(new URL(request.url ?? "/", "http://127.0.0.1").pathname);
+    if (gated && active >= 4) {
       writeJson(response, 503, { error: { kind: "rate_limited", message: "처리 중인 요청이 너무 많습니다.", retryable: true } });
       return;
     }
     const controller = new AbortController();
     const cancel = (): void => { if (!response.writableFinished) controller.abort(); };
     response.once("close", cancel);
-    active += request.method === "POST" ? 1 : 0;
+    active += gated ? 1 : 0;
     handleRequest(request, response, options, startedAt, version, cache, controller.signal).catch((error) => {
       const structured = toStructuredError(error);
-      const status = structured.kind === "invalid_request" ? 400 : structured.kind === "network_timeout" ? 504 : 500;
+      const status = structured.status === 413 ? 413 : structured.kind === "invalid_request" ? 400 : structured.kind === "network_timeout" ? 504 : 500;
       writeJson(response, status, { error: structured });
     }).finally(() => {
-      active -= request.method === "POST" ? 1 : 0;
+      active -= gated ? 1 : 0;
       response.off("close", cancel);
     });
   });
+}
+
+function isAuthorized(request: http.IncomingMessage, token: string): boolean {
+  const supplied = Buffer.from(String(request.headers[TOKEN_HEADER] ?? ""));
+  const expected = Buffer.from(token);
+  return expected.length > 0 && supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
 
 export async function runServeCommand(_args: string[], context: CommandContext): Promise<void> {
@@ -95,13 +107,6 @@ async function handleRequest(
   signal: AbortSignal,
 ): Promise<void> {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
-  const supplied = Buffer.from(String(request.headers[TOKEN_HEADER] ?? ""));
-  const expected = Buffer.from(options.token);
-  if (expected.length === 0 || supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
-    writeJson(response, 401, { error: { kind: "auth_failed", message: "토큰이 올바르지 않습니다" } });
-    return;
-  }
-
   if (request.method === "GET" && url.pathname === "/v1/health") {
     writeJson(response, 200, {
       ok: true,
@@ -297,8 +302,8 @@ function readBody(request: http.IncomingMessage): Promise<string> {
     request.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
-        reject(new Error("요청 본문이 너무 큽니다"));
-        request.destroy();
+        chunks.length = 0;
+        reject(new ProviderApiError({ kind: "invalid_request", status: 413, apiMessage: "요청 본문이 너무 큽니다." }));
         return;
       }
       chunks.push(chunk);

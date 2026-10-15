@@ -3,7 +3,7 @@ import { normalizeCurrentTurnText, isCurrentInformationRequest, isExplicitSearch
 import { normalizeQuestionForMemory, buildCurrentTurnReference, buildMemoryContextMessage, buildTurnMessages } from "./promptContext.js";
 import { buildLongRangeWeatherReply } from "./weatherPolicy.js";
 import { looksUserInitiatedIntimacy, invokeChatWithIntimacyRecovery } from "./intimacyMode.js";
-import { usesPreSearchContext, performPreSearch, ProviderRateLimitError, type ChatInvocationMetadata, type ChatMessage, type InputImage, mergeWebCitations } from "../integrations/chat.js";
+import { usesPreSearchContext, performPreSearch, type ChatInvocationMetadata, type ChatMessage, type InputImage, mergeWebCitations } from "../integrations/chat.js";
 import { finalizeAnswerForDelivery } from "./deliveryRewrite.js";
 import { buildLinkContext } from "./linkContext.js";
 import { imageTokenEstimate } from "./contextBudget.js";
@@ -70,21 +70,12 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
     params.settings.deliveryRewriteEnabled && !intimacyActive;
   const simpleSocialTurn = socialTurn;
 
-  let search: PreparedSearch;
-  let linkContext: Awaited<ReturnType<typeof buildLinkContext>>;
-  try {
-    [search, linkContext] = await Promise.all([
-      searchTask,
-      buildLinkContext(params.settings, currentTurnText, {
-        maxPreviewImages: MAX_TURN_IMAGES - (params.images?.length ?? 0),
-      }),
-    ]);
-  } catch (error) {
-    if (error instanceof ProviderRateLimitError) {
-      return { answer: error.message };
-    }
-    throw error;
-  }
+  const [search, linkContext] = await Promise.all([
+    searchTask,
+    buildLinkContext(params.settings, currentTurnText, {
+      maxPreviewImages: MAX_TURN_IMAGES - (params.images?.length ?? 0),
+    }),
+  ]);
   const preparedAt = Date.now();
   const referenceContext = buildCurrentTurnReference(
     params.question,
@@ -92,41 +83,32 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   );
   const memoryContext = simpleSocialTurn ? null : buildMemoryContextMessage(params.memoryContext);
 
-  let invocation: ChatInvocationMetadata;
   const preSearch = search.context;
-  let epoch = 0;
-  try {
-    const systemContent = buildChatSystemPrompt(params.settings, {
-      searchEnabled: searchEnabled && !(wantsPreSearch && !preSearch),
-      intimacyActive,
-    });
-    const replay = continuous
-      ? buildReplay(recentTurns, Math.min(38, Math.max(0, (params.workingTurnLimit ?? 40) - 2)))
-      : { messages: recentTurns.map((turn): ChatMessage => ({ role: turn.role, content: turn.text })), epoch: 0 };
-    epoch = replay.epoch;
-    invocation = await invokeChatWithIntimacyRecovery({
-      settings: params.settings,
-      maxContinuations: deliveryEnabled && !searchEnabled ? 0 : 1,
-      intimacyActive,
-      messages: buildTurnMessages({
-        systemContent,
-        history: replay.messages,
-        memoryContext,
-        referenceContext,
-        linkContext: linkContext?.content ?? null,
-        searchContext: preSearch?.context ?? null,
-        currentTurnText,
-        images: turnImages(params.images, linkContext?.images),
-        imageNotice: params.imageNotice,
-        imageTokens: imageTokenEstimate(params.settings.codexImageDetail),
-      }),
-    });
-  } catch (error) {
-    if (error instanceof ProviderRateLimitError) {
-      return { answer: error.message };
-    }
-    throw error;
-  }
+  const systemContent = buildChatSystemPrompt(params.settings, {
+    searchEnabled: searchEnabled && !(wantsPreSearch && !preSearch),
+    intimacyActive,
+  });
+  const replay = continuous
+    ? buildReplay(recentTurns, Math.min(38, Math.max(0, (params.workingTurnLimit ?? 40) - 2)))
+    : { messages: recentTurns.map((turn): ChatMessage => ({ role: turn.role, content: turn.text })), epoch: 0 };
+  const epoch = replay.epoch;
+  let invocation: ChatInvocationMetadata = await invokeChatWithIntimacyRecovery({
+    settings: params.settings,
+    maxContinuations: deliveryEnabled && !searchEnabled ? 0 : 1,
+    intimacyActive,
+    messages: buildTurnMessages({
+      systemContent,
+      history: replay.messages,
+      memoryContext,
+      referenceContext,
+      linkContext: linkContext?.content ?? null,
+      searchContext: preSearch?.context ?? null,
+      currentTurnText,
+      images: turnImages(params.images, linkContext?.images),
+      imageNotice: params.imageNotice,
+      imageTokens: imageTokenEstimate(params.settings.codexImageDetail),
+    }),
+  });
 
   if (preSearch) {
     invocation = { ...invocation, citations: mergeWebCitations(preSearch.citations, invocation.citations), searchUsed: true };
