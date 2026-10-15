@@ -49,8 +49,6 @@ FROM ${RUNTIME_IMAGE}
 
 ENV RUST_LOG=info \
     RUST_BACKTRACE=1 \
-    GEMINI_CLI_API_HOST=host.docker.internal \
-    GEMINI_CLI_API_PORT=43173 \
     HIROMI_BIN=/usr/local/bin/hiromi \
     HIROMI_DOWNLOAD_DIR=/tmp/hiromi-downloads \
     PLANABOT_MUSIC_CARD_FONT_DIR=/usr/share/fonts/opentype/noto \

@@ -55,7 +55,7 @@
 
 ## Security & Configuration Tips
 - AI/planabrain calls are gated by `PLANABRAIN_ALLOWED_CHAT_IDS` in `.env`.
-- `TELEGRAM_API_TOKEN` and `GOOGLE_API_KEY` are required for runtime.
+- `TELEGRAM_API_TOKEN` is required and stays in the deployment env (it is env-only in the dashboard). The model key depends on `PLANABRAIN_AI_PROVIDER`: `CODEX_GATEWAY_API_KEY` for codex, `ANTHROPIC_API_KEY` for anthropic.
 
 ## CI/CD & Deployment
 - GitHub Actions 워크플로우: `.github/workflows/ci.yml`
