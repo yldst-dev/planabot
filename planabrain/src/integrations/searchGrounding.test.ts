@@ -106,12 +106,16 @@ test("citation URLs keep page identifiers and drop only secret parameters", asyn
       { url: "https://finance.naver.com/item/main.naver?code=005930", title: "삼성전자" },
       { url: "https://finance.naver.com/item/main.naver?code=000660", title: "SK하이닉스" },
       { url: "https://prod.danawa.com/info/?pcode=123&keyword=gpu&access_token=a&X-Amz-Signature=b&apiKey=c&apitoken=d&author=e", title: "다나와" },
+      { url: "https://finance.naver.com/sise/sise_index.naver?code=KOSPI", title: "코스피" },
+      { url: "https://finance.naver.com/sise/sise_index.naver?code=KOSDAQ", title: "코스닥" },
     ],
   }]);
   assert.deepEqual(citations.map((citation) => citation.url), [
     "https://finance.naver.com/item/main.naver?code=005930",
     "https://finance.naver.com/item/main.naver?code=000660",
     "https://prod.danawa.com/info/?pcode=123&keyword=gpu&author=e",
+    "https://finance.naver.com/sise/sise_index.naver?code=KOSPI",
+    "https://finance.naver.com/sise/sise_index.naver?code=KOSDAQ",
   ]);
 
   const answer = await finalizeAnswerForDelivery({
@@ -123,6 +127,7 @@ test("citation URLs keep page identifiers and drop only secret parameters", asyn
   assert.equal(answer, "본문입니다.\n\n출처: [삼성전자](https://finance.naver.com/item/main.naver?code=005930)");
   assert.equal(redactSensitiveUrl("https://finance.naver.com/item/main.naver?code=005930&token=x"), "https://finance.naver.com/item/main.naver?code=005930");
   assert.equal(redactSensitiveUrl("https://a.example/cb?code=4%2F0AX-secret&oauth_verifier=v&passcode=1&state=s"), "https://a.example/cb?state=s");
+  assert.equal(redactSensitiveUrl("https://a.example/view?code=best&code=gho16C7e42F292c6912E7710c838347Ae178B4a&item_code=AB1234"), "https://a.example/view?code=best&item_code=AB1234");
 });
 
 test("replaces model-authored sources with verified HTTPS citation URLs", async () => {

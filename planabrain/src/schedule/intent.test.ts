@@ -84,3 +84,21 @@ test("clock minutes stay clock times and invalid dates are refused", () => {
   assert.equal(kst(at("다음 달 5일 오후 3시 회의 등록해줘", Date.UTC(2026, 9, 2)).dueAtMs), "2026-11-05T15:00");
 });
 
+
+test("next month applies only to the day it directly precedes", () => {
+  const oct15 = Date.UTC(2026, 9, 15, 3, 0);
+  const budget = interpretScheduleRequest("20일 오후 3시 다음 달 예산 회의 등록해줘", { nowMs: oct15 });
+  assert.equal(kst(budget.dueAtMs), "2026-10-20T15:00");
+  assert.equal(budget.title, "다음 달 예산 회의");
+  assert.equal(kst(interpretScheduleRequest("다음 달 계획 회의 20일 오후 3시 등록해줘", { nowMs: oct15 }).dueAtMs), "2026-10-20T15:00");
+  assert.equal(kst(interpretScheduleRequest("다다음 달 20일 오후 3시 회의 등록해줘", { nowMs: oct15 }).dueAtMs), "2026-12-20T15:00");
+});
+
+test("leap days roll forward, unreadable dates are refused and minutes before an hour count back", () => {
+  const oct15 = Date.UTC(2026, 9, 15, 3, 0);
+  assert.equal(kst(interpretScheduleRequest("2월 29일 오후 3시 알림 등록해줘", { nowMs: Date.UTC(2027, 2, 1, 3) }).dueAtMs), "2028-02-29T15:00");
+  for (const text of ["말일 오후 3시 알림 등록해줘", "10/20 오후 3시 회의 등록해줘", "2026. 10. 20. 오후 3시 회의 등록해줘", "다음 달 오후 3시 회의 등록해줘"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: oct15 }).error, "시각을 확인하지 못했습니다.", text);
+  }
+  assert.equal(kst(interpretScheduleRequest("3시 10분 전에 알림 등록해줘", { nowMs: oct15 }).dueAtMs), "2026-10-15T14:50");
+});

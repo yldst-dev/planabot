@@ -37,6 +37,17 @@ test("decided todo actions skip keyword detection", async (t) => {
       assert.ok((await listTodos("casual")).items.every((item) => !item.completed));
     });
 
+    await t.test("replies that only share a prefix with a todo leave it open and 할일 works without a space", async () => {
+      for (const content of ["네이버 예약 확인", "다이어리 쓰기", "그래프 그리기", "응급약 사기"]) await addTodo("overlap", content);
+      for (const text of ["네, 했어.", "다 했어", "그래 했어", "응 했어"]) {
+        assert.equal((await interpretTodoRequest("overlap", text)).handled, false, text);
+      }
+      for (const text of ["할일 2번 완료했어", "할일 첫번째 끝냈어", "마지막 할일 끝냈어"]) {
+        assert.equal((await interpretTodoRequest("overlap", text)).action, "complete", text);
+      }
+      assert.deepEqual((await listTodos("overlap")).items.filter((item) => !item.completed).map((item) => item.content), ["그래프 그리기"]);
+    });
+
     await t.test("a decided add registers without the todo keyword", async () => {
       const result = await interpretTodoRequest("decided", "우유 사기 추가해줘", "add");
       assert.equal(result.action, "add");

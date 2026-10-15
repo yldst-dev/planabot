@@ -165,7 +165,7 @@ function parseAbsoluteDateTime(text: string, meridiem?: "am" | "pm"): ParsedTime
 
 function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"): ParsedTime | null | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
-  const time = normalized.match(/(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})분?|(반)))?/);
+  const time = normalized.match(/(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})분?(\s*전(?:까지)?(?=$|[\s,.]|에|쯤))?|(반)))?/);
   if (!time) {
     return undefined;
   }
@@ -176,7 +176,7 @@ function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"):
   let dateText = "";
 
   const monthDay = normalized.match(/(\d{1,2})월\s*(\d{1,2})일/);
-  const dayOnly = normalized.match(/(?<![\d월]\s*)(\d{1,2})일(?!\s*(?:뒤|후|있다가|동안|간|째))/);
+  const dayOnly = normalized.match(/(?<![\d월]\s*)(?:(다?다음)\s*달\s*(?:에\s*)?)?(\d{1,2})일(?!\s*(?:뒤|후|있다가|동안|간|째))/);
   const relativeDay = normalized.match(/오늘|내일|모레|글피/);
   const weekday = normalized.match(/(?:(이번|다음|다다음|다담)\s*주\s*)?([월화수목금토일])요일/);
 
@@ -184,17 +184,15 @@ function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"):
     month = Number(monthDay[1]);
     day = Number(monthDay[2]);
     dateText = monthDay[0];
-    if (kstDateMs(year, month, day, 23, 59) <= now) {
+    if (!(kstDateMs(year, month, day, 23, 59) > now)) {
       year += 1;
     }
   } else if (dayOnly) {
-    day = Number(dayOnly[1]);
-    const nextMonth = normalized.match(/다음\s*달\s*/);
-    dateText = nextMonth ? `${nextMonth[0]}${dayOnly[0]}` : dayOnly[0];
-    if (nextMonth || kstDateMs(year, month, day, 23, 59) <= now) {
-      year += month === 12 ? 1 : 0;
-      month = month === 12 ? 1 : month + 1;
-    }
+    day = Number(dayOnly[2]);
+    const ahead = dayOnly[1] === "다다음" ? 2 : dayOnly[1] || kstDateMs(year, month, day, 23, 59) <= now ? 1 : 0;
+    year += Math.floor((month - 1 + ahead) / 12);
+    month = ((month - 1 + ahead) % 12) + 1;
+    dateText = dayOnly[0];
   } else if (relativeDay) {
     const offset = relativeDay[0] === "오늘" ? 0 : relativeDay[0] === "내일" ? 1 : relativeDay[0] === "모레" ? 2 : 3;
     const parts = addKstDays(today.year, today.month, today.day, offset);
@@ -220,15 +218,19 @@ function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"):
   if (dateText && !Number.isFinite(kstDateMs(year, month, day, 0, 0))) {
     return null;
   }
+  if (!dateText && /말일|\d{1,2}\s*\/\s*\d{1,2}|\d{4}\s*[-.\/년]|다음\s*달\s*(?:에\s*)?$/u.test(normalized.slice(0, time.index))) {
+    return null;
+  }
   const rawHour = Number(time[2]);
-  const minute = time[3] ? Number(time[3]) : time[4] ? 30 : 0;
+  const minutesBefore = time[4] ? Number(time[3]) : 0;
+  const minute = time[4] ? 0 : time[3] ? Number(time[3]) : time[5] ? 30 : 0;
   const marker = time[1] ?? impliedMarker(rawHour, meridiem);
   const hours = marker || rawHour === 0 || rawHour >= 12 ? [normalizeHour(rawHour, marker)] : [rawHour, rawHour + 12];
   const offsets = dateText ? [0] : hours.some((hour) => hour >= 24) ? [-1, 0, 1] : [0, 1];
   const candidates = offsets.flatMap((offset) =>
     hours.map((hour) => {
       const parts = addKstDays(year, month, day, offset + Math.floor(hour / 24));
-      return kstDateMs(parts.year, parts.month, parts.day, hour % 24, minute);
+      return kstDateMs(parts.year, parts.month, parts.day, hour % 24, minute) - minutesBefore * MINUTE_MS;
     }),
   );
   const dueAtMs = candidates.find((ms) => ms > now) ?? candidates[0];

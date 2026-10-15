@@ -95,13 +95,14 @@ export async function rememberExchange(
   }
   const config = loadMemoryConfig();
   const startedAt = Date.now();
+  const turnStartedAt = Math.min(input.turnStartedAt ?? startedAt, startedAt);
   const recorded = openMemoryDatabase(config).recordExchange({
     requestId: input.requestId,
     chatId: input.chatId,
     conversationId: input.conversationId,
     maxTurns: config.maxConversationTurns,
     cutoffAt: startedAt - config.conversationTtlMs,
-    ...(input.turnStartedAt === undefined ? {} : { fence: { userId: input.userId, startedAt: input.turnStartedAt } }),
+    ...(input.turnStartedAt === undefined ? {} : { fence: { userId: input.userId, startedAt: turnStartedAt } }),
     turns: [
       { role: "user", text: userText, at: startedAt, ownerUserId: input.userId, ...(input.epoch === undefined ? {} : { epoch: input.epoch }) },
       {
@@ -118,7 +119,7 @@ export async function rememberExchange(
     return { recorded, writer: "skipped" };
   }
   const job = (): Promise<void> => runExecution("memory-write", () =>
-    serial(`memory-writer:${input.userId}`, () => writeLongTermMemory(input.userId, input.chatId, userText, assistantText, input.turnStartedAt ?? startedAt, config, options.settings)),
+    serial(`memory-writer:${input.userId}`, () => writeLongTermMemory(input.userId, input.chatId, userText, assistantText, turnStartedAt, config, options.settings)),
   );
   if (!options.background) {
     await job();

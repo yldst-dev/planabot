@@ -48,7 +48,12 @@ export function fitContextMessages(messages: ChatMessage[], preserveReplay = fal
     if (index < 0) break;
     const message = result[index];
     const keep = Math.max(MIN_EVIDENCE_CHARS, message.content.length - Math.ceil((total - MAX_CONTEXT_TOKENS) * 1.1) - 1);
-    const content = message.content.slice(0, keep - EVIDENCE_TAIL_CHARS - TRIM_MARK.length) + TRIM_MARK + message.content.slice(-EVIDENCE_TAIL_CHARS);
+    const code = (position: number): number => message.content.charCodeAt(position);
+    let head = keep - EVIDENCE_TAIL_CHARS - TRIM_MARK.length;
+    let tail = message.content.length - EVIDENCE_TAIL_CHARS;
+    if (code(head - 1) >= 0xd800 && code(head - 1) <= 0xdbff) head -= 1;
+    if (code(tail) >= 0xdc00 && code(tail) <= 0xdfff) tail += 1;
+    const content = message.content.slice(0, head) + TRIM_MARK + message.content.slice(tail);
     result[index] = { ...message, content };
     const size = messageTokens(result[index], imageTokens);
     total += size - sizes[index];

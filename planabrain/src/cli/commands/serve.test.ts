@@ -8,7 +8,8 @@ import test from "node:test";
 import type { Settings } from "../../config/settings.js";
 import { testSettings } from "../../testing/settings.js";
 import { codexStream } from "../../testing/codex.js";
-import { createPlanabrainServer, parseAskInput, parseExchangeInput } from "./serve.js";
+import { runDetached } from "../../runtime/execution.js";
+import { createPlanabrainServer, parseAskInput, parseExchangeInput, stopServer } from "./serve.js";
 
 function createSettings(overrides: Partial<Settings> = {}): Settings {
   return testSettings({ ollamaWebSearchEnabled: false, continuousChat: false, searchQueryRewriteEnabled: false, ...overrides });
@@ -271,4 +272,26 @@ test("a malformed request target gets 400 instead of crashing the server", async
     assert.match(statusLine, / 400 /u);
     assert.equal((await call(base, "/v1/health")).status, 200);
   });
+});
+
+test("stopping the server waits for background jobs but not past the grace period", async () => {
+  const listening = async () => {
+    const server = createPlanabrainServer({ settings: createSettings(), token: "secret" });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return server;
+  };
+  let finished = false;
+  void runDetached(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    finished = true;
+  });
+  await stopServer(await listening(), 5_000);
+  assert.equal(finished, true);
+
+  let release: () => void = () => { };
+  void runDetached(() => new Promise<void>((resolve) => { release = resolve; }));
+  const startedAt = Date.now();
+  await stopServer(await listening(), 50);
+  assert.ok(Date.now() - startedAt < 1_000);
+  release();
 });

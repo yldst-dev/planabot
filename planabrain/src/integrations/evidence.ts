@@ -70,7 +70,7 @@ export function normalizeCitationUrl(value: unknown): string | null {
     url.hash = "";
     for (const [key, value] of Array.from(url.searchParams.entries())) {
       if (isSecretParam(key, value)) {
-        url.searchParams.delete(key);
+        url.searchParams.delete(key, value);
       }
     }
     return url.toString();
@@ -88,7 +88,7 @@ export function isSecretParam(name: string, value = ""): boolean {
   if (SECRET_PARAM_PATTERN.test(name.toLowerCase()) || words.some((word) => SECRET_PARAM_WORDS.has(word))) {
     return true;
   }
-  return words.at(-1) === "code" && !/^\d{1,10}$/u.test(value);
+  return words.at(-1) === "code" && !/^[A-Za-z0-9]{1,12}$/u.test(value);
 }
 
 export function normalizeCitationText(value: unknown, maxLength: number): string | undefined {

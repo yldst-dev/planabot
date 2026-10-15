@@ -1,6 +1,6 @@
 import { resolveDataPath } from "../../config/paths.js";
 import { timingSafeEqual } from "node:crypto";
-import { runExecution } from "../../runtime/execution.js";
+import { drainDetached, runExecution } from "../../runtime/execution.js";
 import { RequestCache } from "../../application/requestCache.js";
 import { readFileSync } from "node:fs";
 import http from "node:http";
@@ -19,6 +19,7 @@ import type { CommandContext } from "../registry.js";
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const TOKEN_HEADER = "x-planabrain-token";
 const GATED_PATHS = new Set(["/v1/ask", "/v1/turn-prepare"]);
+const SHUTDOWN_GRACE_MS = 15_000;
 
 export type ServerOptions = {
   settings: Settings;
@@ -74,9 +75,11 @@ export async function runServeCommand(_args: string[], context: CommandContext):
   const port = await listen(server, requestedPort);
   process.stdout.write(`${JSON.stringify({ ready: true, port })}\n`);
 
+  let stopping = false;
   const shutdown = (): void => {
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 1_000).unref();
+    if (stopping) return;
+    stopping = true;
+    void stopServer(server, SHUTDOWN_GRACE_MS).finally(() => process.exit(0));
   };
   process.stdin.on("end", shutdown);
   process.stdin.on("close", shutdown);
@@ -85,6 +88,15 @@ export async function runServeCommand(_args: string[], context: CommandContext):
   process.on("SIGINT", shutdown);
 
   await new Promise<void>(() => { });
+}
+
+export async function stopServer(server: http.Server, graceMs: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    new Promise<void>((resolve) => server.close(() => resolve())).then(drainDetached),
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, graceMs); }),
+  ]);
+  clearTimeout(timer);
 }
 
 function listen(server: http.Server, port: number): Promise<number> {

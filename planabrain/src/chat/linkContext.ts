@@ -163,7 +163,7 @@ export function redactSensitiveUrl(rawUrl: string): string {
     const url = new URL(rawUrl);
     for (const [key, value] of Array.from(url.searchParams.entries())) {
       if (isSecretParam(key, value)) {
-        url.searchParams.delete(key);
+        url.searchParams.delete(key, value);
       }
     }
     return url.toString();

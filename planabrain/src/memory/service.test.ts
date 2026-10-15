@@ -20,7 +20,8 @@ test("an exchange from a turn that started before a reset is not stored", async 
     const stale = await rememberExchange({ userId: "fence", chatId: "chat_f", conversationId: "chat_f", userText: "질문", assistantText: "답", turnStartedAt }, { settings, background: false });
     assert.deepEqual(stale, { recorded: false, writer: "skipped" });
     assert.deepEqual(listRecentTurns("chat_f", "chat_f"), []);
-    const fresh = await rememberExchange({ userId: "fence", chatId: "chat_f", conversationId: "chat_f", userText: "질문", assistantText: "답", turnStartedAt: Date.now() + 1 }, { settings, background: false });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const fresh = await rememberExchange({ userId: "fence", chatId: "chat_f", conversationId: "chat_f", userText: "질문", assistantText: "답", turnStartedAt: Date.now() }, { settings, background: false });
     assert.equal(fresh.recorded, true);
     assert.equal(listRecentTurns("chat_f", "chat_f").length, 2);
   } finally {
@@ -28,6 +29,29 @@ test("an exchange from a turn that started before a reset is not stored", async 
     for (const [key, value] of [["PLANABRAIN_MEMORY_DB_PATH", previous.db], ["PLANABRAIN_MEMORY_WRITER_ENABLED", previous.writer]] as const) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a turn start reported ahead of this clock still fences the writer against a later reset", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "planabot-memory-skew-"));
+  const previous = { db: process.env.PLANABRAIN_MEMORY_DB_PATH, decision: process.env.PLANABRAIN_DECISION_PROVIDER };
+  process.env.PLANABRAIN_MEMORY_DB_PATH = path.join(dir, "memory.sqlite");
+  delete process.env.PLANABRAIN_DECISION_PROVIDER;
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    resetUserMemory("skew");
+    return codexStream("{\"operations\":[{\"op\":\"add\",\"kind\":\"fact\",\"content\":\"사용자는 초기화 전에 고양이 이야기를 했다\",\"importance\":0.7}]}");
+  };
+  try {
+    const settings = testSettings({ ollamaWebSearchEnabled: false });
+    await rememberExchange({ userId: "skew", chatId: "chat_skew", conversationId: "chat_skew", userText: "우리 고양이 이름은 나비야", assistantText: "확인했습니다.", turnStartedAt: Date.now() + 120_000 }, { settings, background: false });
+    assert.deepEqual(listMemories("skew", "chat_skew"), []);
+  } finally {
+    globalThis.fetch = original;
+    closeMemoryDatabases();
+    if (previous.db === undefined) delete process.env.PLANABRAIN_MEMORY_DB_PATH; else process.env.PLANABRAIN_MEMORY_DB_PATH = previous.db;
+    if (previous.decision !== undefined) process.env.PLANABRAIN_DECISION_PROVIDER = previous.decision;
     await rm(dir, { recursive: true, force: true });
   }
 });

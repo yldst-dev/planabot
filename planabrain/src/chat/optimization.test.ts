@@ -39,6 +39,13 @@ test("budgeting protects current evidence and reference after dropping old pairs
   assert.throws(() => fitContextMessages([{ role: "user", content: "질문" }, { role: "developer", content: "가".repeat(25_000) }]), /너무 깁니다/u);
 });
 
+test("evidence trimming keeps emoji whole at both cuts", () => {
+  const evidence = `${"😀".repeat(30_000)}x`;
+  const trimmed = fitContextMessages([{ role: "user", content: evidence, contextKind: "evidence" }, { role: "user", content: "질문", contextKind: "current" }])[0]?.content ?? "";
+  assert.ok(trimmed.length < evidence.length);
+  assert.doesNotMatch(trimmed, /[\uD800-\uDFFF]/u);
+});
+
 test("memory deduplication preserves other speakers and facts when history was evicted", () => {
   const memory = buildMemoryContextMessage("memory_context:\nworking:\n- user: 여행 날짜는 10월 3일\n- user(other): 여행 날짜는 10월 3일\n- assistant: 확인했습니다.\nsemantic:\n- trip=10월 4일");
   const messages = buildTurnMessages({ ...parts, memoryContext: memory, history: [{ role: "user", content: "여행 날짜는 10월 3일" }, { role: "assistant", content: "확인했습니다." }] });
@@ -156,6 +163,12 @@ test("source cleanup removes model source lines but keeps prose and code that me
   assert.equal(removeModelSourceLines("const source: string = path;"), "const source: string = path;");
   assert.equal(removeModelSourceLines("1달러는 1,380원입니다 (출처: 연합뉴스)"), "1달러는 1,380원입니다");
   assert.equal(removeModelSourceLines("금리는 동결됐습니다 출처: https://fake.example/rate"), "금리는 동결됐습니다");
+  assert.equal(removeModelSourceLines("환율은 1,380원입니다(출처: 연합뉴스). 전일보다 5원 올랐습니다."), "환율은 1,380원입니다. 전일보다 5원 올랐습니다.");
+  assert.equal(removeModelSourceLines("금리는 동결됐습니다 출처: https://fake.example/rate 다음 회의는 11월입니다."), "금리는 동결됐습니다 다음 회의는 11월입니다.");
+  assert.equal(removeModelSourceLines("답변입니다. 출처: 연합뉴스. 다음 문장입니다."), "답변입니다. 다음 문장입니다.");
+  const code = "```ts\nconst config = { source: \"https://cdn.example.com/app.js\" };\nhttps://cdn.example.com\n```";
+  assert.equal(removeModelSourceLines(code), code);
+  assert.equal(removeModelSourceLines("let player = Player(source: URL(string: \"https://example.com/a.mp3\")!)"), "let player = Player(source: URL(string: \"https://example.com/a.mp3\")!)");
 });
 
 test("canonical replay matches turns sent with the call name or an image marker", () => {

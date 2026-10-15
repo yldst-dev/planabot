@@ -30,6 +30,8 @@ const executions = new AsyncLocalStorage<Execution>();
 
 const abortScopes = new AsyncLocalStorage<AbortSignal>();
 
+const detached = new Set<Promise<unknown>>();
+
 export class ExecutionLimitError extends Error {
   constructor(message: string) {
     super(message);
@@ -191,5 +193,13 @@ export async function measureStage<T>(stage: string, work: () => Promise<T>): Pr
 }
 
 export function runDetached<T>(work: () => Promise<T>): Promise<T> {
-  return executions.exit(work);
+  const job = executions.exit(work);
+  const forget = (): void => { detached.delete(job); };
+  detached.add(job);
+  job.then(forget, forget);
+  return job;
+}
+
+export async function drainDetached(): Promise<void> {
+  while (detached.size > 0) await Promise.allSettled(detached);
 }

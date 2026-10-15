@@ -39,9 +39,10 @@ export async function interpretTodoRequest(
   }
 
   if (action ? action === "complete" : hasAny(normalized, ["완료", "끝냈", "끝낫", "처리했", "체크", "했어", "했습니다"])) {
-    const picked = extractCompleteTarget(userText, text, todoRelated);
-    const target = todoRelated ? await resolveTodoTarget(userId, picked, text) : picked;
-    const result = await completeTodo(userId, target);
+    const target = todoRelated
+      ? await resolveTodoTarget(userId, extractCompleteTarget(userText, text), text)
+      : await findMentionedTodo(userId, userText);
+    const result = await completeTodo(userId, target ?? "");
     if (!result.ok && !todoRelated) {
       return emptyOutput();
     }
@@ -140,15 +141,14 @@ function parseUpdate(text: string): { target: string; content: string } | undefi
 }
 
 function extractTarget(text: string, words: string[]): string {
-  let value = extractUserText(text);
+  let value = extractUserText(text).replace(/(?:해야\s*)?(?:할\s*일|to-?do|투두)(?:\s*리스트)?|체크리스트|체크박스|항목/gi, " ");
   for (const word of words) {
     value = value.replaceAll(word, " ");
   }
-  value = value.replace(/(?:할\s*일|todo|투두|항목|체크박스)/gi, " ");
   return cleanupTarget(value);
 }
 
-function extractCompleteTarget(userText: string, fullText: string, todoRelated: boolean): string {
+function extractCompleteTarget(userText: string, fullText: string): string {
   const target = extractTarget(userText, [
     "완료",
     "완료했어",
@@ -169,10 +169,17 @@ function extractCompleteTarget(userText: string, fullText: string, todoRelated: 
   if (selectedTarget) {
     return selectedTarget;
   }
-  if (target || !todoRelated) {
+  if (target) {
     return target;
   }
   return extractSingleOpenTodoFromContext(fullText) ?? "";
+}
+
+async function findMentionedTodo(userId: string, text: string): Promise<string | undefined> {
+  const compact = (value: string): string => value.toLowerCase().replace(/\s+/g, "");
+  const said = compact(text);
+  const mentioned = (await listTodos(userId)).items.filter((item) => !item.completed && said.includes(compact(item.content)));
+  return mentioned.sort((a, b) => b.content.length - a.content.length)[0]?.id;
 }
 
 function extractSingleOpenTodoFromContext(text: string): string | undefined {
@@ -287,7 +294,7 @@ function extractUserText(text: string): string {
 }
 
 function isTodoRelated(text: string): boolean {
-  return hasAny(text, ["할 일", "해야 할 일", "todo", "투두", "체크리스트"]);
+  return /할\s*일|to-?do|투두|체크리스트/u.test(text);
 }
 
 function isTodoContextText(text: string): boolean {

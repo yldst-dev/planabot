@@ -131,17 +131,26 @@ function breakIntoSentenceLines(line: string): string {
     .replace(/([。！？]+["'”’)\]）」』》]*)[ \t]*(?=\S)/g, "$1\n");
 }
 
+const INLINE_SOURCE_LABEL = String.raw`(?<![\p{L}\p{N}_])(?:출처|Sources?):`;
+const INLINE_SOURCE_LINK = String.raw`(?:https?:\/\/[^\s,]+|\[[^\]]*\]\(https?:\/\/[^)\s]+\))`;
+const INLINE_SOURCE_PATTERNS = [
+  /\s*\((?:출처|Sources?):[^()]*\)/gu,
+  new RegExp(String.raw`\s*${INLINE_SOURCE_LABEL}\s*${INLINE_SOURCE_LINK}(?:\s*,\s*${INLINE_SOURCE_LINK})*`, "gu"),
+  new RegExp(String.raw`(?<=[.!?。…)\]])\s*${INLINE_SOURCE_LABEL}.*?(?:[.!?。](?=\s)|$)`, "gu"),
+];
+
 export function removeModelSourceLines(input: string): string {
+  let fenced = false;
   return input
     .split(/\r?\n/u)
     .map((line) => {
-      const source = line.match(/(?<![\p{L}\p{N}_])(?:출처|sources?):/iu);
-      if (source?.index !== undefined) {
-        const prefix = line.slice(0, source.index).trimEnd();
-        if (/^[\s>*\-•]*$/u.test(prefix)) return "";
-        if (/[.!?。…)\]]$/u.test(prefix)) return prefix;
-        if (prefix.endsWith("(") || /https?:\/\//iu.test(line.slice(source.index))) return prefix.replace(/\s*\($/u, "");
+      if (/^\s*```/u.test(line)) {
+        fenced = !fenced;
+        return line;
       }
+      if (fenced) return line;
+      const source = line.match(/(?<![\p{L}\p{N}_])(?:출처|sources?):/iu);
+      if (source?.index !== undefined && /^[\s>*\-•]*$/u.test(line.slice(0, source.index))) return "";
       const trimmed = line.trim();
       if (
         /^(?:https?:\/\/\S+)(?:\s*,\s*https?:\/\/\S+)*$/iu.test(trimmed) ||
@@ -151,7 +160,7 @@ export function removeModelSourceLines(input: string): string {
       ) {
         return "";
       }
-      return line;
+      return INLINE_SOURCE_PATTERNS.reduce((text, pattern) => text.replace(pattern, ""), line);
     })
     .join("\n")
     .trim();
