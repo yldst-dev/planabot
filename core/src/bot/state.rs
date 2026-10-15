@@ -6,7 +6,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use log::warn;
 use serde::{Deserialize, Serialize};
 use teloxide::types::{ChatId, ChatKind, Message, MessageId, PublicChatKind, UserId};
-use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{
+    Mutex as AsyncMutex, OwnedRwLockReadGuard, OwnedSemaphorePermit, RwLock as AsyncRwLock,
+    Semaphore,
+};
 
 use super::media::{ImageSource, MediaGroupCache, extract_image_source};
 use super::notice::NoticeBoard;
@@ -96,6 +99,7 @@ pub struct AppState {
     image_rate_limiter: Arc<Mutex<ImageRateLimiter>>,
     media_groups: Arc<Mutex<MediaGroupCache>>,
     planabrain_semaphore: Arc<Semaphore>,
+    pub(crate) tasks: TaskGate,
     planabrain_conversations: Arc<Mutex<HashMap<String, Weak<AsyncMutex<()>>>>>,
     pub(crate) schedule_store: ScheduleStore,
     share_claims: Arc<RwLock<HashMap<String, StoredShareClaim>>>,
@@ -104,6 +108,19 @@ pub struct AppState {
     pub hiromi_bin: PathBuf,
     gallery_jobs: Arc<Mutex<HashSet<String>>>,
     gallery_job_slots: Arc<Semaphore>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct TaskGate(Arc<AsyncRwLock<()>>);
+
+impl TaskGate {
+    pub(crate) async fn enter(&self) -> OwnedRwLockReadGuard<()> {
+        self.0.clone().read_owned().await
+    }
+
+    pub(crate) async fn drain(&self, limit: Duration) -> bool {
+        tokio::time::timeout(limit, self.0.write()).await.is_ok()
+    }
 }
 
 pub(crate) struct GalleryJob {
@@ -127,7 +144,9 @@ impl Drop for GalleryJob {
 }
 
 const SHARE_CLAIM_TTL_MS: i64 = 24 * 60 * 60 * 1000;
-const PLANABRAIN_PERMITS: u32 = 4;
+const PLANABRAIN_PERMITS: usize = 4;
+const SHUTDOWN_MARK_WINDOW_SECS: i64 = 15 * 60;
+const SHUTDOWN_MARK_MARGIN_SECS: i64 = 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredShareClaim {
@@ -154,10 +173,13 @@ impl AppState {
         notice_chat_id: Option<ChatId>,
         notice_url: Option<String>,
     ) -> Self {
-        let booted_at = SystemTime::now()
+        let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
+        let mark_path = resolve_shutdown_mark_path();
+        let booted_at = boot_cutoff(now, read_json_or_default(&mark_path));
+        let _ = std::fs::remove_file(&mark_path);
 
         let group_registry_path = resolve_group_registry_path();
         let group_registry = load_group_registry(&group_registry_path);
@@ -183,7 +205,8 @@ impl AppState {
             group_registry_path,
             image_rate_limiter: Arc::new(Mutex::new(image_rate_limiter)),
             media_groups: Arc::new(Mutex::new(MediaGroupCache::default())),
-            planabrain_semaphore: Arc::new(Semaphore::new(PLANABRAIN_PERMITS as usize)),
+            planabrain_semaphore: Arc::new(Semaphore::new(PLANABRAIN_PERMITS)),
+            tasks: TaskGate::default(),
             planabrain_conversations: Arc::new(Mutex::new(HashMap::new())),
             schedule_store,
             share_claims: Arc::new(RwLock::new(share_claims)),
@@ -458,13 +481,6 @@ impl AppState {
     pub(crate) fn try_acquire_planabrain_permit(&self) -> Option<OwnedSemaphorePermit> {
         self.planabrain_semaphore.clone().try_acquire_owned().ok()
     }
-
-    pub(crate) async fn wait_for_planabrain_turns(&self, limit: Duration) {
-        let all = self.planabrain_semaphore.acquire_many(PLANABRAIN_PERMITS);
-        if tokio::time::timeout(limit, all).await.is_err() {
-            warn!("처리 중인 AI 답변을 기다리다 시간이 지나 종료합니다.");
-        }
-    }
 }
 
 struct ImageRateLimiter {
@@ -539,6 +555,38 @@ fn is_group_chat(msg: &Message) -> bool {
             PublicChatKind::Group | PublicChatKind::Supergroup(_)
         ),
         _ => false,
+    }
+}
+
+pub(crate) async fn record_shutdown_mark() {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    if let Err(err) = write_json_atomic(&resolve_shutdown_mark_path(), &now).await {
+        warn!("종료 시각 저장 실패: {}", err);
+    }
+}
+
+fn boot_cutoff(now: i64, mark: Option<i64>) -> i64 {
+    match mark {
+        Some(mark) if mark <= now && now - mark <= SHUTDOWN_MARK_WINDOW_SECS => {
+            mark - SHUTDOWN_MARK_MARGIN_SECS
+        }
+        _ => now,
+    }
+}
+
+fn resolve_shutdown_mark_path() -> PathBuf {
+    let raw = std::env::var("PLANABOT_SHUTDOWN_MARK_PATH")
+        .unwrap_or_else(|_| ".planabot/shutdown_mark.json".to_string());
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
     }
 }
 
@@ -696,6 +744,30 @@ mod tests {
     }
 
     #[test]
+    fn a_recent_shutdown_mark_moves_the_boot_cutoff_back() {
+        assert_eq!(super::boot_cutoff(10_000, Some(9_900)), 9_840);
+        assert_eq!(super::boot_cutoff(10_000, Some(10_000 - 16 * 60)), 10_000);
+        assert_eq!(super::boot_cutoff(10_000, Some(10_100)), 10_000);
+        assert_eq!(super::boot_cutoff(10_000, None), 10_000);
+    }
+
+    #[tokio::test]
+    async fn the_drain_waits_for_entered_tasks_and_gives_up_at_the_limit() {
+        let gate = super::TaskGate::default();
+        let held = gate.enter().await;
+        let started = std::time::Instant::now();
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            drop(held);
+        });
+        assert!(gate.drain(std::time::Duration::from_secs(5)).await);
+        assert!(started.elapsed() >= std::time::Duration::from_millis(40));
+        release.await.expect("release task");
+        let _still_running = gate.enter().await;
+        assert!(!gate.drain(std::time::Duration::from_millis(20)).await);
+    }
+
+    #[test]
     fn default_conversation_scope_is_per_chat_privately_and_per_user_in_groups() {
         assert_eq!(
             super::default_conversation_scope_id(7, true, Some(1)),
@@ -736,9 +808,7 @@ mod tests {
             gallery_id: "1".into(),
             title: "t".into(),
             pages: 1,
-            url: String::new(),
-            path: String::new(),
-            size: 0,
+            ..ShareClaim::default()
         };
         let stale_file = dir.join(format!("planabot_stale_viewer_{}.html", std::process::id()));
         std::fs::write(&stale_file, "viewer").unwrap();

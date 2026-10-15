@@ -216,6 +216,7 @@ struct ExchangeRequest<'a> {
     wire_messages: Option<&'a [serde_json::Value]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     epoch: Option<u32>,
+    turn_started_at: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -454,6 +455,7 @@ fn absolute_path(path: &Path) -> PathBuf {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn remember_planabrain_exchange(
     current_turn_text: &str,
     answer: &str,
@@ -462,6 +464,7 @@ pub(crate) async fn remember_planabrain_exchange(
     conversation_scope_id: Option<&str>,
     transcript: Option<&AskTranscript>,
     request_id: &str,
+    turn_started_at: i64,
 ) -> Result<()> {
     if !is_local_memory_enabled() {
         return Ok(());
@@ -479,6 +482,7 @@ pub(crate) async fn remember_planabrain_exchange(
             .map(|value| value.wire_messages.as_slice())
             .filter(|messages| !messages.is_empty()),
         epoch: transcript.map(|value| value.epoch),
+        turn_started_at,
     };
     if let Some(response) = server::post_json::<_, ExchangeResponse>(
         "/v1/memory-exchange",
@@ -503,6 +507,7 @@ pub(crate) async fn remember_planabrain_exchange(
         conversation_scope_id,
     )?;
     command.env("PLANABRAIN_REQUEST_ID", request_id);
+    command.env("PLANABRAIN_TURN_STARTED_AT", turn_started_at.to_string());
     if let Some(transcript) = transcript {
         command.env(
             "PLANABRAIN_TRANSCRIPT_JSON",
@@ -990,6 +995,23 @@ mod tests {
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
     use std::process::Command as ProcessCommand;
+
+    #[test]
+    fn memory_exchange_sends_the_turn_start_time() {
+        let request = super::ExchangeRequest {
+            request_id: "r",
+            user_id: "1",
+            chat_scope: "chat_1",
+            conversation_id: None,
+            user_text: "q",
+            assistant_text: "a",
+            wire_messages: None,
+            epoch: None,
+            turn_started_at: 1_700_000_000_000,
+        };
+        let body = serde_json::to_value(&request).expect("json");
+        assert_eq!(body["turnStartedAt"], 1_700_000_000_000_i64);
+    }
     use std::time::Duration;
 
     #[test]

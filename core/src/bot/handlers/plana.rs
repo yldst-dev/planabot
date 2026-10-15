@@ -33,7 +33,7 @@ pub(super) static ADMIN_NOTICE_LAST_SENT: Lazy<
 
 pub(crate) async fn handle_plana_message<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
 where
-    B: Requester + teloxide::net::Download + Send + Sync + 'static,
+    B: Requester + teloxide::net::Download + Clone + Send + Sync + 'static,
     <B as Requester>::Err: std::error::Error + Send + Sync + 'static,
     B::SendChatAction: Send,
     B::SetMessageReaction: Send,
@@ -43,11 +43,14 @@ where
     if album && !state.claim_media_group_turn(&msg) {
         return Ok(());
     }
+    let task = state.tasks.enter().await;
+    let turn_started_at = crate::schedule::now_ms();
     tokio::spawn(async move {
+        let _task = task;
         if album {
             time::sleep(MEDIA_GROUP_SETTLE).await;
         }
-        if let Err(err) = run_plana_turn(bot, msg, state).await {
+        if let Err(err) = run_plana_turn(bot, msg, state, turn_started_at).await {
             report_handler_error(&err);
         }
     });
@@ -55,9 +58,14 @@ where
 }
 
 #[allow(clippy::collapsible_if)]
-async fn run_plana_turn<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
+async fn run_plana_turn<B>(
+    bot: B,
+    msg: Message,
+    state: AppState,
+    turn_started_at: i64,
+) -> HandlerResult
 where
-    B: Requester + teloxide::net::Download + Send + Sync + 'static,
+    B: Requester + teloxide::net::Download + Clone + Send + Sync + 'static,
     <B as Requester>::Err: std::error::Error + Send + Sync + 'static,
     B::SendChatAction: Send,
     B::SetMessageReaction: Send,
@@ -70,7 +78,11 @@ where
         return Ok(());
     }
 
-    state.record_group_chat(&msg).await;
+    {
+        let state = state.clone();
+        let msg = msg.clone();
+        tokio::spawn(async move { state.record_group_chat(&msg).await });
+    }
 
     let Some(text) = extract_message_text(&msg).or_else(|| media_reply_text(&msg, &state)) else {
         return Ok(());
@@ -152,7 +164,11 @@ where
         .map(|id| id.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    add_heart_reaction(&bot, &msg).await;
+    {
+        let bot = bot.clone();
+        let msg = msg.clone();
+        tokio::spawn(async move { add_heart_reaction(&bot, &msg).await });
+    }
 
     let conversation_lock =
         state.planabrain_conversation_lock(&format!("{}_{}", msg.chat.id.0, conversation_scope_id));
@@ -200,6 +216,13 @@ where
     }
 
     if let Some(todo) = prepared.todo.as_ref().filter(|todo| todo.handled) {
+        if let (false, None, Some(owner_user_id)) = (
+            msg.chat.is_private(),
+            msg.sender_chat.as_ref(),
+            requester_user_id,
+        ) {
+            return send_todo_privately(&bot, &msg, &state, owner_user_id, &todo.message).await;
+        }
         let sent =
             send_reply_with_fallback(&bot, &msg, todo.message.clone(), SendOptions::default())
                 .await?;
@@ -327,6 +350,7 @@ where
                     Some(&conversation_scope_id),
                     outcome.transcript.as_ref(),
                     &request_id,
+                    turn_started_at,
                 )
                 .await
                 {
@@ -501,7 +525,7 @@ pub(super) async fn maybe_notify_admin_service_error<B>(
         warn!("관리자 채팅이 없어 알림을 로그로만 남깁니다: AI 서비스 오류 {label}");
         return;
     };
-    let text = format!("[알림] AI 서비스 오류: {label}. 관리자 확인이 필요합니다.");
+    let text = format!("알림.\n선생님.\nAI 서비스 오류: {label}.\n관리자 확인이 필요합니다.");
     if let Err(err) = bot.send_message(admin_chat_id, text).await {
         warn!("관리자 알림 전송 실패: {}", err);
     }
@@ -585,6 +609,35 @@ fn with_image_marker(text: &str, count: usize) -> String {
         return text.to_string();
     }
     format!("{text}\n(이미지 {count}장 첨부)")
+}
+
+pub(super) async fn send_todo_privately<B>(
+    bot: &B,
+    msg: &Message,
+    state: &AppState,
+    user_id: u64,
+    text: &str,
+) -> HandlerResult
+where
+    B: Requester + ?Sized,
+    B::Err: std::error::Error + Send + Sync + 'static,
+{
+    let private_chat = ChatId(user_id as i64);
+    let text = planabrain::truncate_message(text, 4000);
+    let reply = match bot.send_message(private_chat, text).await {
+        Ok(sent) => {
+            state
+                .record_planabrain_reply_for_user(&sent, &format!("todo_{user_id}"), user_id)
+                .await;
+            "확인했습니다.\n선생님.\n할 일 내용은 개인 대화로 보냈습니다."
+        }
+        Err(err) => {
+            warn!("할 일 개인 전송 실패: {}", err);
+            "전달 불가.\n선생님.\n할 일 내용은 개인 대화로만 보냅니다.\n봇과 개인 대화를 먼저 시작해 주십시오."
+        }
+    };
+    send_reply_with_fallback(bot, msg, reply, SendOptions::default()).await?;
+    Ok(())
 }
 
 pub(super) async fn add_heart_reaction<B>(bot: &B, msg: &Message)

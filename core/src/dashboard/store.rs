@@ -34,6 +34,20 @@ pub(crate) struct OverrideFile {
     pub values: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct EntryError {
+    pub key: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for EntryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.key, self.message)
+    }
+}
+
+impl std::error::Error for EntryError {}
+
 struct Startup {
     baseline: BTreeMap<String, Option<String>>,
     applied: BTreeMap<String, String>,
@@ -114,6 +128,7 @@ pub(crate) fn pending_keys(file: &OverrideFile) -> Vec<String> {
             let next = file
                 .values
                 .get(key)
+                .filter(|value| !is_ignored(key, value))
                 .cloned()
                 .or_else(|| baseline_value(key));
             let running = applied_value(key)
@@ -129,10 +144,7 @@ pub(crate) fn pending_keys(file: &OverrideFile) -> Vec<String> {
 
 pub(crate) async fn update(changes: BTreeMap<String, Option<String>>) -> Result<OverrideFile> {
     for (key, value) in &changes {
-        match value {
-            Some(value) => validate_entry(key, value)?,
-            None => validate_key(key)?,
-        }
+        check_change(key, value.as_deref())?;
     }
     let _guard = WRITE_LOCK.lock().await;
     let mut file = load();
@@ -152,7 +164,22 @@ pub(crate) async fn update(changes: BTreeMap<String, Option<String>>) -> Result<
     Ok(file)
 }
 
-pub(crate) fn validate_key(key: &str) -> Result<()> {
+pub(crate) fn check_change(key: &str, value: Option<&str>) -> Result<(), EntryError> {
+    let checked = match value {
+        Some(value) => validate_entry(key, value),
+        None => validate_format(key),
+    };
+    checked.map_err(|err| EntryError {
+        key: key.to_string(),
+        message: err.to_string(),
+    })
+}
+
+pub(crate) fn is_ignored(key: &str, value: &str) -> bool {
+    validate_stored_entry(key, value).is_err()
+}
+
+fn validate_format(key: &str) -> Result<()> {
     let well_formed = !key.is_empty()
         && key.len() <= 64
         && key.starts_with(|c: char| c.is_ascii_uppercase())
@@ -162,6 +189,11 @@ pub(crate) fn validate_key(key: &str) -> Result<()> {
     if !well_formed {
         bail!("키 형식 오류");
     }
+    Ok(())
+}
+
+pub(crate) fn validate_key(key: &str) -> Result<()> {
+    validate_format(key)?;
     if BLOCKED_KEYS.contains(&key) {
         bail!("변경 불가 키");
     }
@@ -200,12 +232,51 @@ fn validate_entry(key: &str, value: &str) -> Result<()> {
     {
         bail!("숫자 ID만 쉼표로 구분해 입력하십시오");
     }
+    let id = value.trim();
+    if key.ends_with("_CHAT_ID") && !id.is_empty() && id.parse::<i64>().is_err() {
+        bail!("채팅 ID는 숫자로 입력하십시오");
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{OverrideFile, validate_entry, validate_key};
+    use super::{OverrideFile, check_change, pending_keys, validate_entry, validate_key};
+
+    #[test]
+    fn chat_ids_must_be_empty_or_a_number() {
+        assert!(validate_entry("PLANABOT_ADMIN_CHAT_ID", "").is_ok());
+        assert!(validate_entry("PLANABOT_ADMIN_CHAT_ID", " 123456789 ").is_ok());
+        assert!(validate_entry("PLANABOT_NOTICE_CHAT_ID", "-1001234567890").is_ok());
+        for value in ["@admin", "12 34", "1e5", "１２３", "-100123456789012345678"] {
+            assert!(
+                validate_entry("PLANABOT_NOTICE_CHAT_ID", value).is_err(),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn deleting_checks_only_the_key_format() {
+        for key in ["HEALTH_SECRET_CORE", "PATH", "PLANABRAIN_SERVER_TOKEN"] {
+            assert!(check_change(key, None).is_ok(), "{key}");
+            assert!(check_change(key, Some("x")).is_err(), "{key}");
+        }
+        let err = check_change("bad key", None).expect_err("format");
+        assert_eq!(
+            (err.key.as_str(), err.message.as_str()),
+            ("bad key", "키 형식 오류")
+        );
+    }
+
+    #[test]
+    fn ignored_entries_are_not_pending() {
+        let mut file = OverrideFile::default();
+        file.values.insert("PATH".to_string(), "/tmp".to_string());
+        file.values
+            .insert("PLANABOT_PENDING_PROBE".to_string(), "1".to_string());
+        assert_eq!(pending_keys(&file), ["PLANABOT_PENDING_PROBE"]);
+    }
 
     #[test]
     fn accepts_catalog_and_prefixed_keys() {
@@ -231,6 +302,8 @@ mod tests {
         assert!(validate_key("HIROMI_BIN").is_err());
         assert!(validate_key("HEALTH_PORT").is_err());
         assert!(validate_key("HEALTH_SECRET_BRAIN").is_err());
+        assert!(validate_key("HEALTH_SECRET_CORE").is_err());
+        assert!(validate_key("HIROMI_DOWNLOAD_DIR").is_err());
         assert!(validate_key("TELEGRAM_API_TOKEN").is_err());
         assert!(validate_key(&"PLANABOT_X".repeat(10)).is_err());
     }

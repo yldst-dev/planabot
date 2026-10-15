@@ -142,18 +142,31 @@ where
     <B as Requester>::SendPhoto: Send,
     <B as Requester>::SendVideo: Send,
 {
+    let LinkPlan { admin, reply } = plan;
     if privileged {
-        for reply in plan.admin {
-            send_new_message(bot, msg, reply).await?;
+        let reposted: HandlerResult = async {
+            for item in admin {
+                send_new_message(bot, msg, item).await?;
+            }
+            Ok(())
         }
-        if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
-            warn!("{} 메시지 삭제 실패: {:?}", label, e);
+        .await;
+        match reposted {
+            Ok(()) => {
+                if let Err(e) = bot.delete_message(msg.chat.id, msg.id).await {
+                    warn!("{} 메시지 삭제 실패: {:?}", label, e);
+                }
+                return Ok(());
+            }
+            Err(e) => warn!(
+                "{} 새 메시지 전송 실패, 답장으로 대신합니다: {:?}",
+                label, e
+            ),
         }
-        return Ok(());
     }
 
-    for reply in plan.reply {
-        send_as_reply(bot, msg, reply).await?;
+    for item in reply {
+        send_as_reply(bot, msg, item).await?;
     }
     Ok(())
 }
@@ -319,4 +332,63 @@ where
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LinkPlan, LinkReply, deliver_link_plan};
+    use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn a_failed_admin_repost_falls_back_to_a_reply_and_keeps_the_original() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let seen = calls.clone();
+        let api = axum::Router::new().fallback(move |uri: axum::http::Uri, body: String| {
+            let seen = seen.clone();
+            async move {
+                let method = uri
+                    .path()
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                let replied = body.contains("reply_parameters");
+                seen.lock().unwrap().push((method.clone(), replied));
+                axum::Json(match (method.as_str(), replied) {
+                    ("sendmessage", false) => serde_json::json!({
+                        "ok": false, "error_code": 400, "description": "Bad Request: message is too long"
+                    }),
+                    ("sendmessage", true) => serde_json::json!({"ok": true, "result": {
+                        "message_id": 2, "date": 0, "text": "short",
+                        "chat": {"id": -100, "title": "g", "type": "supergroup"}
+                    }}),
+                    _ => serde_json::json!({"ok": true, "result": true}),
+                })
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, api).await });
+        let bot = teloxide::Bot::new("1:test").set_api_url(url.parse().unwrap());
+        let msg: teloxide::types::Message = serde_json::from_value(serde_json::json!({
+            "message_id": 1, "date": 0, "text": "long",
+            "chat": {"id": -100, "title": "g", "type": "supergroup"},
+            "from": {"id": 42, "is_bot": false, "first_name": "A"}
+        }))
+        .unwrap();
+        let plan = LinkPlan {
+            admin: vec![LinkReply::text("long")],
+            reply: vec![LinkReply::text("short")],
+        };
+        deliver_link_plan(&bot, &msg, true, "test", plan)
+            .await
+            .unwrap();
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                ("sendmessage".to_string(), false),
+                ("sendmessage".to_string(), true)
+            ]
+        );
+    }
 }

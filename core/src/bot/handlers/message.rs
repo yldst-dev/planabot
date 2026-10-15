@@ -150,11 +150,13 @@ where
         return Ok(());
     }
     let turn = state.notices.turn.clone().lock_owned().await;
+    let task = state.tasks.enter().await;
     tokio::spawn(async move {
         tokio::time::sleep(NOTICE_ALBUM_SETTLE).await;
         let ids = state.notices.take_album(&group);
         broadcast_notice(&bot, &state, msg.chat.id, ids).await;
         drop(turn);
+        drop(task);
     });
     Ok(())
 }

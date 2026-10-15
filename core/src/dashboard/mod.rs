@@ -195,6 +195,7 @@ struct FieldView {
     pending: bool,
     custom: bool,
     env_only: bool,
+    ignored: bool,
 }
 
 #[derive(Serialize)]
@@ -231,7 +232,11 @@ fn field_view(
         (None, Some(_)) => "env",
         (None, None) => "unset",
     };
-    let effective = stored.cloned().or_else(|| env_value.clone());
+    let ignored = stored.is_some_and(|value| store::is_ignored(key, value));
+    let effective = stored
+        .filter(|_| !ignored)
+        .cloned()
+        .or_else(|| env_value.clone());
     let secret = kind == Kind::Secret;
     FieldView {
         key: key.to_string(),
@@ -259,6 +264,7 @@ fn field_view(
         pending,
         custom: field.is_none(),
         env_only: field.is_some_and(|field| field.env_only),
+        ignored,
     }
 }
 
@@ -323,8 +329,22 @@ async fn save_settings(headers: HeaderMap, Json(body): Json<SaveRequest>) -> Res
             log::info!("대시보드 설정 저장: {}", keys.join(", "));
             json(StatusCode::OK, &settings_view())
         }
-        Err(err) => error(StatusCode::BAD_REQUEST, &format!("저장 불가. {err}")),
+        Err(err) => match err.downcast_ref::<store::EntryError>() {
+            Some(entry) => json(
+                StatusCode::BAD_REQUEST,
+                &serde_json::json!({ "error": entry.message, "key": entry.key }),
+            ),
+            None => write_failed(&err),
+        },
     }
+}
+
+fn write_failed(err: &anyhow::Error) -> Response {
+    log::error!("대시보드 설정 파일 저장 실패: {err}");
+    error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "설정 파일을 저장하지 못했습니다.",
+    )
 }
 
 #[derive(Deserialize)]
@@ -335,6 +355,7 @@ struct ImportRequest {
 #[derive(Serialize)]
 struct ImportView {
     imported: Vec<String>,
+    skipped: Vec<store::EntryError>,
     settings: SettingsView,
 }
 
@@ -342,8 +363,10 @@ fn importable_env(
     keys: &[String],
     file: &store::OverrideFile,
     env: impl Fn(&str) -> Option<String>,
-) -> BTreeMap<String, Option<String>> {
-    keys.iter()
+) -> (BTreeMap<String, Option<String>>, Vec<store::EntryError>) {
+    let mut skipped = Vec::new();
+    let changes = keys
+        .iter()
         .filter(|key| catalog::find(key).is_some_and(|field| !field.env_only))
         .filter(|key| !file.values.contains_key(*key))
         .filter_map(|key| {
@@ -351,18 +374,28 @@ fn importable_env(
                 .filter(|value| !value.trim().is_empty())
                 .map(|value| (key.clone(), Some(value)))
         })
-        .collect()
+        .filter(
+            |(key, value)| match store::check_change(key, value.as_deref()) {
+                Ok(()) => true,
+                Err(err) => {
+                    skipped.push(err);
+                    false
+                }
+            },
+        )
+        .collect();
+    (changes, skipped)
 }
 
 async fn import_env(headers: HeaderMap, Json(body): Json<ImportRequest>) -> Response {
     if let Some(response) = reject(&headers, true) {
         return response;
     }
-    let changes = importable_env(&body.keys, &store::load(), store::baseline_value);
+    let (changes, skipped) = importable_env(&body.keys, &store::load(), store::baseline_value);
     let imported: Vec<String> = changes.keys().cloned().collect();
     if !changes.is_empty() {
         if let Err(err) = store::update(changes).await {
-            return error(StatusCode::BAD_REQUEST, &format!("가져오기 불가. {err}"));
+            return write_failed(&err);
         }
         log::info!("대시보드로 env 값 가져오기: {}", imported.join(", "));
     }
@@ -370,6 +403,7 @@ async fn import_env(headers: HeaderMap, Json(body): Json<ImportRequest>) -> Resp
         StatusCode::OK,
         &ImportView {
             imported,
+            skipped,
             settings: settings_view(),
         },
     )
@@ -411,8 +445,8 @@ mod tests {
     fn secret_fields_never_expose_values() {
         let stored = "super-secret-token-value".to_string();
         let view = field_view(
-            "TELEGRAM_API_TOKEN",
-            super::catalog::find("TELEGRAM_API_TOKEN"),
+            "CODEX_GATEWAY_API_KEY",
+            super::catalog::find("CODEX_GATEWAY_API_KEY"),
             Some(&stored),
             true,
         );
@@ -420,6 +454,16 @@ mod tests {
         assert!(view.env_value.is_none());
         assert_eq!(view.hint.as_deref(), Some("•••• alue"));
         assert_eq!(view.source, "dashboard");
+        assert!(!view.ignored);
+    }
+
+    #[test]
+    fn ignored_stored_entries_show_the_running_value() {
+        let stored = "/stored".to_string();
+        let view = field_view("PATH", None, Some(&stored), false);
+        assert!(view.ignored);
+        assert_eq!(view.source, "dashboard");
+        assert_eq!(view.value, std::env::var("PATH").ok());
     }
 
     #[test]
@@ -435,6 +479,7 @@ mod tests {
             "PLANABRAIN_NOT_IN_CATALOG",
             "PATH",
             "PLANABRAIN_MEMORY_MAX_TURNS",
+            "PLANABOT_ADMIN_CHAT_ID",
         ]
         .iter()
         .map(|key| key.to_string())
@@ -444,13 +489,20 @@ mod tests {
             "PLANABRAIN_MEMORY_MAX_TURNS" => None,
             _ => Some(format!("env-{key}")),
         };
-        let changes = importable_env(&keys, &file, env);
+        let (changes, skipped) = importable_env(&keys, &file, env);
         assert_eq!(
             changes.into_iter().collect::<Vec<_>>(),
             vec![(
                 "PLANABRAIN_AUX_MODEL".to_string(),
                 Some("env-PLANABRAIN_AUX_MODEL".to_string())
             )]
+        );
+        assert_eq!(
+            serde_json::to_value(&skipped).unwrap(),
+            serde_json::json!([{
+                "key": "PLANABOT_ADMIN_CHAT_ID",
+                "message": "채팅 ID는 숫자로 입력하십시오"
+            }])
         );
     }
 

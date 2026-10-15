@@ -6,15 +6,52 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShareClaim {
     pub token: String,
     pub gallery_id: String,
     pub title: String,
     pub pages: u32,
+    #[serde(default)]
+    pub total_pages: u32,
     pub url: String,
     pub path: String,
     pub size: u64,
+}
+
+impl ShareClaim {
+    pub fn pages_line(&self) -> String {
+        if self.total_pages > self.pages {
+            format!(
+                "{}/{}쪽\n일부 쪽은 받지 못했습니다.",
+                self.pages, self.total_pages
+            )
+        } else {
+            format!("{}쪽", self.pages)
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ShareFailure {
+    code: String,
+    message: String,
+}
+
+impl std::fmt::Display for ShareFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ShareFailure {}
+
+pub fn failure_notice(err: &anyhow::Error) -> Option<&'static str> {
+    match err.downcast_ref::<ShareFailure>()?.code.as_str() {
+        "too_large" => Some("불가.\n선생님.\n갤러리가 너무 커서 뷰어를 만들 수 없습니다."),
+        "id_mismatch" => Some("불가.\n선생님.\n요청한 번호와 다른 갤러리가 확인되어 중단했습니다."),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -24,9 +61,11 @@ struct ShareOutput {
     gallery_id: Option<u64>,
     title: Option<String>,
     pages: Option<u32>,
+    total_pages: Option<u32>,
     url: Option<String>,
     path: Option<String>,
     size: Option<u64>,
+    code: Option<String>,
     error: Option<String>,
 }
 
@@ -60,11 +99,13 @@ pub async fn share_gallery(bin: &Path, gallery_id: &str) -> Result<ShareClaim> {
         format!("hiromi share JSON 파싱 실패 stdout={stdout} stderr={stderr}")
     })?;
     if !parsed.ok {
-        return Err(anyhow!(
-            parsed
+        return Err(ShareFailure {
+            code: parsed.code.unwrap_or_default(),
+            message: parsed
                 .error
-                .unwrap_or_else(|| "hiromi share 실패".to_string())
-        ));
+                .unwrap_or_else(|| "hiromi share 실패".to_string()),
+        }
+        .into());
     }
     let token = parsed.token.unwrap_or_default();
     let url = parsed.url.unwrap_or_default();
@@ -82,6 +123,7 @@ pub async fn share_gallery(bin: &Path, gallery_id: &str) -> Result<ShareClaim> {
             .unwrap_or_else(|| gallery_id.to_string()),
         title: parsed.title.unwrap_or_default(),
         pages: parsed.pages.unwrap_or(0),
+        total_pages: parsed.total_pages.unwrap_or(0),
         url,
         path,
         size: parsed.size.unwrap_or(0),
@@ -101,7 +143,22 @@ pub fn start_share_token(text: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ShareOutput, start_share_token};
+    use super::{ShareClaim, ShareOutput, start_share_token};
+
+    #[test]
+    fn partial_shares_show_saved_and_total_pages() {
+        let claim = |pages, total_pages| ShareClaim {
+            pages,
+            total_pages,
+            ..ShareClaim::default()
+        };
+        assert_eq!(claim(2, 2).pages_line(), "2쪽");
+        assert_eq!(claim(2, 0).pages_line(), "2쪽");
+        assert_eq!(
+            claim(1, 3).pages_line(),
+            "1/3쪽\n일부 쪽은 받지 못했습니다."
+        );
+    }
 
     #[test]
     fn parses_ok_share_json() {
@@ -180,6 +237,27 @@ mod tests {
         assert_eq!(claim.token, "tok");
         assert_eq!(claim.path, "/tmp/shares/tok.html");
         assert!(claim.url.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn share_gallery_keeps_the_failure_code() {
+        use super::{failure_notice, share_gallery};
+        let dir = std::env::temp_dir().join(format!("hiromi-share-code-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("hiromi-mock");
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\necho '{\"ok\":false,\"code\":\"too_large\",\"error\":\"gallery too large: 3000 pages\"}'\nexit 1\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = share_gallery(&bin, "1").await.unwrap_err();
+        assert_eq!(err.to_string(), "gallery too large: 3000 pages");
+        assert!(failure_notice(&err).is_some_and(|text| text.contains("너무 커서")));
+        assert!(failure_notice(&anyhow::anyhow!("job already running")).is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

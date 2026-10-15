@@ -3,7 +3,7 @@ use log::{error, warn};
 use teloxide::prelude::*;
 use teloxide::types::{
     CallbackQuery, ChatId, ChatKind, InlineKeyboardButton, InlineKeyboardMarkup, InputFile,
-    ParseMode, UserId,
+    ParseMode, ReplyParameters, UserId,
 };
 use teloxide::utils::html;
 use url::Url;
@@ -241,6 +241,17 @@ where
                         .reply_markup(keyboard)
                         .await;
                 }
+                if let Some(notice) = crate::hiromi_share::failure_notice(&err) {
+                    let sent = bot
+                        .send_message(chat_id, notice)
+                        .reply_parameters(
+                            ReplyParameters::new(message_id).allow_sending_without_reply(),
+                        )
+                        .await;
+                    if let Err(err) = sent {
+                        warn!("뷰어 실패 안내 전송 실패 (id {}): {}", gallery_id, err);
+                    }
+                }
             }
         }
     });
@@ -356,8 +367,8 @@ where
     if !claim.path.is_empty() {
         let title = html::escape(&claim.title);
         let caption = format!(
-            "전송 완료.\n선생님.\n<b>제목:</b> {title}\n{pages}쪽",
-            pages = claim.pages
+            "전송 완료.\n선생님.\n<b>제목:</b> {title}\n{pages}",
+            pages = claim.pages_line()
         );
         let file_name = format!("{}.html", claim.gallery_id);
         let document = InputFile::file(claim.path.clone()).file_name(file_name);
@@ -371,8 +382,8 @@ where
     let title = html::escape(&claim.title);
     let url = html::escape(&claim.url);
     let text = format!(
-        "전송 완료.\n선생님.\n<b>제목:</b> {title}\n{pages}쪽\n{url}",
-        pages = claim.pages
+        "전송 완료.\n선생님.\n<b>제목:</b> {title}\n{pages}\n{url}",
+        pages = claim.pages_line()
     );
     let mut request = bot
         .send_message(user_id, text)

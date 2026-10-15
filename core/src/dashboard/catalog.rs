@@ -216,12 +216,13 @@ pub(crate) const FIELDS: &[Field] = &[
         "AI 서비스 오류 알림을 받을 관리자 채팅의 숫자 ID입니다. 비우면 로그에만 남깁니다.",
         Kind::Number,
     ),
-    field(
+    hinted(
         "PLANABRAIN_ENABLED",
         "access",
         "planabrain 사용",
         "끄면 AI 응답을 모두 멈춥니다.",
         Kind::Bool,
+        "1",
     ),
     hinted(
         "PLANABRAIN_ALLOWED_CHAT_IDS",
@@ -239,12 +240,13 @@ pub(crate) const FIELDS: &[Field] = &[
         Kind::Text,
         "123456789",
     ),
-    field(
+    hinted(
         "PLANABOT_MUSIC_CARD_ENABLED",
         "media",
         "음악 카드",
         "음악 링크를 표지 카드 이미지로 보냅니다.",
         Kind::Bool,
+        "1",
     ),
     hinted(
         "PLANABOT_MUSIC_CARD_FONT_DIR",
@@ -269,13 +271,12 @@ pub(crate) const FIELDS: &[Field] = &[
         "실행할 프로그램 경로라서 대시보드에서는 바꿀 수 없습니다.",
         Kind::Text,
     ),
-    hinted(
+    env_only(
         "HIROMI_DOWNLOAD_DIR",
         "media",
         "갤러리 임시 폴더",
-        "hiromi가 내려받은 파일을 두는 곳입니다.",
+        "hiromi가 내려받은 파일을 두는 곳입니다. 컨테이너 시작 스크립트가 env 값으로 폴더를 준비해서 env에서만 바꿉니다.",
         Kind::Text,
-        "/tmp/hiromi-downloads",
     ),
     hinted(
         "SENDVIS_HOST",
@@ -337,12 +338,13 @@ pub(crate) const FIELDS: &[Field] = &[
         Kind::Number,
         "1024",
     ),
-    field(
+    hinted(
         "PLANABRAIN_DELIVERY_REWRITE_ENABLED",
         "model",
         "전달문 재작성",
         "보내기 전에 말투를 한 번 더 다듬습니다.",
         Kind::Bool,
+        "1",
     ),
     hinted(
         "PLANABRAIN_AUX_MODEL",
@@ -352,12 +354,13 @@ pub(crate) const FIELDS: &[Field] = &[
         Kind::Text,
         "gpt-5.6-sol",
     ),
-    field(
+    hinted(
         "PLANABRAIN_SEARCH_QUERY_REWRITE",
         "model",
         "검색어 재작성",
         "시의성 질문의 검색어를 모델이 다시 만듭니다.",
         Kind::Bool,
+        "1",
     ),
     field(
         "PLANABRAIN_CONTINUOUS_CHAT",
@@ -402,12 +405,13 @@ pub(crate) const FIELDS: &[Field] = &[
         "codex일 때 친밀 모드 재시도에 쓸 모델입니다. 비우면 주 모델을 씁니다.",
         Kind::Text,
     ),
-    field(
+    hinted(
         "PLANABOT_LOCAL_MEMORY_ENABLED",
         "memory",
         "로컬 메모리",
         "대화 기억을 로컬에 저장합니다.",
         Kind::Bool,
+        "1",
     ),
     hinted(
         "PLANABRAIN_MEMORY_DB_PATH",
@@ -449,19 +453,21 @@ pub(crate) const FIELDS: &[Field] = &[
         Kind::Number,
         "900",
     ),
-    field(
+    hinted(
         "PLANABRAIN_MEMORY_WRITER_ENABLED",
         "memory",
         "장기 기억 정리",
         "답변 뒤 보조 모델로 장기 기억을 추가, 수정, 삭제합니다.",
         Kind::Bool,
+        "1",
     ),
-    field(
+    hinted(
         "PLANABRAIN_WEB_FETCH_ENABLED",
         "webfetch",
         "웹 가져오기",
         "질문 속 링크의 본문을 읽어 옵니다.",
         Kind::Bool,
+        "1",
     ),
     hinted(
         "PLANABRAIN_WEB_FETCH_TIMEOUT_MS",
@@ -608,12 +614,13 @@ pub(crate) const FIELDS: &[Field] = &[
         Kind::Number,
         "8000",
     ),
-    field(
+    hinted(
         "PLANABOT_PLANABRAIN_SERVER",
         "system",
         "planabrain 상주 서버",
         "끄면 요청마다 CLI 프로세스를 띄웁니다.",
         Kind::Bool,
+        "1",
     ),
     hinted(
         "PLANABRAIN_SERVER_PORT",
@@ -672,6 +679,22 @@ pub(crate) const FIELDS: &[Field] = &[
         ".planabot/planabrain_replies.json",
     ),
     hinted(
+        "PLANABOT_NOTICE_PROGRESS_PATH",
+        "system",
+        "공지 진행 파일",
+        "이미 전달한 공지를 다시 보내지 않도록 마지막 공지 위치를 저장하는 파일입니다.",
+        Kind::Text,
+        ".planabot/notice_progress.json",
+    ),
+    hinted(
+        "PLANABOT_SHUTDOWN_MARK_PATH",
+        "system",
+        "종료 시각 파일",
+        "종료한 시각을 남겨 재시작하는 동안 온 메시지를 놓치지 않게 하는 파일입니다.",
+        Kind::Text,
+        ".planabot/shutdown_mark.json",
+    ),
+    hinted(
         "PLANABOT_TOKEN_LIMIT",
         "system",
         "토큰 측정 기준",
@@ -694,11 +717,11 @@ pub(crate) const FIELDS: &[Field] = &[
         Kind::Number,
         "1",
     ),
-    field(
+    env_only(
         "HEALTH_SECRET_CORE",
         "system",
         "헬스체크 비밀값",
-        "설정하면 /health에 secret 쿼리가 필요합니다. 컨테이너 헬스체크는 env 값을 읽으므로 env에도 같은 값을 두십시오.",
+        "설정하면 /health에 secret 쿼리가 필요합니다. 컨테이너 헬스체크가 env 값을 읽어서 env에서만 바꿉니다.",
         Kind::Secret,
     ),
     env_only(

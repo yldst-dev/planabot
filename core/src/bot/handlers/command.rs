@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use log::{error, warn};
+use log::error;
 use teloxide::prelude::*;
 use teloxide::types::{InputFile, Message, ParseMode};
 use teloxide::utils::html;
@@ -267,25 +267,7 @@ where
                         .await;
                 }
                 Ok(result) => {
-                    let private_chat = ChatId(user_id as i64);
-                    let text = planabrain::truncate_message(&result.markdown, 4000);
-                    let reply = match bot.send_message(private_chat, text).await {
-                        Ok(sent) => {
-                            state
-                                .record_planabrain_reply_for_user(
-                                    &sent,
-                                    &format!("todo_{user_id}"),
-                                    user_id,
-                                )
-                                .await;
-                            "확인했습니다.\n선생님.\n할 일 목록은 개인 대화로 보냈습니다."
-                        }
-                        Err(err) => {
-                            warn!("할 일 목록 개인 전송 실패: {}", err);
-                            "불가.\n선생님.\n할 일 목록은 개인 대화로만 보냅니다.\n봇과 개인 대화를 먼저 시작해 주십시오."
-                        }
-                    };
-                    send_reply_with_fallback(&bot, &msg, reply, SendOptions::default()).await?;
+                    send_todo_privately(&bot, &msg, &state, user_id, &result.markdown).await?;
                 }
                 Err(err) => {
                     error!("todo 목록 조회 실패: {}", err);

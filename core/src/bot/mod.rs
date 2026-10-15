@@ -7,7 +7,8 @@ mod state;
 mod telegram;
 
 use anyhow::Result;
-use log::error;
+use log::{error, warn};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use teloxide::dispatching::{ShutdownToken, UpdateFilterExt};
@@ -29,9 +30,16 @@ pub type HandlerResult = Result<()>;
 const TURN_DRAIN_LIMIT: Duration = Duration::from_secs(190);
 
 static SHUTDOWN: OnceLock<ShutdownToken> = OnceLock::new();
+static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn request_shutdown() -> bool {
-    SHUTDOWN.get().is_some_and(|token| token.shutdown().is_ok())
+    let Some(token) = SHUTDOWN.get() else {
+        return false;
+    };
+    if SHUTDOWN_REQUESTED.swap(true, Ordering::SeqCst) {
+        return true;
+    }
+    token.shutdown().is_ok()
 }
 
 pub async fn run<B>(bot: B, state: AppState) -> Result<()>
@@ -118,9 +126,11 @@ where
     dispatcher
         .dispatch_with_listener(update_listener, update_listener_error_handler)
         .await;
-    drain_state
-        .wait_for_planabrain_turns(TURN_DRAIN_LIMIT)
-        .await;
+    SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+    state::record_shutdown_mark().await;
+    if !drain_state.tasks.drain(TURN_DRAIN_LIMIT).await {
+        warn!("처리 중인 작업을 기다리다 시간이 지나 종료합니다.");
+    }
 
     Ok(())
 }

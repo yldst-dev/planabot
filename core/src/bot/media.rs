@@ -184,6 +184,14 @@ pub(crate) fn skip_notice(skipped: &[ImageSkip]) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
+fn cap_turn_images(mut sources: Vec<ImageSource>) -> (Vec<ImageSource>, Vec<ImageSkip>) {
+    if sources.len() <= MAX_TURN_IMAGES {
+        return (sources, Vec::new());
+    }
+    sources.truncate(MAX_TURN_IMAGES);
+    (sources, vec![ImageSkip::TooMany])
+}
+
 pub(crate) async fn load_turn_images<B>(
     bot: &B,
     sources: Vec<ImageSource>,
@@ -202,11 +210,8 @@ where
         };
     }
     let mut images = TurnImages::default();
-    let mut skipped = Vec::new();
-    if sources.len() > MAX_TURN_IMAGES {
-        skipped.push(ImageSkip::TooMany);
-    }
-    for source in sources.into_iter().take(MAX_TURN_IMAGES) {
+    let (sources, mut skipped) = cap_turn_images(sources);
+    for source in sources {
         match download_image(bot, &source).await {
             Ok(input) => {
                 images.inputs.push(input);
@@ -407,7 +412,7 @@ impl MediaGroupCache {
 #[cfg(test)]
 mod tests {
     use super::{
-        ImageSkip, ImageSource, MAX_TURN_IMAGES, MediaGroupCache, extract_image_source,
+        ImageSkip, ImageSource, MediaGroupCache, cap_turn_images, extract_image_source,
         media_label, own_image_first, preferred_photo, skip_notice, sniff_image_mime,
         sticker_image_source,
     };
@@ -635,16 +640,14 @@ mod tests {
     }
 
     #[test]
-    fn the_replied_album_photo_comes_first_and_extra_photos_get_a_notice() {
+    fn the_replied_album_photo_comes_first_and_extra_photos_are_dropped_with_a_notice() {
         let group: Vec<ImageSource> = (1..=10).map(|id| source(&format!("p{id}"))).collect();
-        let ordered = own_image_first(Some(source("p7")), group);
-        let ids: Vec<&str> = ordered.iter().map(|s| s.file_id.as_str()).collect();
-        assert_eq!(ids[..MAX_TURN_IMAGES], ["p7", "p1", "p2", "p3"]);
-        assert_eq!(ordered.len(), 10);
-        assert!(
-            skip_notice(&[ImageSkip::TooMany])
-                .expect("notice")
-                .contains("4장까지만")
-        );
+        let (kept, skipped) = cap_turn_images(own_image_first(Some(source("p7")), group));
+        let ids: Vec<&str> = kept.iter().map(|s| s.file_id.as_str()).collect();
+        assert_eq!(ids, ["p7", "p1", "p2", "p3"]);
+        assert!(skip_notice(&skipped).expect("notice").contains("4장까지만"));
+        let (kept, skipped) = cap_turn_images(vec![source("a"), source("b")]);
+        assert_eq!(kept.len(), 2);
+        assert!(skipped.is_empty());
     }
 }
