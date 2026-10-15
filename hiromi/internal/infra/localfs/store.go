@@ -86,6 +86,21 @@ func (s *Store) Read(relPath string) ([]byte, error) {
 	return b, nil
 }
 
+func (s *Store) Open(relPath string) (io.ReadCloser, error) {
+	full, err := s.resolve(relPath)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(full)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("%w: %v", domain.ErrStorage, err)
+	}
+	return f, nil
+}
+
 func (s *Store) Write(relPath string, r io.Reader) (int64, error) {
 	full, err := s.resolve(relPath)
 	if err != nil {
@@ -103,7 +118,7 @@ func (s *Store) Write(relPath string, r io.Reader) (int64, error) {
 	closeErr := f.Close()
 	if copyErr != nil {
 		_ = os.Remove(tmp)
-		return 0, fmt.Errorf("%w: %v", domain.ErrStorage, copyErr)
+		return 0, fmt.Errorf("%w: %w", domain.ErrStorage, copyErr)
 	}
 	if closeErr != nil {
 		_ = os.Remove(tmp)

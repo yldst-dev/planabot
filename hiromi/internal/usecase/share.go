@@ -1,7 +1,6 @@
 package usecase
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -90,30 +89,34 @@ func (s *ShareService) Deliver(ctx context.Context, id uint64) (*Share, error) {
 		return nil, err
 	}
 	rel := path.Join(dir, domain.ViewerFileName)
-	html, err := s.store.Read(rel)
-	if err != nil || len(html) == 0 {
+	ok, size, err := s.store.Exists(rel)
+	if err != nil || !ok || size == 0 {
 		return nil, domain.ErrNoViewer
 	}
+	html, err := s.store.Open(rel)
+	if err != nil {
+		return nil, domain.ErrNoViewer
+	}
+	defer html.Close()
 	token, err := newClaimToken()
 	if err != nil {
 		return nil, err
 	}
-	size := int64(len(html))
 	share := &Share{
 		Token:     token,
 		GalleryID: res.GalleryID,
 		Title:     res.Title,
-		Pages:     res.PageCount,
+		Pages:     len(res.Saved),
 		Size:      size,
 	}
 	if size <= s.telegramLimit {
 		staged := path.Join("shares", token+".html")
-		if _, err := s.store.Write(staged, bytes.NewReader(html)); err != nil {
+		if _, err := s.store.Write(staged, html); err != nil {
 			return nil, err
 		}
 		share.Path = filepath.Join(s.store.Root(), filepath.FromSlash(staged))
 	} else {
-		up, err := s.uploader.Upload(ctx, domain.ViewerFileName, size, bytes.NewReader(html))
+		up, err := s.uploader.Upload(ctx, domain.ViewerFileName, size, html)
 		if err != nil {
 			return nil, err
 		}

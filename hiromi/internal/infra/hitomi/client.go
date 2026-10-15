@@ -84,6 +84,7 @@ func New(cfg Config) *Client {
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
 		httpClient = newHTTPClient(cfg.Timeout, cfg.DisableSNI)
+		httpClient.CheckRedirect = redirectPolicy(cfg)
 	}
 	return &Client{
 		cfg:    cfg,

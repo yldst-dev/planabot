@@ -3,8 +3,10 @@ package sendshare
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/yldst-dev/send.vis.ee-api/pkg/sendvis"
 )
@@ -44,5 +46,25 @@ func TestUploaderUsesHostMaxLimits(t *testing.T) {
 	}
 	if got.URL == "" {
 		t.Fatal("url")
+	}
+}
+
+type stalledVis struct{ stubVis }
+
+func (s *stalledVis) Instance(ctx context.Context) (sendvis.Instance, error) {
+	<-ctx.Done()
+	return sendvis.Instance{}, ctx.Err()
+}
+
+func TestUploaderGivesUpOnAStalledHost(t *testing.T) {
+	limitsTimeout = 50 * time.Millisecond
+	defer func() { limitsTimeout = 30 * time.Second }()
+	started := time.Now()
+	_, err := NewWithClient(&stalledVis{}).Upload(context.Background(), "viewer.html", 12, bytes.NewReader([]byte("<html></html>")))
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > 5*time.Second {
+		t.Fatalf("err %v after %s", err, time.Since(started))
+	}
+	if got := uploadTimeout(100 << 20); got != 2*time.Minute+200*time.Second {
+		t.Fatalf("upload timeout %s", got)
 	}
 }

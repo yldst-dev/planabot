@@ -100,8 +100,9 @@ func newMemStore() *memStore {
 
 type stubViewer struct{}
 
-func (stubViewer) Render(doc domain.ViewerDocument) ([]byte, error) {
-	return []byte(doc.Title), nil
+func (stubViewer) Render(w io.Writer, doc domain.ViewerDocument) error {
+	_, err := io.WriteString(w, doc.Title)
+	return err
 }
 
 func (m *memStore) Root() string { return "/tmp/downloads" }
@@ -126,6 +127,14 @@ func (m *memStore) Read(relPath string) ([]byte, error) {
 	out := make([]byte, len(b))
 	copy(out, b)
 	return out, nil
+}
+
+func (m *memStore) Open(relPath string) (io.ReadCloser, error) {
+	b, err := m.Read(relPath)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(strings.NewReader(string(b))), nil
 }
 
 func (m *memStore) Write(relPath string, r io.Reader) (int64, error) {

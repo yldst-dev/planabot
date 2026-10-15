@@ -40,6 +40,7 @@ type FileStore interface {
 	Root() string
 	Exists(relPath string) (bool, int64, error)
 	Read(relPath string) ([]byte, error)
+	Open(relPath string) (io.ReadCloser, error)
 	Write(relPath string, r io.Reader) (int64, error)
 	RemoveAll(relPath string) error
 }
@@ -76,5 +77,5 @@ type ClaimStore interface {
 }
 
 type ViewerRenderer interface {
-	Render(doc domain.ViewerDocument) ([]byte, error)
+	Render(w io.Writer, doc domain.ViewerDocument) error
 }

@@ -3,8 +3,8 @@ package viewer
 import (
 	_ "embed"
 	"encoding/base64"
-	"encoding/json"
 	"html"
+	"io"
 	"strings"
 
 	"hiromi/internal/domain"
@@ -14,41 +14,56 @@ import (
 //go:embed template.html
 var rawTemplate string
 
+var templateHead, templateTail, _ = strings.Cut(rawTemplate, "__HIROMI_PAGES__")
+
 type Renderer struct{}
 
 func New() *Renderer {
 	return &Renderer{}
 }
 
-func (r *Renderer) Render(doc domain.ViewerDocument) ([]byte, error) {
-	uris := make([]string, 0, len(doc.Pages))
+func (r *Renderer) Render(w io.Writer, doc domain.ViewerDocument) error {
+	title := strings.NewReplacer("__HIROMI_TITLE__", html.EscapeString(doc.Title))
+	if _, err := title.WriteString(w, templateHead+"["); err != nil {
+		return err
+	}
+	separator := ""
 	for _, page := range doc.Pages {
-		if len(page.Data) == 0 {
+		data, err := page.Load()
+		if err != nil {
+			return err
+		}
+		if len(data) == 0 {
 			continue
 		}
-		format, data := shrink(page.Format, page.Data)
-		uris = append(uris, dataURI(format, data))
+		format, data := shrink(page.Format, data)
+		if _, err := io.WriteString(w, separator+`"data:`+mimeType(format)+";base64,"); err != nil {
+			return err
+		}
+		encoder := base64.NewEncoder(base64.StdEncoding, w)
+		if _, err := encoder.Write(data); err != nil {
+			return err
+		}
+		if err := encoder.Close(); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(w, `"`); err != nil {
+			return err
+		}
+		separator = ","
 	}
-	pagesJSON, err := json.Marshal(uris)
-	if err != nil {
-		return nil, err
-	}
-	title := html.EscapeString(doc.Title)
-	out := rawTemplate
-	out = strings.ReplaceAll(out, "__HIROMI_TITLE__", title)
-	out = strings.Replace(out, "__HIROMI_PAGES__", string(pagesJSON), 1)
-	return []byte(out), nil
+	_, err := title.WriteString(w, "]"+templateTail)
+	return err
 }
 
-func dataURI(format domain.ImageFormat, data []byte) string {
-	mime := "image/webp"
+func mimeType(format domain.ImageFormat) string {
 	switch format {
 	case domain.FormatAVIF:
-		mime = "image/avif"
+		return "image/avif"
 	case domain.FormatJXL:
-		mime = "image/jxl"
+		return "image/jxl"
 	}
-	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
+	return "image/webp"
 }
 
 var _ port.ViewerRenderer = (*Renderer)(nil)

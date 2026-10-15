@@ -1,10 +1,15 @@
 package localfs
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"hiromi/internal/domain"
 )
 
 func TestWriteAndExists(t *testing.T) {
@@ -68,5 +73,35 @@ func TestRemoveAll(t *testing.T) {
 	}
 	if err := s.RemoveAll(""); err == nil {
 		t.Fatal("empty path")
+	}
+}
+
+type failingReader struct{ err error }
+
+func (f failingReader) Read([]byte) (int, error) { return 0, f.err }
+
+func TestWriteKeepsReaderErrorAndOpenStreams(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := fmt.Errorf("%w: connection reset", domain.ErrRemote)
+	if _, err := s.Write("7/001.webp", failingReader{err: cause}); !errors.Is(err, domain.ErrRemote) || !errors.Is(err, domain.ErrStorage) {
+		t.Fatalf("write error %v", err)
+	}
+	if _, err := s.Write("7/viewer.html", strings.NewReader("<html>")); err != nil {
+		t.Fatal(err)
+	}
+	f, err := s.Open("7/viewer.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	b, err := io.ReadAll(f)
+	if err != nil || string(b) != "<html>" {
+		t.Fatalf("open %q %v", b, err)
+	}
+	if _, err := s.Open("7/missing.html"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing %v", err)
 	}
 }

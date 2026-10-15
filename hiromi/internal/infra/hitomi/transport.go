@@ -3,11 +3,34 @@ package hitomi
 import (
 	"context"
 	"crypto/tls"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
+
+func redirectPolicy(cfg Config) func(*http.Request, []*http.Request) error {
+	hosts := map[string]bool{}
+	for _, raw := range []string{cfg.Front, cfg.LTN, cfg.TagIndex} {
+		if u, err := url.Parse(raw); err == nil {
+			hosts[strings.ToLower(u.Hostname())] = true
+		}
+	}
+	cdn := strings.ToLower(cfg.CDN)
+	return func(req *http.Request, via []*http.Request) error {
+		host := strings.ToLower(req.URL.Hostname())
+		if req.URL.Scheme != "https" || !(hosts[host] || host == cdn || strings.HasSuffix(host, "."+cdn)) {
+			return fmt.Errorf("redirect to %s://%s is not allowed", req.URL.Scheme, host)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+}
 
 func newHTTPClient(timeout time.Duration, disableSNI bool) *http.Client {
 	dialer := &net.Dialer{Timeout: 20 * time.Second, KeepAlive: 30 * time.Second}

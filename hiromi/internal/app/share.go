@@ -50,7 +50,7 @@ func RunShare(args []string) error {
 		return writeShareErr(err)
 	}
 	shares := usecase.NewShareService(galleries, downloads, uploader, store, jobstore.NewMemory())
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Minute)
 	defer cancel()
 	share, err := shares.Deliver(ctx, id)
 	if err != nil {

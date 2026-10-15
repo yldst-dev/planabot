@@ -3,6 +3,7 @@ package sendshare
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/yldst-dev/send.vis.ee-api/pkg/sendvis"
 
@@ -18,6 +19,12 @@ type Uploader struct {
 	client visClient
 }
 
+var limitsTimeout = 30 * time.Second
+
+func uploadTimeout(size int64) time.Duration {
+	return 2*time.Minute + time.Duration(size/(512<<10))*time.Second
+}
+
 func New(host string) (*Uploader, error) {
 	c, err := sendvis.New(sendvis.Options{Host: host, MemoryOnly: true})
 	if err != nil {
@@ -31,6 +38,8 @@ func NewWithClient(c visClient) *Uploader {
 }
 
 func (u *Uploader) Limits(ctx context.Context) (port.ShareLimits, error) {
+	ctx, cancel := context.WithTimeout(ctx, limitsTimeout)
+	defer cancel()
 	inst, err := u.client.Instance(ctx)
 	if err != nil {
 		return port.ShareLimits{}, err
@@ -44,6 +53,8 @@ func (u *Uploader) Upload(ctx context.Context, name string, size int64, body io.
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, uploadTimeout(size))
+	defer cancel()
 	file, err := u.client.Put(ctx, name, "text/html; charset=utf-8", size, body, lim.Downloads, lim.ExpireSec)
 	if err != nil {
 		return nil, err

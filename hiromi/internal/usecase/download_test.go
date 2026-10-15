@@ -48,6 +48,14 @@ func (m *memStore) Read(relPath string) ([]byte, error) {
 	return out, nil
 }
 
+func (m *memStore) Open(relPath string) (io.ReadCloser, error) {
+	b, err := m.Read(relPath)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(b)), nil
+}
+
 func (m *memStore) Write(relPath string, r io.Reader) (int64, error) {
 	b, err := io.ReadAll(r)
 	if err != nil {
@@ -187,8 +195,9 @@ func TestDownloadWritesViewer(t *testing.T) {
 
 type stubViewer struct{}
 
-func (stubViewer) Render(doc domain.ViewerDocument) ([]byte, error) {
-	return []byte(doc.Title + " pages=" + strconv.Itoa(len(doc.Pages))), nil
+func (stubViewer) Render(w io.Writer, doc domain.ViewerDocument) error {
+	_, err := io.WriteString(w, doc.Title+" pages="+strconv.Itoa(len(doc.Pages)))
+	return err
 }
 
 func TestChooseFormatFallback(t *testing.T) {

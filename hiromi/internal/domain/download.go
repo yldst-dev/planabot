@@ -7,6 +7,9 @@ const (
 	MaxDownloadWorkers     = 8
 	DownloadAttempts       = 8
 	TelegramDirectMaxBytes = 40 * 1024 * 1024
+	MaxGalleryPages        = 2000
+	MaxImageBytes          = 32 << 20
+	MaxGalleryBytes        = 1 << 30
 )
 
 type DownloadOptions struct {
@@ -84,5 +87,5 @@ type ViewerDocument struct {
 
 type ViewerPage struct {
 	Format ImageFormat
-	Data   []byte
+	Load   func() ([]byte, error)
 }

@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"hiromi/internal/domain"
@@ -24,6 +26,13 @@ type DownloadService struct {
 	front     string
 	gate      *fetchGate
 	sleep     func(context.Context, time.Duration) error
+	limits    downloadLimits
+}
+
+type downloadLimits struct {
+	pages int
+	image int64
+	total int64
 }
 
 type fetchGate struct {
@@ -41,6 +50,7 @@ func NewDownloadService(g port.GalleryRepository, u port.URLResolver, f port.Med
 		front:     front,
 		gate:      &fetchGate{spacing: 200 * time.Millisecond},
 		sleep:     sleepCtx,
+		limits:    downloadLimits{pages: domain.MaxGalleryPages, image: domain.MaxImageBytes, total: domain.MaxGalleryBytes},
 	}
 }
 
@@ -71,6 +81,9 @@ func (s *DownloadService) Download(ctx context.Context, id uint64, opt domain.Do
 	g, err := s.galleries.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if g.PageCount() > s.limits.pages {
+		return nil, fmt.Errorf("%w: %d pages", domain.ErrTooLarge, g.PageCount())
 	}
 	dirName := domain.GalleryDirName(g.ID)
 	result := &domain.GalleryDownload{
@@ -144,40 +157,51 @@ func (s *DownloadService) Download(ctx context.Context, id uint64, opt domain.Do
 		}
 		jobs = append(jobs, job{index: file.Index, file: file, format: format, name: name, rel: rel, url: rawURL})
 	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	var mu sync.Mutex
-	sem := make(chan struct{}, opt.Workers)
+	var total atomic.Int64
+	queue := make(chan job)
 	var wg sync.WaitGroup
-	for _, j := range jobs {
+	for range opt.Workers {
 		wg.Add(1)
-		go func(j job) {
+		go func() {
 			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
+			for j := range queue {
+				n, err := s.fetchToStore(ctx, j.rel, j.url, referer, s.limits.image)
+				if err == nil && total.Add(n) > s.limits.total {
+					cancel(fmt.Errorf("%w: over %d bytes", domain.ErrTooLarge, s.limits.total))
+				}
 				mu.Lock()
-				result.Failed = append(result.Failed, domain.DownloadFailure{Index: j.index, Name: j.name, Error: ctx.Err().Error()})
+				if err != nil {
+					result.Failed = append(result.Failed, domain.DownloadFailure{Index: j.index, Name: j.name, Error: err.Error()})
+				} else {
+					result.Saved = append(result.Saved, domain.DownloadedFile{
+						Index:  j.index,
+						Name:   j.name,
+						Path:   path.Join(s.store.Root(), j.rel),
+						Bytes:  n,
+						Format: j.format,
+						Kind:   "image",
+					})
+				}
 				mu.Unlock()
-				return
 			}
-			defer func() { <-sem }()
-			n, err := s.fetchToStore(ctx, j.rel, j.url, referer)
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				result.Failed = append(result.Failed, domain.DownloadFailure{Index: j.index, Name: j.name, Error: err.Error()})
-				return
-			}
-			result.Saved = append(result.Saved, domain.DownloadedFile{
-				Index:  j.index,
-				Name:   j.name,
-				Path:   path.Join(s.store.Root(), j.rel),
-				Bytes:  n,
-				Format: j.format,
-				Kind:   "image",
-			})
-		}(j)
+		}()
 	}
+feed:
+	for _, j := range jobs {
+		select {
+		case queue <- j:
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(queue)
 	wg.Wait()
+	if ctx.Err() != nil {
+		return nil, context.Cause(ctx)
+	}
 	if opt.IncludeVideo && g.Video != nil && g.Video.URL != "" {
 		rel := path.Join(dirName, "video.mp4")
 		skip := false
@@ -196,7 +220,7 @@ func (s *DownloadService) Download(ctx context.Context, id uint64, opt domain.Do
 			}
 		}
 		if !skip {
-			n, err := s.fetchToStore(ctx, rel, g.Video.URL, referer)
+			n, err := s.fetchToStore(ctx, rel, g.Video.URL, referer, 0)
 			if err != nil {
 				result.Failed = append(result.Failed, domain.DownloadFailure{Name: "video.mp4", Error: err.Error()})
 			} else {
@@ -230,14 +254,14 @@ func (s *DownloadService) DownloadMany(ctx context.Context, ids []uint64, opt do
 	return out, nil
 }
 
-func (s *DownloadService) fetchToStore(ctx context.Context, rel, rawURL, referer string) (int64, error) {
+func (s *DownloadService) fetchToStore(ctx context.Context, rel, rawURL, referer string, limit int64) (int64, error) {
 	var last error
 	url := rawURL
 	for attempt := 0; attempt < domain.DownloadAttempts; attempt++ {
 		if err := s.acquire(ctx); err != nil {
 			return 0, err
 		}
-		n, err := s.fetchOnce(ctx, rel, url, referer)
+		n, err := s.fetchOnce(ctx, rel, url, referer, limit)
 		if err == nil {
 			return n, nil
 		}
@@ -267,13 +291,34 @@ func (s *DownloadService) fetchToStore(ctx context.Context, rel, rawURL, referer
 	return 0, last
 }
 
-func (s *DownloadService) fetchOnce(ctx context.Context, rel, rawURL, referer string) (int64, error) {
+func (s *DownloadService) fetchOnce(ctx context.Context, rel, rawURL, referer string, limit int64) (int64, error) {
 	body, _, err := s.fetch.Fetch(ctx, rawURL, referer)
 	if err != nil {
 		return 0, err
 	}
 	defer body.Close()
-	return s.store.Write(rel, body)
+	var r io.Reader = remoteReader{body}
+	if limit > 0 {
+		r = io.LimitReader(r, limit+1)
+	}
+	n, err := s.store.Write(rel, r)
+	if err == nil && limit > 0 && n > limit {
+		_ = s.store.RemoveAll(rel)
+		return 0, fmt.Errorf("%w: image over %d bytes", domain.ErrTooLarge, limit)
+	}
+	return n, err
+}
+
+type remoteReader struct {
+	io.Reader
+}
+
+func (r remoteReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if err != nil && err != io.EOF {
+		err = fmt.Errorf("%w: %w", domain.ErrRemote, err)
+	}
+	return n, err
 }
 
 func (s *DownloadService) acquire(ctx context.Context) error {
@@ -355,8 +400,6 @@ func (s *DownloadService) writeViewer(g *domain.Gallery, dirName string, want do
 	formats := []domain.ImageFormat{want, domain.FormatWebP, domain.FormatAVIF, domain.FormatJXL}
 	pages := make([]domain.ViewerPage, 0, g.PageCount())
 	for i := 0; i < g.PageCount(); i++ {
-		var page domain.ViewerPage
-		found := false
 		seen := map[domain.ImageFormat]struct{}{}
 		for _, format := range formats {
 			if _, ok := seen[format]; ok {
@@ -364,31 +407,28 @@ func (s *DownloadService) writeViewer(g *domain.Gallery, dirName string, want do
 			}
 			seen[format] = struct{}{}
 			rel := path.Join(dirName, domain.DownloadFileName(i, format))
-			data, err := s.store.Read(rel)
-			if err != nil || len(data) == 0 {
+			if ok, size, err := s.store.Exists(rel); err != nil || !ok || size == 0 {
 				continue
 			}
-			page = domain.ViewerPage{Format: format, Data: data}
-			found = true
+			pages = append(pages, domain.ViewerPage{Format: format, Load: func() ([]byte, error) { return s.store.Read(rel) }})
 			break
-		}
-		if found {
-			pages = append(pages, page)
 		}
 	}
 	if len(pages) == 0 {
 		return nil
 	}
-	html, err := s.viewer.Render(domain.ViewerDocument{
-		Title:    g.Title,
-		Language: result.Language,
-		Pages:    pages,
-	})
-	if err != nil {
-		return fmt.Errorf("%w: viewer: %v", domain.ErrStorage, err)
-	}
+	reader, writer := io.Pipe()
+	go func() {
+		writer.CloseWithError(s.viewer.Render(writer, domain.ViewerDocument{
+			Title:    g.Title,
+			Language: result.Language,
+			Pages:    pages,
+		}))
+	}()
 	rel := path.Join(dirName, domain.ViewerFileName)
-	if _, err := s.store.Write(rel, bytes.NewReader(html)); err != nil {
+	_, err := s.store.Write(rel, reader)
+	_ = reader.CloseWithError(err)
+	if err != nil {
 		return err
 	}
 	result.Viewer = path.Join(s.store.Root(), rel)

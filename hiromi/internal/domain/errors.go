@@ -21,6 +21,7 @@ var (
 	ErrNoViewer           = errors.New("viewer not created")
 	ErrPrivateChat        = errors.New("private chat required")
 	ErrBusy               = errors.New("job already running")
+	ErrTooLarge           = errors.New("gallery too large")
 	ErrClaim              = errors.New("claim not found")
 )
 
