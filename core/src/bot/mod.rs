@@ -14,7 +14,9 @@ use std::time::Duration;
 use teloxide::dispatching::{ShutdownToken, UpdateFilterExt};
 use teloxide::filter_command;
 use teloxide::prelude::*;
+use teloxide::stop::StopToken;
 use teloxide::types::{BotCommandScope, Message};
+use teloxide::update_listeners::UpdateListener;
 use teloxide::utils::command::BotCommands;
 
 use crate::urlchanger;
@@ -32,6 +34,7 @@ const TURN_DRAIN_LIMIT: Duration = Duration::from_secs(190);
 const SHUTDOWN_WATCHDOG: Duration = Duration::from_secs(225);
 
 static SHUTDOWN: OnceLock<ShutdownToken> = OnceLock::new();
+static LISTENER_STOP: OnceLock<StopToken> = OnceLock::new();
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn request_shutdown() -> bool {
@@ -44,6 +47,9 @@ pub(crate) fn request_shutdown() -> bool {
     state::note_shutdown_start();
     let accepted = token.shutdown().is_ok();
     if accepted {
+        if let Some(listener) = LISTENER_STOP.get() {
+            listener.stop();
+        }
         std::thread::spawn(|| {
             std::thread::sleep(SHUTDOWN_WATCHDOG);
             crate::reboot::trigger_failure_reboot("종료 대기 시간 초과");
@@ -148,7 +154,8 @@ where
         }
     });
 
-    let update_listener = teloxide::update_listeners::polling_default(bot).await;
+    let mut update_listener = teloxide::update_listeners::polling_default(bot).await;
+    let _ = LISTENER_STOP.set(update_listener.stop_token());
     let update_listener_error_handler = Arc::new(|err| async move {
         if !is_shutting_down() && should_reboot_on_update_error(&err) {
             error!("업데이트 리스너 통신 오류 감지: {:?}", err);
