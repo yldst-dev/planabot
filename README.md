@@ -338,7 +338,7 @@ docker compose exec planabot reset-local-memory
 
 `main`에 push하면 Dokploy가 Dockerfile로 빌드 후 재배포합니다. Rust 빌드는 메모리를 많이 사용하므로 호스트 RAM 2GB 이상을 권장합니다.
 
-봇은 SIGINT와 SIGTERM을 같은 순서로 처리해 진행 중인 답변과 기억 저장을 마친 뒤 종료합니다. 최악의 경우 약 210초가 걸리므로 compose의 `stop_grace_period`를 240초로 둡니다. 이 값을 줄이면 기억 저장 도중에 강제로 종료될 수 있습니다.
+봇은 SIGINT와 SIGTERM을 같은 순서로 처리해 진행 중인 답변과 기억 저장을 마친 뒤 종료합니다. 최악의 경우 약 210초가 걸리므로 compose의 `stop_grace_period`를 240초로 둡니다. 이 값을 줄이면 기억 저장 도중에 강제로 종료될 수 있습니다. 종료 요청 뒤 225초가 지나도 끝나지 않으면 봇이 스스로 실패 코드로 종료해 다시 올라옵니다. 이때는 종료 표시를 남기지 못하므로 재시작하는 동안 온 메시지는 처리하지 않습니다.
 
 운영 컨테이너에서 메모리 전체 초기화:
 
