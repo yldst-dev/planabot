@@ -8,7 +8,7 @@ mod telegram;
 
 use anyhow::Result;
 use log::{error, info, warn};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use teloxide::dispatching::{ShutdownToken, UpdateFilterExt};
@@ -33,9 +33,12 @@ const TURN_DRAIN_LIMIT: Duration = Duration::from_secs(190);
 
 const SHUTDOWN_WATCHDOG: Duration = Duration::from_secs(225);
 
+const FINAL_CONFIRM_LIMIT: Duration = Duration::from_secs(3);
+
 static SHUTDOWN: OnceLock<ShutdownToken> = OnceLock::new();
 static LISTENER_STOP: OnceLock<StopToken> = OnceLock::new();
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+static NEXT_OFFSET: AtomicI32 = AtomicI32::new(0);
 
 pub(crate) fn request_shutdown() -> bool {
     let Some(token) = SHUTDOWN.get() else {
@@ -107,6 +110,9 @@ where
     let drain_state = state.clone();
 
     let handler = dptree::entry()
+        .inspect(|upd: Update| {
+            NEXT_OFFSET.fetch_max(upd.id.as_offset(), Ordering::SeqCst);
+        })
         .inspect(state::consume_shutdown_mark)
         .branch(
             Update::filter_message()
@@ -154,7 +160,7 @@ where
         }
     });
 
-    let mut update_listener = teloxide::update_listeners::polling_default(bot).await;
+    let mut update_listener = teloxide::update_listeners::polling_default(bot.clone()).await;
     let _ = LISTENER_STOP.set(update_listener.stop_token());
     let update_listener_error_handler = Arc::new(|err| async move {
         if !is_shutting_down() && should_reboot_on_update_error(&err) {
@@ -171,6 +177,11 @@ where
     SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
     let shutdown_started = state::note_shutdown_start();
     state::record_shutdown_mark().await;
+    let offset = NEXT_OFFSET.load(Ordering::SeqCst);
+    if offset > 0 {
+        let confirm = bot.get_updates().offset(offset).limit(1).timeout(0).send();
+        let _ = tokio::time::timeout(FINAL_CONFIRM_LIMIT, confirm).await;
+    }
     let budget = TURN_DRAIN_LIMIT.saturating_sub(shutdown_started.elapsed());
     if !drain_state.tasks.drain(budget).await {
         warn!("처리 중인 작업을 기다리다 시간이 지나 종료합니다.");
