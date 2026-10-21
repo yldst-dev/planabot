@@ -26,11 +26,13 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const RESTART_WAIT_MS = 300_000
 
+const POLL_TIMEOUT_MS = 5000
+
 export function RestartPanel() {
   const overview = useOverview()
   const changes = useChanges((state) => state.changes)
   const client = useQueryClient()
-  const { state } = useSidebar()
+  const { state, isMobile } = useSidebar()
   const [restarting, setRestarting] = useState(false)
   const pending = overview.data?.pending.length ?? 0
   const dirty = Object.keys(changes).length
@@ -43,7 +45,24 @@ export function RestartPanel() {
       return
     }
     setRestarting(true)
-    let baseline = await api.overview().then((data) => data.uptime).catch(() => undefined)
+    const baseline = await api.overview(AbortSignal.timeout(POLL_TIMEOUT_MS)).catch((error: Error) => error)
+    if (baseline instanceof Error) {
+      setRestarting(false)
+      toast.error("재시작 불가.", {
+        description:
+          baseline instanceof AuthError
+            ? "다시 로그인한 뒤 재시작하십시오."
+            : "봇 상태를 확인하지 못했습니다. 잠시 뒤 다시 시도하십시오.",
+      })
+      if (baseline instanceof AuthError) await client.invalidateQueries()
+      return
+    }
+    if (baseline.pending.length === 0) {
+      await client.invalidateQueries()
+      setRestarting(false)
+      toast.info("재시작 불필요.", { description: "적용을 기다리는 변경이 없습니다." })
+      return
+    }
     try {
       await api.restart()
     } catch (error) {
@@ -54,16 +73,13 @@ export function RestartPanel() {
     const started = Date.now()
     const progress = toast.loading("재시작 중.", {
       description: "처리 중인 답변이 끝나면 다시 켜집니다. 몇 분 걸릴 수 있습니다.",
+      position: isMobile ? "top-center" : undefined,
     })
-    let unreachable = false
     while (Date.now() - started < RESTART_WAIT_MS) {
       await wait(2000)
       try {
-        const next = await api.overview()
-        const elapsed = (Date.now() - started) / 1000
-        const fresh = baseline === undefined ? unreachable : next.uptime + 5 < baseline + elapsed
-        baseline ??= next.uptime - elapsed
-        if (fresh) {
+        const next = await api.overview(AbortSignal.timeout(POLL_TIMEOUT_MS))
+        if (next.booted_at && next.booted_at !== baseline.booted_at) {
           await client.invalidateQueries()
           setRestarting(false)
           toast.success("재시작 완료.", { id: progress, description: "저장한 설정이 적용되었습니다." })
@@ -76,7 +92,6 @@ export function RestartPanel() {
           await client.invalidateQueries()
           return
         }
-        unreachable = true
       }
     }
     setRestarting(false)

@@ -4,14 +4,28 @@ import type { Changes, Field } from "@/lib/types"
 
 interface ChangesState {
   changes: Changes
-  sending: Changes
+  sending: Record<string, number>
   invalid: { key: string; message: string } | null
   edit: (field: Field, value: string | null | undefined) => void
   drop: (keys: string[]) => void
   send: (sent: Changes) => void
   settle: (sent: Changes) => void
+  release: (sent: Changes, fields: Field[]) => void
   fail: (key: string, message: string) => void
   clear: () => void
+}
+
+const matchesServer = (field: Field, value: string | null | undefined) =>
+  field.kind !== "secret" && value === (field.value ?? "")
+
+function hold(sending: Record<string, number>, sent: Changes, step: number) {
+  const next = { ...sending }
+  for (const key of Object.keys(sent)) {
+    const count = (next[key] ?? 0) + step
+    if (count > 0) next[key] = count
+    else delete next[key]
+  }
+  return next
 }
 
 export const useChanges = create<ChangesState>((set) => ({
@@ -21,11 +35,7 @@ export const useChanges = create<ChangesState>((set) => ({
   edit: (field, value) =>
     set((state) => {
       const next = { ...state.changes }
-      const unchanged =
-        field.kind !== "secret" &&
-        value !== null &&
-        value === (field.value ?? "") &&
-        !Object.hasOwn(state.sending, field.key)
+      const unchanged = matchesServer(field, value) && !Object.hasOwn(state.sending, field.key)
       if (value === undefined || unchanged) delete next[field.key]
       else next[field.key] = value
       return { changes: next, invalid: state.invalid?.key === field.key ? null : state.invalid }
@@ -36,7 +46,7 @@ export const useChanges = create<ChangesState>((set) => ({
       for (const key of keys) delete next[key]
       return { changes: next, invalid: state.invalid && keys.includes(state.invalid.key) ? null : state.invalid }
     }),
-  send: (sent) => set({ sending: sent }),
+  send: (sent) => set((state) => ({ sending: hold(state.sending, sent, 1) })),
   settle: (sent) =>
     set((state) => {
       const next = { ...state.changes }
@@ -44,7 +54,17 @@ export const useChanges = create<ChangesState>((set) => ({
         if (Object.hasOwn(next, key) && next[key] === value) delete next[key]
       }
       const invalid = state.invalid && Object.hasOwn(sent, state.invalid.key) ? null : state.invalid
-      return { changes: next, sending: {}, invalid }
+      return { changes: next, sending: hold(state.sending, sent, -1), invalid }
+    }),
+  release: (sent, fields) =>
+    set((state) => {
+      const sending = hold(state.sending, sent, -1)
+      const next = { ...state.changes }
+      for (const field of fields) {
+        const settled = Object.hasOwn(sent, field.key) && !Object.hasOwn(sending, field.key)
+        if (settled && Object.hasOwn(next, field.key) && matchesServer(field, next[field.key])) delete next[field.key]
+      }
+      return { changes: next, sending }
     }),
   fail: (key, message) => set({ invalid: { key, message } }),
   clear: () => set({ changes: {}, invalid: null }),

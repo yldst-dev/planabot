@@ -54,6 +54,10 @@ function EditorBody({ field, initial, onDone }: { field: Field; initial: string;
       className="gap-0 p-0 sm:max-w-3xl"
       onInteractOutside={guard}
       onEscapeKeyDown={guard}
+      onCloseAutoFocus={(event) => {
+        event.preventDefault()
+        document.getElementById(`field-${field.key}`)?.focus()
+      }}
       onKeyDown={(event) => {
         const key = event.key.toLowerCase()
         const mod = event.metaKey || event.ctrlKey
@@ -86,7 +90,7 @@ function EditorBody({ field, initial, onDone }: { field: Field; initial: string;
         onChange={(event) => setText(event.target.value)}
         className="h-[min(56vh,520px)] resize-none rounded-none border-0 p-5 leading-relaxed shadow-none focus-visible:ring-0"
       />
-      <DialogFooter className="border-t p-4">
+      <DialogFooter className="mx-0 mb-0 border-t p-4">
         <DialogClose asChild>
           <Button variant="outline">취소</Button>
         </DialogClose>

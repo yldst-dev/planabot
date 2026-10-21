@@ -37,6 +37,7 @@ export interface SettingsResponse {
 export interface Overview {
   version: string
   uptime: number
+  booted_at: number
   bot_username: string | null
   provider: "codex" | "anthropic"
   model: string

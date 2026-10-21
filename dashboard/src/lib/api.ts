@@ -13,9 +13,10 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+async function request<T>(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, {
     method,
+    signal,
     credentials: "same-origin",
     headers: { "content-type": "application/json", "x-planabot-dashboard": "1" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -41,7 +42,7 @@ export const api = {
     request<{ ok: boolean }>("/api/password", "POST", { current_password: currentPassword, password }),
   regenerateRecovery: (password: string) => request<RecoveryCode>("/api/recovery-code", "POST", { password }),
   logout: () => request<{ ok: boolean }>("/api/logout", "POST"),
-  overview: () => request<Overview>("/api/overview"),
+  overview: (signal?: AbortSignal) => request<Overview>("/api/overview", "GET", undefined, signal),
   settings: () => request<SettingsResponse>("/api/settings"),
   save: (changes: Changes) => request<SettingsResponse>("/api/settings", "PUT", { changes }),
   importEnv: (keys: string[]) => request<ImportResult>("/api/settings/import-env", "POST", { keys }),

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import { api } from "@/lib/api"
-import type { Changes } from "@/lib/types"
+import type { Changes, SettingsResponse } from "@/lib/types"
 import { useChanges } from "@/stores/changes"
 import { useRecovery } from "@/stores/recovery"
 
@@ -16,7 +16,7 @@ export function useSession() {
 }
 
 export function useOverview() {
-  return useQuery({ queryKey: queryKeys.overview, queryFn: api.overview, refetchInterval: 30_000 })
+  return useQuery({ queryKey: queryKeys.overview, queryFn: () => api.overview(), refetchInterval: 30_000 })
 }
 
 export function useSettings() {
@@ -88,10 +88,12 @@ export function useSave() {
   const client = useQueryClient()
   const send = useChanges((state) => state.send)
   const settle = useChanges((state) => state.settle)
+  const release = useChanges((state) => state.release)
   return useMutation({
     mutationFn: (changes: Changes) => api.save(changes),
     onMutate: send,
-    onError: () => send({}),
+    onError: (_error, changes) =>
+      release(changes, client.getQueryData<SettingsResponse>(queryKeys.settings)?.fields ?? []),
     onSuccess: (data, changes) => {
       settle(changes)
       client.setQueryData(queryKeys.settings, data)

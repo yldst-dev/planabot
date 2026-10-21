@@ -66,7 +66,7 @@ export function importableFields(fields: Field[]) {
       field.source === "env" &&
       !field.env_only &&
       !field.custom &&
-      (field.kind === "secret" || Boolean(field.env_value?.trim())),
+      (field.kind === "secret" ? Boolean(field.env_hint) : Boolean(field.env_value?.trim())),
   )
 }
 
