@@ -43,6 +43,17 @@ pub(crate) fn request_shutdown() -> bool {
     token.shutdown().is_ok()
 }
 
+fn is_shutting_down() -> bool {
+    SHUTDOWN_REQUESTED.load(Ordering::SeqCst)
+}
+
+fn on_stop_signal() {
+    info!("종료 신호 수신: 처리 중인 답변을 마친 뒤 종료합니다.");
+    if !request_shutdown() {
+        crate::reboot::trigger_scheduled_reboot("종료 신호 수신");
+    }
+}
+
 pub async fn run<B>(bot: B, state: AppState) -> Result<()>
 where
     B: Requester + teloxide::net::Download + Clone + Send + Sync + 'static,
@@ -115,16 +126,22 @@ where
     let _ = SHUTDOWN.set(dispatcher.shutdown_token());
     tokio::spawn(async {
         while tokio::signal::ctrl_c().await.is_ok() {
-            info!("종료 신호 수신: 처리 중인 답변을 마친 뒤 종료합니다.");
-            if !request_shutdown() {
-                crate::reboot::trigger_scheduled_reboot("종료 신호 수신");
+            on_stop_signal();
+        }
+    });
+    #[cfg(unix)]
+    tokio::spawn(async {
+        use tokio::signal::unix::{SignalKind, signal};
+        if let Ok(mut terminate) = signal(SignalKind::terminate()) {
+            while terminate.recv().await.is_some() {
+                on_stop_signal();
             }
         }
     });
 
     let update_listener = teloxide::update_listeners::polling_default(bot).await;
     let update_listener_error_handler = Arc::new(|err| async move {
-        if should_reboot_on_update_error(&err) {
+        if !is_shutting_down() && should_reboot_on_update_error(&err) {
             error!("업데이트 리스너 통신 오류 감지: {:?}", err);
             crate::reboot::trigger_failure_reboot("업데이트 리스너 통신 오류로 인한 재시동");
         } else {
@@ -136,8 +153,10 @@ where
         .dispatch_with_listener(update_listener, update_listener_error_handler)
         .await;
     SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+    let shutdown_started = state::note_shutdown_start();
     state::record_shutdown_mark().await;
-    if !drain_state.tasks.drain(TURN_DRAIN_LIMIT).await {
+    let budget = TURN_DRAIN_LIMIT.saturating_sub(shutdown_started.elapsed());
+    if !drain_state.tasks.drain(budget).await {
         warn!("처리 중인 작업을 기다리다 시간이 지나 종료합니다.");
     }
 
@@ -171,7 +190,7 @@ where
 }
 
 pub(crate) fn report_handler_error(err: &anyhow::Error) {
-    if should_reboot_on_handler_error(err) {
+    if !is_shutting_down() && should_reboot_on_handler_error(err) {
         error!("치명적인 통신 오류 감지: {:?}", err);
         crate::reboot::trigger_failure_reboot("통신 불능 오류로 인한 재시동");
     } else {

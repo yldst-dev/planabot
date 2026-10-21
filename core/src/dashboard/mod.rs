@@ -112,6 +112,7 @@ fn session_cookie(value: &str, max_age: u64, secure: bool) -> HeaderValue {
 struct OverviewView {
     version: &'static str,
     uptime: u64,
+    booted_at: u64,
     bot_username: Option<String>,
     provider: &'static str,
     model: String,
@@ -164,6 +165,7 @@ async fn overview(headers: HeaderMap) -> Response {
         &OverviewView {
             version: env!("CARGO_PKG_VERSION"),
             uptime: crate::health::uptime_secs(),
+            booted_at: crate::health::booted_at_ms(),
             bot_username: BOT_USERNAME.get().cloned(),
             provider,
             model,
@@ -215,6 +217,10 @@ fn mask(value: &str) -> String {
     }
 }
 
+fn secret_hint(value: Option<&str>) -> Option<String> {
+    value.filter(|value| !value.trim().is_empty()).map(mask)
+}
+
 fn field_view(
     key: &str,
     field: Option<&'static catalog::Field>,
@@ -251,12 +257,12 @@ fn field_view(
         value: if secret { None } else { effective.clone() },
         env_value: if secret { None } else { env_value.clone() },
         hint: if secret {
-            effective.as_deref().map(mask)
+            secret_hint(effective.as_deref())
         } else {
             None
         },
         env_hint: if secret {
-            env_value.as_deref().map(mask)
+            secret_hint(env_value.as_deref())
         } else {
             None
         },
@@ -438,12 +444,20 @@ pub(crate) fn reset_password() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{field_view, importable_env, mask, store::OverrideFile};
+    use super::{field_view, importable_env, mask, secret_hint, store::OverrideFile};
 
     #[test]
     fn masks_secrets_without_leaking_short_values() {
         assert_eq!(mask("short"), "••••");
         assert_eq!(mask("123456:ABCDEFGHwxyz"), "•••• wxyz");
+    }
+
+    #[test]
+    fn blank_secrets_do_not_look_set() {
+        assert_eq!(secret_hint(None), None);
+        assert_eq!(secret_hint(Some("")), None);
+        assert_eq!(secret_hint(Some("  ")), None);
+        assert_eq!(secret_hint(Some("short")).as_deref(), Some("••••"));
     }
 
     #[test]

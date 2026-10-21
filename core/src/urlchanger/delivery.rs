@@ -160,7 +160,13 @@ where
                 }
                 return Ok(());
             }
-            Err(e) if posted > 0 => return Err(e),
+            Err(e) if posted > 0 => {
+                warn!(
+                    "{} 새 메시지 일부만 전송, 원본은 남겨 둡니다: {:?}",
+                    label, e
+                );
+                return Ok(());
+            }
             Err(e) => warn!(
                 "{} 새 메시지 전송 실패, 답장으로 대신합니다: {:?}",
                 label, e
@@ -439,7 +445,7 @@ mod tests {
         assert!(
             deliver_link_plan(&bot, &msg, true, "test", plan)
                 .await
-                .is_err()
+                .is_ok()
         );
         assert_eq!(
             *calls.lock().unwrap(),

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use log::warn;
@@ -557,17 +557,19 @@ fn is_group_chat(msg: &Message) -> bool {
     }
 }
 
-static SHUTDOWN_STARTED_AT: AtomicI64 = AtomicI64::new(0);
+static SHUTDOWN_STARTED: OnceLock<(Instant, i64)> = OnceLock::new();
 static SHUTDOWN_MARK_CONSUMED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn note_shutdown_start() {
-    let now = unix_now_ms() / 1000;
-    let _ = SHUTDOWN_STARTED_AT.compare_exchange(0, now, Ordering::SeqCst, Ordering::SeqCst);
+fn shutdown_started() -> (Instant, i64) {
+    *SHUTDOWN_STARTED.get_or_init(|| (Instant::now(), unix_now_ms() / 1000))
+}
+
+pub(crate) fn note_shutdown_start() -> Instant {
+    shutdown_started().0
 }
 
 pub(crate) async fn record_shutdown_mark() {
-    note_shutdown_start();
-    let started_at = SHUTDOWN_STARTED_AT.load(Ordering::SeqCst);
+    let started_at = shutdown_started().1;
     if let Err(err) = write_json_atomic(&resolve_shutdown_mark_path(), &started_at).await {
         warn!("종료 시각 저장 실패: {}", err);
     }
@@ -776,6 +778,14 @@ mod tests {
         release.await.expect("release task");
         let _still_running = gate.enter().await;
         assert!(!gate.drain(std::time::Duration::from_millis(20)).await);
+    }
+
+    #[tokio::test]
+    async fn an_exhausted_drain_budget_still_succeeds_when_nothing_runs() {
+        let gate = super::TaskGate::default();
+        assert!(gate.drain(std::time::Duration::ZERO).await);
+        let _running = gate.enter().await;
+        assert!(!gate.drain(std::time::Duration::ZERO).await);
     }
 
     #[test]

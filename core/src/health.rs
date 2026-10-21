@@ -4,7 +4,7 @@ use std::env;
 use std::sync::OnceLock;
 use std::time::Instant;
 
-static START_TIME: OnceLock<Instant> = OnceLock::new();
+static START_TIME: OnceLock<(Instant, u64)> = OnceLock::new();
 
 #[derive(Deserialize)]
 struct HealthQuery {
@@ -59,11 +59,23 @@ fn secret_matches(provided: &str, expected: &str) -> bool {
 }
 
 pub fn uptime_secs() -> u64 {
-    START_TIME.get().map(|s| s.elapsed().as_secs()).unwrap_or(0)
+    START_TIME
+        .get()
+        .map(|(started, _)| started.elapsed().as_secs())
+        .unwrap_or(0)
+}
+
+pub fn booted_at_ms() -> u64 {
+    START_TIME.get().map(|(_, at)| *at).unwrap_or(0)
 }
 
 pub fn init_start_time() {
-    START_TIME.get_or_init(Instant::now);
+    START_TIME.get_or_init(|| {
+        (
+            Instant::now(),
+            u64::try_from(crate::schedule::now_ms()).unwrap_or(0),
+        )
+    });
 }
 
 pub async fn run_health_server() {
