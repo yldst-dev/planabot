@@ -6,6 +6,9 @@ import {
   updateTodo,
   type TodoItem
 } from "./store.js";
+import { NOON_OR_MIDNIGHT_PATTERN } from "../schedule/intent.js";
+
+const MAX_RULE_TEXT_CHARS = 600;
 
 export type TodoInterpretOutput = {
   handled: boolean;
@@ -23,9 +26,12 @@ export async function interpretTodoRequest(
   action?: TodoAction,
 ): Promise<TodoInterpretOutput> {
   const userText = extractUserText(text);
+  if (userText.length > MAX_RULE_TEXT_CHARS && action !== "list") {
+    return emptyOutput();
+  }
   const normalized = normalizeIntentText(userText);
   const todoRelated = action !== undefined || isTodoRelated(normalized) || isTodoContextText(text);
-  if (!action && todoRelated && /알림|알려/u.test(normalized) && /\d{1,2}\s*시(?!간)|정오|자정/u.test(normalized)) {
+  if (!action && todoRelated && /알림|알려/u.test(normalized) && (/\d{1,2}\s*시(?!간)/u.test(normalized) || normalized.search(NOON_OR_MIDNIGHT_PATTERN) >= 0)) {
     return emptyOutput();
   }
 
@@ -108,13 +114,16 @@ function mutationOutput(
 
 function parseAdd(text: string, allowImplicit: boolean): string | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
+  if (!/추가|등록/u.test(normalized)) {
+    return undefined;
+  }
   const patterns = [
     /(?:할\s*일|todo|투두)(?:에|로)?\s+(.+?)(?:을|를)?\s*(?:추가|등록)/i,
     /(?:추가|등록)(?:해줘|해주세요|해|합니다|해라)?[:\s]+(.+)/i,
-    /(.+?)(?:을|를)?\s*(?:할\s*일|todo|투두)(?:에|로)?\s*(?:추가|등록)/i
+    /^(.+?)(?:을|를)?\s*(?:할\s*일|todo|투두)(?:에|로)?\s*(?:추가|등록)/i
   ];
   if (allowImplicit) {
-    patterns.push(/(.+?)(?:을|를)?\s*(?:추가|등록)(?:해줘|해주세요|해|합니다|해라)?$/i);
+    patterns.push(/^(.+?)(?:을|를)?\s*(?:추가|등록)(?:해줘|해주세요|해|합니다|해라)?$/i);
   }
   for (const pattern of patterns) {
     const match = normalized.match(pattern);
@@ -128,9 +137,12 @@ function parseAdd(text: string, allowImplicit: boolean): string | undefined {
 
 function parseUpdate(text: string): { target: string; content: string } | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
+  if (!/수정|변경|바꿔|고쳐/u.test(normalized)) {
+    return undefined;
+  }
   const patterns = [
-    /(.+?)(?:을|를)?\s+(.+?)(?:으로|로)\s*(?:수정|변경|바꿔|바꿔줘|고쳐)/,
-    /(.+?)(?:을|를)?\s*(?:수정|변경|바꿔|고쳐).+?(?:으로|로)\s+(.+)/
+    /^(.+?)(?:을|를)?\s+(.+?)(?:으로|로)\s*(?:수정|변경|바꿔|바꿔줘|고쳐)/,
+    /^(.+?)(?:을|를)?\s*(?:수정|변경|바꿔|고쳐).+?(?:으로|로)\s+(.+)/
   ];
   for (const pattern of patterns) {
     const match = normalized.match(pattern);
@@ -192,7 +204,7 @@ function mentionsTodo(text: string, content: string): boolean {
 }
 
 function isNegatedOrQuestion(text: string): boolean {
-  return /안\s*(?:했|끝)|못\s*(?:했|끝)|아직|않았|[?？]\s*$|했(?:나|니|냐|는지)/u.test(text);
+  return /안\s*(?:했|끝)|못\s*(?:했|끝)|아직|않았|[?？]\s*$|했(?:나|니|냐|는지)|하려|하라고|할까|했어야|해야\s*했|할\s*거/u.test(text);
 }
 
 function extractSingleOpenTodoFromContext(text: string): string | undefined {

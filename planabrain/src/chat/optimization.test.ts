@@ -5,7 +5,10 @@ import { fitContextMessages, contextTokens, MAX_CONTEXT_TOKENS } from "./context
 import { buildReplay } from "./replay.js";
 import { normalizeDeliveryText, finalizeAnswerForDelivery, removeModelSourceLines } from "./deliveryRewrite.js";
 import { sanitizeAssistantOutput } from "./sanitizeOutput.js";
-import { isSimpleSocialTurn } from "./queryPolicy.js";
+import { extractReplyContext, isCurrentInformationRequest, isExplicitSearchRequest, isSimpleSocialTurn, parseRewrittenQuery } from "./queryPolicy.js";
+import { applySourceSelection } from "./sourceSelection.js";
+import { buildSearchQuery } from "../integrations/search.js";
+import { extractReadableContent, extractUrls } from "../integrations/webFetch.js";
 import { looksAbruptlyTruncated } from "../integrations/continuation.js";
 import { invokeChatWithMetadata } from "../integrations/chat.js";
 import { testSettings } from "../testing/settings.js";
@@ -175,6 +178,7 @@ test("source cleanup removes model source lines but keeps prose and code that me
   assert.equal(removeModelSourceLines("환율은 1,380원입니다(출처: 한국은행(ECOS)). 전일보다 5원 올랐습니다."), "환율은 1,380원입니다. 전일보다 5원 올랐습니다.");
   assert.equal(removeModelSourceLines("```ts\nconst a = 1;\n\n출처: https://fake.example/x"), "```ts\nconst a = 1;");
   assert.equal(removeModelSourceLines("```bash npm install```\n출처: https://fake.example/x"), "```bash npm install```");
+  assert.equal(removeModelSourceLines("답변입니다.\nhttps://maps.example/@37.5,127.0,15z\nhttps://a.example/x,"), "답변입니다.");
 });
 
 test("source cleanup and output checks stay fast on long adversarial lines", () => {
@@ -185,6 +189,21 @@ test("source cleanup and output checks stay fast on long adversarial lines", () 
   assert.ok(sanitizeAssistantOutput(`I should respond.\n\n- ${" ".repeat(20_000)}x\n\n선생님.`).length > 0);
   assert.equal(looksAbruptlyTruncated(`${"http://".repeat(7_000)} 끝`), false);
   assert.equal(isSimpleSocialTurn(`프라나야${"~".repeat(50_000)}x`), false);
+  assert.ok(performance.now() - started < 1_000);
+});
+
+test("search, source number and link parsing stay fast on long adversarial text", () => {
+  const started = performance.now();
+  assert.equal(parseRewrittenQuery(`${"{ ".repeat(25_000)}가`), undefined);
+  assert.equal(isExplicitSearchRequest(`${"서치".repeat(25_000)} `), true);
+  assert.equal(extractReplyContext("참고 메시지:\n".repeat(6_000)), undefined);
+  assert.equal(isCurrentInformationRequest(`${"지금".repeat(25_000)} ?`), false);
+  assert.deepEqual(applySourceSelection(`출처 번호: 1${" ".repeat(50_000)}x`, []).citations, []);
+  assert.equal(buildSearchQuery(`날씨 ${"한번".repeat(40)}x`), `날씨 ${"한번".repeat(40)}x`);
+  assert.equal(buildSearchQuery(`${"좀".repeat(50_000)}x`).length, 50_001);
+  assert.equal(buildSearchQuery(`${"?!".repeat(25_000)}x`).length, 50_001);
+  assert.ok(Array.isArray(extractUrls(`https://a.com/${"?:".repeat(25_000)}x`)));
+  assert.equal(typeof extractReadableContent(`<meta ${"a".repeat(50_000)}>`, "text/html").content, "string");
   assert.ok(performance.now() - started < 1_000);
 });
 

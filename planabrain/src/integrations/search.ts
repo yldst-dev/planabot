@@ -10,7 +10,7 @@ export const PRE_SEARCH_EVIDENCE_LIMIT = 1500;
 const SEARCH_TIMEOUT_MS = 15_000;
 
 export const SEARCH_REQUEST_SUFFIX_PATTERN =
-  /(?:\s*(?:좀|한번|한\s*번|다시|빨리|지금|바로))*\s*(?:[을를]\s*)?(?:알아\s*(?:봐\s*줘|봐\s*주세요|봐\s*줄래|봐|보자)|알려\s*(?:줘|주세요|줄래|다오)|찾아\s*(?:봐\s*줘|봐|줘|주세요|보자)|검색해\s*(?:줘|주세요|봐|볼래)|조사해\s*(?:줘|주세요)|확인해\s*(?:줘|주세요|봐)|말해\s*(?:줘|주세요))\s*[.?!~…]*$/u;
+  /(?<!(?:좀|한\s*번|다시|빨리|지금|바로)\s*)(?:\s*(?:좀|한\s*번|다시|빨리|지금|바로))*\s*(?:[을를]\s*)?(?:알아\s*(?:봐\s*줘|봐\s*주세요|봐\s*줄래|봐|보자)|알려\s*(?:줘|주세요|줄래|다오)|찾아\s*(?:봐\s*줘|봐|줘|주세요|보자)|검색해\s*(?:줘|주세요|봐|볼래)|조사해\s*(?:줘|주세요)|확인해\s*(?:줘|주세요|봐)|말해\s*(?:줘|주세요))\s*[.?!~…]*$/u;
 
 export function usesPreSearchContext(settings: Settings): boolean {
   return settings.ollamaWebSearchEnabled && settings.ollamaApiKeys.length > 0 && Boolean(settings.ollamaSearchHost);
@@ -20,7 +20,7 @@ export function buildSearchQuery(text: string): string {
   const normalized = String(text ?? "").trim().replace(/\s+/gu, " ");
   const stripped = normalized
     .replace(SEARCH_REQUEST_SUFFIX_PATTERN, "")
-    .replace(/[\s.?!~…]+$/u, "")
+    .replace(/(?<![\s.?!~…])[\s.?!~…]+$/u, "")
     .trim();
   return stripped.length >= 2 ? stripped : normalized;
 }

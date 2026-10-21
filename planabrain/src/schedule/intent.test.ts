@@ -140,3 +140,28 @@ test("minutes before a later clock time count back while floors, headcounts and 
   assert.equal(kst(at("정오에 점심 알림 등록해줘").dueAtMs), "2026-10-15T12:00");
   assert.equal(kst(at("자정에 알림 등록해줘").dueAtMs), "2026-10-16T00:00");
 });
+
+test("noon words, bare minutes, repeat words, score pairs and date words in titles are read as whole words", () => {
+  const morning = Date.UTC(2026, 9, 15, 1, 0);
+  const at = (text: string) => interpretScheduleRequest(text, { nowMs: morning });
+  for (const [text, due, title] of [
+    ["사용자정보 변경 오후 3시 알림 등록해줘", "2026-10-15T15:00", "사용자정보 변경"],
+    ["매일경제 인터뷰 내일 오후 3시 등록해줘", "2026-10-16T15:00", "매일경제 인터뷰"],
+    ["1-1 미팅 오후 3시 등록해줘", "2026-10-15T15:00", "1-1 미팅"],
+    ["내일배움카드 신청 내일 오후 3시 알림 등록해줘", "2026-10-16T15:00", "내일배움카드 신청"],
+    ["오늘의집 배송 오늘 오후 3시 알림 등록해줘", "2026-10-15T15:00", "오늘의집 배송"],
+  ] as const) {
+    const result = at(text);
+    assert.equal(kst(result.dueAtMs), due, text);
+    assert.equal(result.title, title, text);
+  }
+  assert.equal(kst(at("오후 3시 30부터 회의 등록해줘").dueAtMs), "2026-10-15T15:30");
+  assert.equal(at("2/4 오후 3시 회의 등록해줘").error, "시각을 확인하지 못했습니다.");
+});
+
+test("rule parsing skips user text far longer than any command", () => {
+  const started = performance.now();
+  assert.equal(interpretScheduleRequest(`오후 3시 ${"1".repeat(50_000)} 알림`).handled, false);
+  assert.equal(interpretScheduleRequest(`${"일정 ".repeat(1_000)}보여줘`, { action: "list" }).action, "list");
+  assert.ok(performance.now() - started < 1_000);
+});

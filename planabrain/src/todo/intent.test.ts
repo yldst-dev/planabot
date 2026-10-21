@@ -60,6 +60,19 @@ test("decided todo actions skip keyword detection", async (t) => {
       assert.deepEqual((await listTodos("bounds")).items.filter((item) => item.completed).map((item) => item.content), ["운동하기"]);
     });
 
+    await t.test("sentences about only meaning to do a todo leave it open and long text skips rule parsing", async () => {
+      for (const content of ["운동하기", "공부하기"]) await addTodo("intent", content);
+      for (const text of ["운동 하려고 했어", "운동 할까 했어", "운동 했어야 했는데", "공부 하라고 했어"]) {
+        assert.equal((await interpretTodoRequest("intent", text)).handled, false, text);
+      }
+      assert.ok((await listTodos("intent")).items.every((item) => !item.completed));
+      const long = `할 일 ${"가 로 ".repeat(1_023)}`;
+      const started = performance.now();
+      assert.equal((await interpretTodoRequest("intent", long)).handled, false);
+      assert.equal((await interpretTodoRequest("intent", long, "list")).action, "list");
+      assert.ok(performance.now() - started < 1_000);
+    });
+
     await t.test("a decided add registers without the todo keyword", async () => {
       const result = await interpretTodoRequest("decided", "우유 사기 추가해줘", "add");
       assert.equal(result.action, "add");

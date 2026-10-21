@@ -146,12 +146,13 @@ export async function describeImagesForSearch(
 }
 
 export function parseRewrittenQuery(raw: string): string | null | undefined {
-  const match = raw.match(/\{[\s\S]*?\}/u);
-  if (!match) {
+  const start = raw.indexOf("{");
+  const end = start < 0 ? -1 : raw.indexOf("}", start);
+  if (end < 0) {
     return undefined;
   }
   try {
-    const parsed = JSON.parse(match[0]) as { query?: unknown; };
+    const parsed = JSON.parse(raw.slice(start, end + 1)) as { query?: unknown; };
     if (parsed.query === null) {
       return null;
     }
@@ -168,7 +169,7 @@ export function parseRewrittenQuery(raw: string): string | null | undefined {
 export const EXPLICIT_SEARCH_REQUEST_PATTERN =
   /(검색|(?<![가-힣])서치|구글링|찾아\s*(?:봐(?!야)|줘|주세요|보세요|보자)|알아\s*(?:봐(?!야)|줘|주세요|보세요|보자)|조사해\s*(?:줘|주세요))/u;
 
-const SEARCH_REFUSAL_PATTERN = /(?:검색|서치|구글링|찾아\s*보|알아\s*보|조사)\S*\s*(?:하지\s*(?:마|말)|말고|없이|안\s*해|필요\s*없)/u;
+const SEARCH_REFUSAL_PATTERN = /(?:검색|서치|구글링|찾아\s*보|알아\s*보|조사)\S{0,20}\s*(?:하지\s*(?:마|말)|말고|없이|안\s*해|필요\s*없)/u;
 
 export function isExplicitSearchRequest(currentTurnText: string): boolean {
   const text = normalizeCurrentTurnText(currentTurnText);
@@ -178,10 +179,13 @@ export function isExplicitSearchRequest(currentTurnText: string): boolean {
   return EXPLICIT_SEARCH_REQUEST_PATTERN.test(text) && !SEARCH_REFUSAL_PATTERN.test(text);
 }
 
-const REPLY_CONTEXT_PATTERN = /(?:참고 메시지|직전 프라나 응답[^\n]*):\n([\s\S]*?)\n\n질문:\n/u;
+const REPLY_CONTEXT_LABEL = /^(?:참고 메시지|직전 프라나 응답[^\n]*):\n/mu;
 
 export function extractReplyContext(question: string): string | undefined {
-  return question.match(REPLY_CONTEXT_PATTERN)?.[1]?.replace(/\s+/gu, " ").trim().slice(0, 300) || undefined;
+  const label = REPLY_CONTEXT_LABEL.exec(question);
+  const start = label ? label.index + label[0].length : -1;
+  const end = start < 0 ? -1 : question.indexOf("\n\n질문:\n", start);
+  return end < 0 ? undefined : question.slice(start, end).replace(/\s+/gu, " ").trim().slice(0, 300) || undefined;
 }
 
 export function extractCurrentTime(question: string): string | undefined {
@@ -207,6 +211,15 @@ export function isInformationRequestForm(currentTurnText: string): boolean {
   return INFORMATION_REQUEST_FORM_PATTERN.test(text);
 }
 
+const CURRENT_TIME_WORD = /오늘|현재|지금|실시간|최신|최근|이번\s*(?:주|달|분기|해)|올해/u;
+const RECENT_WORD = /오늘|현재|지금|실시간|최신|최근/u;
+const STATUS_WORD = /날짜|시간|상황|현황|정보|소식|결과|일정/u;
+
+function appearsBefore(line: string, first: RegExp, second: RegExp): boolean {
+  const match = first.exec(line);
+  return match !== null && second.test(line.slice(match.index + match[0].length));
+}
+
 export function isCurrentInformationRequest(currentTurnText: string): boolean {
   const text = normalizeCurrentTurnText(currentTurnText);
   if (!text) {
@@ -222,14 +235,9 @@ export function isCurrentInformationRequest(currentTurnText: string): boolean {
   ) {
     return true;
   }
-  if (
-    /(?:오늘|현재|지금|실시간|최신|최근|이번\s*(?:주|달|분기|해)|올해).*(?:날짜|시간|상황|현황|정보|소식|결과|일정)|(?:날짜|시간|상황|현황|정보|소식|결과|일정).*(?:오늘|현재|지금|실시간|최신|최근)/u.test(
-      text,
-    )
-  ) {
-    return true;
-  }
-  return false;
+  return text
+    .split(/[\n\r\u2028\u2029]/u)
+    .some((line) => appearsBefore(line, CURRENT_TIME_WORD, STATUS_WORD) || appearsBefore(line, STATUS_WORD, RECENT_WORD));
 }
 
 export function normalizeCurrentTurnText(input: string): string {

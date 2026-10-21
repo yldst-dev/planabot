@@ -5,7 +5,7 @@ export const MAX_FALLBACK_CITATIONS = 3;
 
 const MIN_SHARED_BIGRAMS = 3;
 
-export const SOURCE_SELECTION_LINE = /^(.*?)\s*출처\s*번호\s*[:：]\s*(.+?)\s*$/u;
+export const SOURCE_SELECTION_LINE = /^(.*?)(?<!\s)\s*출처\s*번호\s*[:：]\s*(.*\S|\s)\s*$/u;
 
 export function applySourceSelection(
   content: string,

@@ -528,7 +528,7 @@ function normalizeHostname(hostname: string): string {
 }
 
 function trimUrlCandidate(input: string): string {
-  let candidate = input.replace(/[.,;:!?}'"`]+$/, "");
+  let candidate = input.replace(/(?<![.,;:!?}'"`])[.,;:!?}'"`]+$/, "");
   let opening = countCharacter(candidate, "(");
   let closing = countCharacter(candidate, ")");
   while (candidate.endsWith(")") && closing > opening) {
@@ -838,7 +838,7 @@ function parseHtmlTag(
 
 function parseAttributes(tag: string): Record<string, string> {
   const attributes: Record<string, string> = {};
-  const pattern = /([:\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
+  const pattern = /(?<![:\w-])([:\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
   for (const match of tag.matchAll(pattern)) {
     const key = match[1]?.toLowerCase();
     if (key) {
