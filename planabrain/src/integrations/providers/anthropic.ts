@@ -3,7 +3,7 @@ import { fetchWithTimeout, ProviderApiError } from "../providerError.js";
 import { readUsage, recordProviderResponse } from "../responseMetadata.js";
 import { withRateLimitRetry } from "../retry.js";
 import { buildProviderApiError, readJsonOrText } from "../transport/httpError.js";
-import { asRecord } from "../value.js";
+import { asRecord, stringifyWellFormed } from "../value.js";
 import { resolveReasoningEffort } from "./codex.js";
 import { type Settings } from "../../config/settings.js";
 
@@ -30,7 +30,7 @@ export async function invokeAnthropicChat(
         "anthropic-version": ANTHROPIC_VERSION,
         "content-type": "application/json",
       },
-      body: JSON.stringify(payload),
+      body: stringifyWellFormed(payload),
     });
     const body = await readJsonOrText(response);
     if (!response.ok) {

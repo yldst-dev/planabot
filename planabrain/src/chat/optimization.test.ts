@@ -4,6 +4,9 @@ import { buildTurnMessages, buildMemoryContextMessage } from "./promptContext.js
 import { fitContextMessages, contextTokens, MAX_CONTEXT_TOKENS } from "./contextBudget.js";
 import { buildReplay } from "./replay.js";
 import { normalizeDeliveryText, finalizeAnswerForDelivery, removeModelSourceLines } from "./deliveryRewrite.js";
+import { sanitizeAssistantOutput } from "./sanitizeOutput.js";
+import { isSimpleSocialTurn } from "./queryPolicy.js";
+import { looksAbruptlyTruncated } from "../integrations/continuation.js";
 import { invokeChatWithMetadata } from "../integrations/chat.js";
 import { testSettings } from "../testing/settings.js";
 import { codexStream, installFetch } from "../testing/codex.js";
@@ -169,6 +172,25 @@ test("source cleanup removes model source lines but keeps prose and code that me
   const code = "```ts\nconst config = { source: \"https://cdn.example.com/app.js\" };\nhttps://cdn.example.com\n```";
   assert.equal(removeModelSourceLines(code), code);
   assert.equal(removeModelSourceLines("let player = Player(source: URL(string: \"https://example.com/a.mp3\")!)"), "let player = Player(source: URL(string: \"https://example.com/a.mp3\")!)");
+  assert.equal(removeModelSourceLines("환율은 1,380원입니다(출처: 한국은행(ECOS)). 전일보다 5원 올랐습니다."), "환율은 1,380원입니다. 전일보다 5원 올랐습니다.");
+  assert.equal(removeModelSourceLines("```ts\nconst a = 1;\n\n출처: https://fake.example/x"), "```ts\nconst a = 1;");
+  assert.equal(removeModelSourceLines("```bash npm install```\n출처: https://fake.example/x"), "```bash npm install```");
+});
+
+test("source cleanup and output checks stay fast on long adversarial lines", () => {
+  const urls = Array.from({ length: 26 }, (_, index) => `https://e.example/p${index}`).join(",");
+  const started = performance.now();
+  assert.equal(removeModelSourceLines(`가${" ".repeat(50_000)}나`).length, 50_002);
+  assert.equal(removeModelSourceLines(`${urls} 참고`), `${urls} 참고`);
+  assert.ok(sanitizeAssistantOutput(`I should respond.\n\n- ${" ".repeat(20_000)}x\n\n선생님.`).length > 0);
+  assert.equal(looksAbruptlyTruncated(`${"http://".repeat(7_000)} 끝`), false);
+  assert.equal(isSimpleSocialTurn(`프라나야${"~".repeat(50_000)}x`), false);
+  assert.ok(performance.now() - started < 1_000);
+});
+
+test("delivery formatting leaves closed code blocks unsplit", () => {
+  const code = "```js\nalert('Hello! World'); console.log('A. B');\n```";
+  assert.equal(normalizeDeliveryText(`설명입니다. 다음입니다.\n${code}`), `설명입니다.\n다음입니다.\n${code}`);
 });
 
 test("canonical replay matches turns sent with the call name or an image marker", () => {

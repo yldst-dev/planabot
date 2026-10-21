@@ -6,6 +6,8 @@ const DAY_MS = 24 * HOUR_MS;
 const MAX_TIMER_MS = 30 * DAY_MS;
 const MAX_SCHEDULE_MS = 366 * DAY_MS;
 const DEFAULT_SCHEDULE_TITLE = "요청하신 내용";
+const RECURRING_PATTERN = /매\s*(?:일|주|달|월|년|시간)|마다/u;
+const WEEK_QUALIFIER_PATTERN = /(?:이번|다음|다다음)\s*달|째\s*주|마지막\s*주/u;
 
 export type ScheduleInterpretOutput = {
   handled: boolean;
@@ -22,7 +24,7 @@ export type ScheduleInterpretOutput = {
 type ParsedTime = {
   dueAtMs: number;
   durationMs?: number;
-  matchedText: string;
+  matched: string[];
   kind: "schedule" | "timer";
 };
 
@@ -35,8 +37,9 @@ export function interpretScheduleRequest(
   const now = resolveNow(options.nowMs);
   const decided = options.action;
   const userText = extractUserText(text);
+  const timeText = userText.replace(/정오/gu, "낮 12시").replace(/자정/gu, "밤 12시");
   const normalized = normalizeIntentText(userText);
-  const parsedTime = parseScheduleTime(userText, now, options.meridiem);
+  const parsedTime = parseScheduleTime(timeText, now, options.meridiem);
   const related =
     decided !== undefined ||
     (!isHowToQuestion(normalized) &&
@@ -59,6 +62,14 @@ export function interpretScheduleRequest(
     return {
       handled: true,
       action: "list"
+    };
+  }
+
+  if (RECURRING_PATTERN.test(normalized) && (parsedTime || decided === "add" || isAddRequest(normalized))) {
+    return {
+      handled: true,
+      action: "add",
+      error: "반복 일정은 아직 지원하지 않습니다."
     };
   }
 
@@ -89,7 +100,7 @@ export function interpretScheduleRequest(
     };
   }
 
-  const title = extractScheduleTitle(userText, parsedTime);
+  const title = extractScheduleTitle(timeText, parsedTime);
   return {
     handled: true,
     action: "add",
@@ -119,10 +130,10 @@ function parseRelativeTime(text: string, now: number): ParsedTime | undefined {
       Number(match[4] ?? 0) * MINUTE_MS +
       Number(match[5] ?? 0) * SECOND_MS;
     if (durationMs > 0) {
-      return { dueAtMs: now + durationMs, durationMs, matchedText: match[0], kind: "timer" };
+      return { dueAtMs: now + durationMs, durationMs, matched: [match[0]], kind: "timer" };
     }
   }
-  const units = [...normalized.matchAll(/(?<!\d)(?<!\d\s*시\s*)(\d+)\s*(초|분|시간)(\s*반)?(?=.*(?:타이머|알림))/g)];
+  const units = [...normalized.matchAll(/(?<!\d)(?<!\d\s*시\s*)(\d+)\s*(초|분(?!기)|시간)(\s*반)?(?!\s*(?:반\s*)?전)(?=.*(?:타이머|알림))/g)];
   const durationMs = units.reduce(
     (total, unit) => total + unitToMs(Number(unit[1]), unit[2]) + (unit[3] ? unitToMs(30, unit[2] === "시간" ? "분" : "초") : 0),
     0,
@@ -135,14 +146,14 @@ function parseRelativeTime(text: string, now: number): ParsedTime | undefined {
   return {
     dueAtMs: now + durationMs,
     durationMs,
-    matchedText: normalized.slice(first.index, (last.index ?? 0) + last[0].length),
+    matched: [normalized.slice(first.index, (last.index ?? 0) + last[0].length)],
     kind: "timer"
   };
 }
 
 function parseAbsoluteDateTime(text: string, meridiem?: "am" | "pm"): ParsedTime | null | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
-  const match = normalized.match(/(\d{4})[-.\/년]\s*(\d{1,2})[-.\/월]\s*(\d{1,2})일?\s*(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})분?|(반)))?/);
+  const match = normalized.match(/(\d{4})[-.\/년]\s*(\d{1,2})[-.\/월]\s*(\d{1,2})일?\s*(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})(?:분|(?=$|[\s,.]|에|쯤))|(반)))?/);
   if (!match) {
     return undefined;
   }
@@ -158,14 +169,14 @@ function parseAbsoluteDateTime(text: string, meridiem?: "am" | "pm"): ParsedTime
   }
   return {
     dueAtMs,
-    matchedText: match[0],
+    matched: [match[0]],
     kind: "schedule"
   };
 }
 
 function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"): ParsedTime | null | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
-  const time = normalized.match(/(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})분?(\s*전(?:까지)?(?=$|[\s,.]|에|쯤))?|(반)))?/);
+  const time = normalized.match(/(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})(?:분|(?=$|[\s,.]|에|쯤))(\s*전(?:까지)?(?=$|[\s,.]|에|쯤))?|(반)))?/);
   if (!time) {
     return undefined;
   }
@@ -201,6 +212,9 @@ function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"):
     day = parts.day;
     dateText = relativeDay[0];
   } else if (weekday) {
+    if (WEEK_QUALIFIER_PATTERN.test(normalized.slice(0, weekday.index))) {
+      return null;
+    }
     const weekOffset = weekday[1] === "다담" || weekday[1] === "다다음" ? 14 : weekday[1] === "다음" ? 7 : 0;
     const targetDay = weekdayIndex(weekday[2]);
     const currentDay = kstWeekday(today.year, today.month, today.day);
@@ -218,11 +232,14 @@ function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"):
   if (dateText && !Number.isFinite(kstDateMs(year, month, day, 0, 0))) {
     return null;
   }
-  if (!dateText && /말일|\d{1,2}\s*\/\s*\d{1,2}|\d{4}\s*[-.\/년]|다음\s*달\s*(?:에\s*)?$/u.test(normalized.slice(0, time.index))) {
+  if (!dateText && hasUnreadDate(normalized.slice(0, time.index))) {
     return null;
   }
   const rawHour = Number(time[2]);
-  const minutesBefore = time[4] ? Number(time[3]) : 0;
+  const before = time[4]
+    ? undefined
+    : `${normalized.slice(0, time.index)} ${normalized.slice((time.index ?? 0) + time[0].length)}`.match(/(?<!\d)(\d{1,3})\s*(분|시간)\s*전(?:에|까지)?(?=$|[\s,.]|에|쯤|알)/u);
+  const minutesBefore = time[4] ? Number(time[3]) : before ? Number(before[1]) * (before[2] === "시간" ? 60 : 1) : 0;
   const minute = time[4] ? 0 : time[3] ? Number(time[3]) : time[5] ? 30 : 0;
   const marker = time[1] ?? impliedMarker(rawHour, meridiem);
   const hours = marker || rawHour === 0 || rawHour >= 12 ? [normalizeHour(rawHour, marker)] : [rawHour, rawHour + 12];
@@ -240,15 +257,27 @@ function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"):
 
   return {
     dueAtMs,
-    matchedText: [dateText, time[0]].filter(Boolean).join(" ").trim(),
+    matched: [dateText, time[0], before?.[0] ?? ""].filter(Boolean),
     kind: "schedule"
   };
 }
 
+function hasUnreadDate(text: string): boolean {
+  if (/말일|다음\s*달\s*(?:에\s*)?$|(?:이번|다음|다다음)\s*달\s*(?:말|초|중순)(?=$|\s|에|까지|쯤)|(?:이번|다음|다다음)\s*주\s*말(?=$|\s|에|까지|쯤)|째\s*주|마지막\s*주/u.test(text)) {
+    return true;
+  }
+  return [...text.matchAll(/(?<!\S)(\d{4}\s*[-.\/년]\s*)?(\d{1,2})\s*([-.\/월])\s*(\d{1,2})\.?(?=$|\s|일|에)/gu)].some((match) => {
+    const month = Number(match[2]);
+    const day = Number(match[4]);
+    const fraction = !match[1] && match[3] === "/" && day <= 4 && month < day;
+    return month >= 1 && month <= 12 && day >= 1 && day <= 31 && !fraction;
+  });
+}
+
 function extractScheduleTitle(text: string, parsedTime: ParsedTime): string {
-  let value = extractUserText(text);
-  if (parsedTime.matchedText) {
-    value = value.replace(parsedTime.matchedText, " ");
+  let value = extractUserText(text).replace(/\s+/g, " ");
+  for (const part of parsedTime.matched) {
+    value = value.replace(part, " ");
   }
   value = value
     .replace(/프라나야/g, " ")

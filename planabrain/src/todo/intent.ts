@@ -25,6 +25,9 @@ export async function interpretTodoRequest(
   const userText = extractUserText(text);
   const normalized = normalizeIntentText(userText);
   const todoRelated = action !== undefined || isTodoRelated(normalized) || isTodoContextText(text);
+  if (!action && todoRelated && /알림|알려/u.test(normalized) && /\d{1,2}\s*시(?!간)|정오|자정/u.test(normalized)) {
+    return emptyOutput();
+  }
 
   const update = action === "update" || (!action && todoRelated) ? parseUpdate(userText) : undefined;
   if (update) {
@@ -38,7 +41,7 @@ export async function interpretTodoRequest(
     return mutationOutput("delete", result.ok ? "삭제 완료.\n선생님." : "확인 불가.\n선생님.", result);
   }
 
-  if (action ? action === "complete" : hasAny(normalized, ["완료", "끝냈", "끝낫", "처리했", "체크", "했어", "했습니다"])) {
+  if (action ? action === "complete" : hasAny(normalized, ["완료", "끝냈", "끝낫", "처리했", "체크", "했어", "했습니다"]) && !isNegatedOrQuestion(normalized)) {
     const target = todoRelated
       ? await resolveTodoTarget(userId, extractCompleteTarget(userText, text), text)
       : await findMentionedTodo(userId, userText);
@@ -164,7 +167,7 @@ function extractCompleteTarget(userText: string, fullText: string): string {
     "해주세요",
     "해",
     "줘"
-  ]);
+  ]).replace(/^(?:네|예|응|그래|넵)(?:[,.!]+\s*|\s*$)/u, "").replace(/^(?:다|전부|모두|싹\s*다)$/u, "");
   const selectedTarget = extractSelectedOpenTodoFromContext(target, fullText);
   if (selectedTarget) {
     return selectedTarget;
@@ -176,10 +179,20 @@ function extractCompleteTarget(userText: string, fullText: string): string {
 }
 
 async function findMentionedTodo(userId: string, text: string): Promise<string | undefined> {
-  const compact = (value: string): string => value.toLowerCase().replace(/\s+/g, "");
-  const said = compact(text);
-  const mentioned = (await listTodos(userId)).items.filter((item) => !item.completed && said.includes(compact(item.content)));
+  const mentioned = (await listTodos(userId)).items.filter((item) => !item.completed && mentionsTodo(text, item.content));
   return mentioned.sort((a, b) => b.content.length - a.content.length)[0]?.id;
+}
+
+function mentionsTodo(text: string, content: string): boolean {
+  const stem = content.replace(/\s*하기$/u, "");
+  return [content, ...(stem !== content && stem.length >= 2 ? [stem] : [])].some((value) => {
+    const tokens = value.trim().split(/\s+/u).map((token) => token.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
+    return new RegExp(`${tokens.join("\\s*")}(?=$|[\\s\\p{P}]|을|를|은|는|이|가|도|만|완료|했|함|끝|처리|체크)`, "iu").test(text);
+  });
+}
+
+function isNegatedOrQuestion(text: string): boolean {
+  return /안\s*(?:했|끝)|못\s*(?:했|끝)|아직|않았|[?？]\s*$|했(?:나|니|냐|는지)/u.test(text);
 }
 
 function extractSingleOpenTodoFromContext(text: string): string | undefined {
@@ -235,7 +248,7 @@ function parseTodoSelectorIndex(target: string, itemCount: number): number | und
     ["첫", "첫번", "첫번째", "첫째", "처음", "맨위", "맨첫", "일번", "일번째"],
     ["두", "두번", "두번째", "둘째", "이번", "이번째"],
     ["세", "세번", "세번째", "셋째", "삼번", "삼번째"],
-    ["네", "네번", "네번째", "넷째", "사번", "사번째"],
+    ["네번", "네번째", "넷째", "사번", "사번째"],
     ["다섯", "다섯번", "다섯번째", "오번", "오번째"],
     ["여섯", "여섯번", "여섯번째", "육번", "육번째"],
     ["일곱", "일곱번", "일곱번째", "칠번", "칠번째"],

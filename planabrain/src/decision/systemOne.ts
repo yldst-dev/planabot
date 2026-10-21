@@ -1,3 +1,4 @@
+import { stringifyWellFormed } from "../integrations/value.js";
 import { checkExecution, currentExecution } from "../runtime/execution.js";
 
 export type SystemOneConfig = {
@@ -51,7 +52,7 @@ export async function evaluateSystemOne(
       authorization: `Bearer ${config.apiKey}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ model: config.model, state, questions }),
+    body: stringifyWellFormed({ model: config.model, state, questions }),
     signal: AbortSignal.any(signals),
   });
   if (!response.ok) {

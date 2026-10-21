@@ -35,7 +35,7 @@ export function looksAbruptlyTruncated(content: string): boolean {
   if (/[.!?…][\])}"'”’]*$/.test(content)) {
     return false;
   }
-  if (/https?:\/\/\S+$/.test(content)) {
+  if (/https?:\/\/\S/.test(content.slice(content.search(/(?<!\S)\S+$/u)))) {
     return false;
   }
   const tail = content.slice(-120);

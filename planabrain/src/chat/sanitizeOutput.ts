@@ -159,14 +159,14 @@ function isSuspiciousLine(value: string): boolean {
     return false;
   }
   return (
-    /^(?:[-*]\s*|>\s*)?\*?\s*wait,\s*the user is/i.test(line) ||
-    /^(?:[-*]\s*|>\s*)?\*?\s*wait,\s*the prompt says/i.test(line) ||
-    /^(?:[-*]\s*|>\s*)?\*?\s*the previous assistant response/i.test(line) ||
-    /^(?:[-*]\s*|>\s*)?\*?\s*the prompt says/i.test(line) ||
-    /^(?:[-*]\s*|>\s*)?\*?\s*i should\b/i.test(line) ||
-    /^(?:[-*]\s*|>\s*)?\*?\s*dating sim mode/i.test(line) ||
-    /^(?:[-*]\s*|>\s*)?\*?\s*system prompt/i.test(line) ||
-    /^(?:[-*]\s*|>\s*)?\*?\s*internal reasoning/i.test(line)
+    /^(?:[-*>]\s*)?(?:\*\s*)?wait,\s*the user is/i.test(line) ||
+    /^(?:[-*>]\s*)?(?:\*\s*)?wait,\s*the prompt says/i.test(line) ||
+    /^(?:[-*>]\s*)?(?:\*\s*)?the previous assistant response/i.test(line) ||
+    /^(?:[-*>]\s*)?(?:\*\s*)?the prompt says/i.test(line) ||
+    /^(?:[-*>]\s*)?(?:\*\s*)?i should\b/i.test(line) ||
+    /^(?:[-*>]\s*)?(?:\*\s*)?dating sim mode/i.test(line) ||
+    /^(?:[-*>]\s*)?(?:\*\s*)?system prompt/i.test(line) ||
+    /^(?:[-*>]\s*)?(?:\*\s*)?internal reasoning/i.test(line)
   );
 }
 

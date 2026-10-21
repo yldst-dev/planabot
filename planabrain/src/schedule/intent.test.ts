@@ -102,3 +102,41 @@ test("leap days roll forward, unreadable dates are refused and minutes before an
   }
   assert.equal(kst(interpretScheduleRequest("3시 10분 전에 알림 등록해줘", { nowMs: oct15 }).dueAtMs), "2026-10-15T14:50");
 });
+
+test("phone numbers, years and fractions before a clock time are not read as dates", () => {
+  const oct15 = Date.UTC(2026, 9, 15, 3, 0);
+  for (const [text, title] of [
+    ["010-1234-5678 오후 3시 전화 알림 등록해줘", "010-1234-5678 전화"],
+    ["2026년 사업계획 회의 오후 3시 등록해줘", "2026년 사업계획 회의"],
+    ["2026년도 예산 회의 오후 3시 등록해줘", "2026년도 예산 회의"],
+    ["1/2 정산 회의 오후 3시 등록해줘", "1/2 정산 회의"],
+  ] as const) {
+    const result = interpretScheduleRequest(text, { nowMs: oct15 });
+    assert.equal(kst(result.dueAtMs), "2026-10-15T15:00", text);
+    assert.equal(result.title, title, text);
+  }
+});
+
+test("other unread dates and repeating requests are refused instead of landing today", () => {
+  const oct15 = Date.UTC(2026, 9, 15, 3, 0);
+  for (const text of ["10.20 오후 3시 회의 등록해줘", "10-20 오후 3시 회의 등록해줘", "10. 20. 오후 3시 회의 등록해줘", "다음 달 말 오후 3시 회의 등록해줘", "다음 주말 오후 3시 등산 등록해줘", "다음 달 첫째 주 월요일 오후 3시 회의 등록해줘"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: oct15 }).error, "시각을 확인하지 못했습니다.", text);
+  }
+  for (const text of ["매일 오후 3시 알림 등록해줘", "매주 월요일 오전 9시 회의 등록해줘", "평일마다 오전 8시 알림 등록해줘", "10분마다 물 마시기 알림"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: oct15 }).error, "반복 일정은 아직 지원하지 않습니다.", text);
+  }
+});
+
+test("minutes before a later clock time count back while floors, headcounts and quarters stay out of the time", () => {
+  const morning = Date.UTC(2026, 9, 15, 1, 0);
+  const at = (text: string) => interpretScheduleRequest(text, { nowMs: morning });
+  const before = at("오후 3시 회의 10분 전에 알림 등록해줘");
+  assert.equal(kst(before.dueAtMs), "2026-10-15T14:50");
+  assert.equal(before.title, "회의");
+  assert.equal(at("회의 10분 전에 알림 등록해줘").error, "시각을 확인하지 못했습니다.");
+  for (const text of ["4분기 실적 발표 오후 3시 알림 등록해줘", "오후 3시 3층 회의실 회의 등록해줘", "오후 3시 20명 회의 등록해줘"]) {
+    assert.equal(kst(at(text).dueAtMs), "2026-10-15T15:00", text);
+  }
+  assert.equal(kst(at("정오에 점심 알림 등록해줘").dueAtMs), "2026-10-15T12:00");
+  assert.equal(kst(at("자정에 알림 등록해줘").dueAtMs), "2026-10-16T00:00");
+});

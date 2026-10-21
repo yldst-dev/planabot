@@ -48,6 +48,18 @@ test("decided todo actions skip keyword detection", async (t) => {
       assert.deepEqual((await listTodos("overlap")).items.filter((item) => !item.completed).map((item) => item.content), ["그래프 그리기"]);
     });
 
+    await t.test("keyword completion needs the whole todo at a word boundary and skips negations, questions and reminders", async () => {
+      for (const content of ["네일", "응원", "운동하기", "청소", "다이어리"]) await addTodo("bounds", content);
+      for (const text of ["네 일단 했어", "응 원래 했어", "청소 안 했어", "청소 했어?", "네, 할일 완료했어", "할일 다 했어"]) {
+        await interpretTodoRequest("bounds", text);
+      }
+      await interpretTodoRequest("bounds", "네", "complete");
+      assert.ok((await listTodos("bounds")).items.every((item) => !item.completed));
+      assert.equal((await interpretTodoRequest("bounds", "할일 알림 오후 3시에 등록해줘")).handled, false);
+      assert.equal((await interpretTodoRequest("bounds", "운동 했어")).action, "complete");
+      assert.deepEqual((await listTodos("bounds")).items.filter((item) => item.completed).map((item) => item.content), ["운동하기"]);
+    });
+
     await t.test("a decided add registers without the todo keyword", async () => {
       const result = await interpretTodoRequest("decided", "우유 사기 추가해줘", "add");
       assert.equal(result.action, "add");

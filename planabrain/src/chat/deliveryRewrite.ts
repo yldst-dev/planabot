@@ -118,7 +118,24 @@ export function normalizeDeliveryText(raw: string): string {
     return text;
   }
   text = text.replace(/\n{3,}/g, "\n\n").trim();
-  return text.split("\n").map(breakIntoSentenceLines).join("\n").trim();
+  const lines = text.split("\n");
+  const fenced = closedFenceLines(lines);
+  return lines.map((line, index) => (fenced[index] ? line : breakIntoSentenceLines(line))).join("\n").trim();
+}
+
+function closedFenceLines(lines: string[]): boolean[] {
+  const inside = lines.map(() => false);
+  let open = -1;
+  lines.forEach((line, index) => {
+    if (!/^\s*```/u.test(line) || /^\s*```.*```\s*$/u.test(line)) return;
+    if (open < 0) {
+      open = index;
+      return;
+    }
+    inside.fill(true, open, index + 1);
+    open = -1;
+  });
+  return inside;
 }
 
 function breakIntoSentenceLines(line: string): string {
@@ -134,26 +151,22 @@ function breakIntoSentenceLines(line: string): string {
 const INLINE_SOURCE_LABEL = String.raw`(?<![\p{L}\p{N}_])(?:출처|Sources?):`;
 const INLINE_SOURCE_LINK = String.raw`(?:https?:\/\/[^\s,]+|\[[^\]]*\]\(https?:\/\/[^)\s]+\))`;
 const INLINE_SOURCE_PATTERNS = [
-  /\s*\((?:출처|Sources?):[^()]*\)/gu,
-  new RegExp(String.raw`\s*${INLINE_SOURCE_LABEL}\s*${INLINE_SOURCE_LINK}(?:\s*,\s*${INLINE_SOURCE_LINK})*`, "gu"),
+  /(?<!\s)\s*\((?:출처|Sources?):(?:[^()]|\([^()]*\))*\)/gu,
+  new RegExp(String.raw`(?<!\s)\s*${INLINE_SOURCE_LABEL}\s*${INLINE_SOURCE_LINK}(?:\s*,\s*${INLINE_SOURCE_LINK})*`, "gu"),
   new RegExp(String.raw`(?<=[.!?。…)\]])\s*${INLINE_SOURCE_LABEL}.*?(?:[.!?。](?=\s)|$)`, "gu"),
 ];
 
 export function removeModelSourceLines(input: string): string {
-  let fenced = false;
-  return input
-    .split(/\r?\n/u)
-    .map((line) => {
-      if (/^\s*```/u.test(line)) {
-        fenced = !fenced;
-        return line;
-      }
-      if (fenced) return line;
+  const lines = input.split(/\r?\n/u);
+  const fenced = closedFenceLines(lines);
+  return lines
+    .map((line, index) => {
+      if (fenced[index]) return line;
       const source = line.match(/(?<![\p{L}\p{N}_])(?:출처|sources?):/iu);
       if (source?.index !== undefined && /^[\s>*\-•]*$/u.test(line.slice(0, source.index))) return "";
       const trimmed = line.trim();
       if (
-        /^(?:https?:\/\/\S+)(?:\s*,\s*https?:\/\/\S+)*$/iu.test(trimmed) ||
+        /^https?:\/\/[^\s,]+(?:\s*,\s*https?:\/\/[^\s,]+)*$/iu.test(trimmed) ||
         /^(?:\[[^\]]+\]\(https?:\/\/[^)]+\))(?:\s*,\s*\[[^\]]+\]\(https?:\/\/[^)]+\))*$/iu.test(
           trimmed,
         )

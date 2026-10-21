@@ -3,7 +3,7 @@ import { fetchWithTimeout, ProviderApiError } from "../providerError.js";
 import { readUsage, recordProviderResponse } from "../responseMetadata.js";
 import { withRateLimitRetry } from "../retry.js";
 import { buildProviderApiError, readJsonOrText } from "../transport/httpError.js";
-import { asRecord } from "../value.js";
+import { asRecord, stringifyWellFormed } from "../value.js";
 import { type Settings } from "../../config/settings.js";
 
 const EVENT_SEPARATOR = /\r?\n\r?\n/u;
@@ -30,7 +30,7 @@ export async function invokeCodexChat(
         "content-type": "application/json",
         accept: "text/event-stream",
       },
-      body: JSON.stringify(payload),
+      body: stringifyWellFormed(payload),
     });
     if (!response.ok) {
       throw buildProviderApiError("codex", await readJsonOrText(response), response);

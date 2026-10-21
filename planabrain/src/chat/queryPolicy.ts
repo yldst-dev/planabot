@@ -254,6 +254,6 @@ export function normalizeCurrentTurnText(input: string): string {
 }
 
 export function isSimpleSocialTurn(text: string): boolean {
-  const normalized = text.trim().replace(/^프라나(?:야)?[,，\s]*/u, "").replace(/[.!?？~]+$/u, "").trim();
+  const normalized = text.trim().replace(/^프라나(?:야)?[,，\s]*/u, "").replace(/(?<![.!?？~])[.!?？~]+$/u, "").trim();
   return /^(?:안녕(?:하세요)?|좋은\s*(?:아침|밤)(?:이야|입니다)?|고마워|감사합니다|있어|잘\s*자)$/u.test(normalized);
 }

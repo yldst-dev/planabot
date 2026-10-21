@@ -95,6 +95,16 @@ test("codex sends a Responses request that follows the gateway rules and reads t
   });
 });
 
+test("codex replaces lone surrogates before sending so a cut emoji cannot break the request", async () => {
+  await withGateway((res) => streamChunks(res, HAPPY_EVENTS), async (baseUrl, requests) => {
+    const settings = testSettings({ codexApiKey: "cg_test", codexBaseUrl: baseUrl, continuousChat: false });
+    await runExecution("codex-surrogate", () =>
+      invokeChatWithMetadata({ settings, maxContinuations: 0, messages: [{ role: "user", content: "잘린 \uD83D 글자와 😀" }] }),
+    );
+    assert.deepEqual(requests[0]?.body.input, [{ role: "user", content: "잘린 \uFFFD 글자와 😀" }]);
+  });
+});
+
 test("fast mode adds the priority service tier only when enabled", async () => {
   await withGateway((res) => streamChunks(res, HAPPY_EVENTS), async (baseUrl, requests) => {
     const base = { codexApiKey: "cg_test", codexBaseUrl: baseUrl, continuousChat: false };
