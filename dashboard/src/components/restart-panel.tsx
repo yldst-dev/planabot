@@ -46,7 +46,7 @@ export function RestartPanel() {
     }
     setRestarting(true)
     const baseline = await api.overview(AbortSignal.timeout(POLL_TIMEOUT_MS)).catch((error: Error) => error)
-    if (baseline instanceof Error) {
+    if (baseline instanceof Error || !baseline.booted_at) {
       setRestarting(false)
       toast.error("재시작 불가.", {
         description:

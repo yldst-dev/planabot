@@ -64,9 +64,10 @@ export const useChanges = create<ChangesState>((set) => ({
         const settled = Object.hasOwn(sent, field.key) && !Object.hasOwn(sending, field.key)
         if (settled && Object.hasOwn(next, field.key) && matchesServer(field, next[field.key])) delete next[field.key]
       }
-      return { changes: next, sending }
+      const invalid = state.invalid && !Object.hasOwn(next, state.invalid.key) ? null : state.invalid
+      return { changes: next, sending, invalid }
     }),
-  fail: (key, message) => set({ invalid: { key, message } }),
+  fail: (key, message) => set((state) => (Object.hasOwn(state.changes, key) ? { invalid: { key, message } } : {})),
   clear: () => set({ changes: {}, invalid: null }),
 }))
 
