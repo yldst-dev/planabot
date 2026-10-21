@@ -29,6 +29,8 @@ pub type HandlerResult = Result<()>;
 
 const TURN_DRAIN_LIMIT: Duration = Duration::from_secs(190);
 
+const SHUTDOWN_WATCHDOG: Duration = Duration::from_secs(225);
+
 static SHUTDOWN: OnceLock<ShutdownToken> = OnceLock::new();
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -40,7 +42,14 @@ pub(crate) fn request_shutdown() -> bool {
         return true;
     }
     state::note_shutdown_start();
-    token.shutdown().is_ok()
+    let accepted = token.shutdown().is_ok();
+    if accepted {
+        std::thread::spawn(|| {
+            std::thread::sleep(SHUTDOWN_WATCHDOG);
+            crate::reboot::trigger_failure_reboot("종료 대기 시간 초과");
+        });
+    }
+    accepted
 }
 
 fn is_shutting_down() -> bool {
