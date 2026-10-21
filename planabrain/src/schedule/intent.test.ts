@@ -159,6 +159,26 @@ test("noon words, bare minutes, repeat words, score pairs and date words in titl
   assert.equal(at("2/4 오후 3시 회의 등록해줘").error, "시각을 확인하지 못했습니다.");
 });
 
+test("spaced repeat words, noon words with particles or date words, hour ranges and date words before the time are read", () => {
+  const morning = Date.UTC(2026, 9, 15, 1, 0);
+  const at = (text: string) => interpretScheduleRequest(text, { nowMs: morning });
+  for (const text of ["평일 마다 오전 8시 알림 등록해줘", "10분 마다 알림 등록해줘", "알림매일 오전 7시 등록해줘"]) {
+    assert.equal(at(text).error, "반복 일정은 아직 지원하지 않습니다.", text);
+  }
+  for (const [text, due] of [
+    ["회의를 정오로 등록해줘", "2026-10-15T12:00"],
+    ["자정으로 알림 맞춰줘", "2026-10-16T00:00"],
+    ["오늘자정까지 보고서 알림 등록해줘", "2026-10-16T00:00"],
+    ["금요일정오에 회의 등록해줘", "2026-10-16T12:00"],
+    ["공정오류 확인 오후 3시 알림 등록해줘", "2026-10-15T15:00"],
+    ["오후 3시 1~2시간 회의 등록해줘", "2026-10-15T15:00"],
+    ["오늘은 밤 11시 내일 준비물 챙기기 알림 등록해줘", "2026-10-15T23:00"],
+    ["내일은 오후 7시 오늘 못 본 드라마 보기 알림 등록해줘", "2026-10-16T19:00"],
+  ] as const) {
+    assert.equal(kst(at(text).dueAtMs), due, text);
+  }
+});
+
 test("rule parsing skips user text far longer than any command", () => {
   const started = performance.now();
   assert.equal(interpretScheduleRequest(`오후 3시 ${"1".repeat(50_000)} 알림`).handled, false);

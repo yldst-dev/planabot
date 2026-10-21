@@ -7,8 +7,8 @@ const MAX_TIMER_MS = 30 * DAY_MS;
 const MAX_SCHEDULE_MS = 366 * DAY_MS;
 const DEFAULT_SCHEDULE_TITLE = "요청하신 내용";
 const MAX_RULE_TEXT_CHARS = 600;
-const RECURRING_PATTERN = /(?<![가-힣])매\s*(?:일(?!경제|유업|신문|우유)|주|달(?![리려린렸기아았고면게])|월|년|시간)|(?<=[\d가-힣])마다(?!가스)/u;
-export const NOON_OR_MIDNIGHT_PATTERN = /(?<![가-힣])(?:정오|자정)(?=$|[^가-힣]|[에쯤까부전이가은는을를도만의되넘지직무경께])/gu;
+const RECURRING_PATTERN = /(?:(?<![가-힣])|(?<=알림|일정|타이머|예약))매\s*(?:일(?!경제|유업|신문|우유)|주|달(?![리려린렸기아았고면게])|월|년|시간)|(?<=[\d가-힣]\s?)마다(?!가스)/u;
+export const NOON_OR_MIDNIGHT_PATTERN = /(?<=^|[^가-힣]|오늘|내일|모레|글피|요일)(?:정오|자정)(?=$|[^가-힣]|[에쯤까부전이가은는을를도만의되넘지직무경께로으엔즈와과랑나후])/gu;
 const COMMON_FRACTIONS = new Set(["1/2", "1/3", "2/3", "1/4", "3/4"]);
 const WEEK_QUALIFIER_PATTERN = /(?:이번|다음|다다음)\s*달|째\s*주|마지막\s*주/u;
 
@@ -162,7 +162,7 @@ function parseRelativeTime(text: string, now: number): ParsedTime | undefined {
 
 function parseAbsoluteDateTime(text: string, meridiem?: "am" | "pm"): ParsedTime | null | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
-  const match = normalized.match(/(\d{4})[-.\/년]\s*(\d{1,2})[-.\/월]\s*(\d{1,2})일?\s*(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})(?:분|(?=$|[\s,.]|에|쯤|까지|부터|으?로|[~\-]\s*\d{1,2}\s*시))|(반)))?/);
+  const match = normalized.match(/(\d{4})[-.\/년]\s*(\d{1,2})[-.\/월]\s*(\d{1,2})일?\s*(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})(?:분|(?=$|[\s,.]|에|쯤|까지|부터|으?로|[~\-]\s*\d{1,2}\s*시(?!간)))|(반)))?/);
   if (!match) {
     return undefined;
   }
@@ -185,7 +185,7 @@ function parseAbsoluteDateTime(text: string, meridiem?: "am" | "pm"): ParsedTime
 
 function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"): ParsedTime | null | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
-  const time = normalized.match(/(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})(?:분|(?=$|[\s,.]|에|쯤|까지|부터|으?로|[~\-]\s*\d{1,2}\s*시))(\s*전(?:까지)?(?=$|[\s,.]|에|쯤))?|(반)))?/);
+  const time = normalized.match(/(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})(?:분|(?=$|[\s,.]|에|쯤|까지|부터|으?로|[~\-]\s*\d{1,2}\s*시(?!간)))(\s*전(?:까지)?(?=$|[\s,.]|에|쯤))?|(반)))?/);
   if (!time) {
     return undefined;
   }
@@ -332,7 +332,7 @@ function extractCancelTarget(text: string): string {
 
 function distanceFrom(match: RegExpMatchArray, start: number, end: number): number {
   const index = match.index ?? 0;
-  return index + match[0].length <= start ? start - index - match[0].length : index - end;
+  return index + match[0].length <= start ? start - index - match[0].length : MAX_RULE_TEXT_CHARS + index - end;
 }
 
 function unitToMs(amount: number, unit: string): number {

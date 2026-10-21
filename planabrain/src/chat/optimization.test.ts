@@ -179,6 +179,7 @@ test("source cleanup removes model source lines but keeps prose and code that me
   assert.equal(removeModelSourceLines("```ts\nconst a = 1;\n\n출처: https://fake.example/x"), "```ts\nconst a = 1;");
   assert.equal(removeModelSourceLines("```bash npm install```\n출처: https://fake.example/x"), "```bash npm install```");
   assert.equal(removeModelSourceLines("답변입니다.\nhttps://maps.example/@37.5,127.0,15z\nhttps://a.example/x,"), "답변입니다.");
+  assert.equal(removeModelSourceLines("답변입니다.\nhttps://example.com,참고하세요"), "답변입니다.\nhttps://example.com,참고하세요");
 });
 
 test("source cleanup and output checks stay fast on long adversarial lines", () => {

@@ -166,7 +166,7 @@ export function removeModelSourceLines(input: string): string {
       if (source?.index !== undefined && /^[\s>*\-•]*$/u.test(line.slice(0, source.index))) return "";
       const trimmed = line.trim();
       if (
-        /^https?:\/\/\S+(?:(?:\s+,\s*|,\s+)https?:\/\/\S+)*$/iu.test(trimmed) ||
+        /^https?:\/\/(?:[^\s,]|,(?![가-힣]))+(?:(?:\s+,\s*|,\s+)https?:\/\/(?:[^\s,]|,(?![가-힣]))+)*$/iu.test(trimmed) ||
         /^(?:\[[^\]]+\]\(https?:\/\/[^)]+\))(?:\s*,\s*\[[^\]]+\]\(https?:\/\/[^)]+\))*$/iu.test(
           trimmed,
         )

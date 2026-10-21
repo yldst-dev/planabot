@@ -73,6 +73,25 @@ test("decided todo actions skip keyword detection", async (t) => {
       assert.ok(performance.now() - started < 1_000);
     });
 
+    await t.test("edits, deletions and completions name their item without the todo words and never touch another item", async () => {
+      for (const content of ["할머니께 전화", "우유 사기"]) await addTodo("edit", content);
+      assert.equal((await interpretTodoRequest("edit", "할 일 우유 사기를 두유 사기로 바꿔줘")).action, "update");
+      assert.equal((await interpretTodoRequest("edit", "할 일 두유 사기 우유로 바꿔줘")).error, "대상 항목을 찾지 못했습니다.");
+      assert.deepEqual((await listTodos("edit")).items.map((item) => item.content), ["할머니께 전화", "두유 사기"]);
+      for (const content of ["주변 청소", "해변 청소"]) await addTodo("shore", content);
+      await interpretTodoRequest("shore", "할 일 해변 청소 삭제해줘");
+      assert.deepEqual((await listTodos("shore")).items.map((item) => item.content), ["주변 청소"]);
+    });
+
+    await t.test("item names with 할 거 or 해야 했던 still complete while plans stay open", async () => {
+      for (const content of ["주말 할거리 정리", "청소", "운동하기"]) await addTodo("plans", content);
+      assert.equal((await interpretTodoRequest("plans", "운동 할 거라고 했어")).handled, false);
+      for (const text of ["주말 할거리 정리 완료", "청소 해야 했던 거 다 했어"]) {
+        assert.equal((await interpretTodoRequest("plans", text)).action, "complete", text);
+      }
+      assert.deepEqual((await listTodos("plans")).items.filter((item) => !item.completed).map((item) => item.content), ["운동하기"]);
+    });
+
     await t.test("a decided add registers without the todo keyword", async () => {
       const result = await interpretTodoRequest("decided", "우유 사기 추가해줘", "add");
       assert.equal(result.action, "add");

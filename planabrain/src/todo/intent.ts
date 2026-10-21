@@ -9,6 +9,9 @@ import {
 import { NOON_OR_MIDNIGHT_PATTERN } from "../schedule/intent.js";
 
 const MAX_RULE_TEXT_CHARS = 600;
+const TODO_WORD_PATTERN = /(?:해야\s*)?(?:할\s*일|to-?do|투두)(?:\s*리스트)?|체크리스트|체크박스|항목/gi;
+const LEADING_TODO_WORDS = /^(?:(?:해야\s*)?(?:할\s*일|to-?do|투두)(?:\s*리스트)?|체크리스트)(?:\s*(?:에서|중에?|의|에))?\s+/iu;
+const COMMAND_ENDINGS = ["해줘", "해주세요", "해", "줘"];
 
 export type TodoInterpretOutput = {
   handled: boolean;
@@ -37,7 +40,7 @@ export async function interpretTodoRequest(
 
   const update = action === "update" || (!action && todoRelated) ? parseUpdate(userText) : undefined;
   if (update) {
-    const result = await updateTodo(userId, await resolveTodoTarget(userId, update.target, text), update.content);
+    const result = await updateTodo(userId, await resolveTodoTarget(userId, update.target, text, update.exact), update.content);
     return mutationOutput("update", result.ok ? "수정 완료.\n선생님." : "확인 불가.\n선생님.", result);
   }
 
@@ -135,32 +138,34 @@ function parseAdd(text: string, allowImplicit: boolean): string | undefined {
   return undefined;
 }
 
-function parseUpdate(text: string): { target: string; content: string } | undefined {
-  const normalized = text.replace(/\s+/g, " ").trim();
+function parseUpdate(text: string): { target: string; content: string; exact: boolean } | undefined {
+  const normalized = text.replace(/\s+/g, " ").trim().replace(LEADING_TODO_WORDS, "");
   if (!/수정|변경|바꿔|고쳐/u.test(normalized)) {
     return undefined;
   }
-  const patterns = [
-    /^(.+?)(?:을|를)?\s+(.+?)(?:으로|로)\s*(?:수정|변경|바꿔|바꿔줘|고쳐)/,
-    /^(.+?)(?:을|를)?\s*(?:수정|변경|바꿔|고쳐).+?(?:으로|로)\s+(.+)/
+  const patterns: Array<[RegExp, boolean]> = [
+    [/^(.+?)(?:을|를)\s+(.+?)(?:으로|로)\s*(?:수정|변경|바꿔|고쳐)/, false],
+    [/^(.+?)\s+(.+?)(?:으로|로)\s*(?:수정|변경|바꿔|고쳐)/, true],
+    [/^(.+?)(?:을|를)?\s*(?:수정|변경|바꿔|고쳐).+?(?:으로|로)\s+(.+)/, false]
   ];
-  for (const pattern of patterns) {
+  for (const [pattern, exact] of patterns) {
     const match = normalized.match(pattern);
-    const target = cleanupTarget(match?.[1] ?? "");
+    const target = cleanupTarget((match?.[1] ?? "").replace(TODO_WORD_PATTERN, " "));
     const content = cleanupTarget(match?.[2] ?? "");
     if (target && content) {
-      return { target, content };
+      return { target, content, exact };
     }
   }
   return undefined;
 }
 
 function extractTarget(text: string, words: string[]): string {
-  let value = extractUserText(text).replace(/(?:해야\s*)?(?:할\s*일|to-?do|투두)(?:\s*리스트)?|체크리스트|체크박스|항목/gi, " ");
-  for (const word of words) {
-    value = value.replaceAll(word, " ");
-  }
-  return cleanupTarget(value);
+  const verbs = words.filter((word) => !COMMAND_ENDINGS.includes(word)).join("|");
+  const endings = COMMAND_ENDINGS.join("|");
+  const command = new RegExp(`^(?:(?:${verbs})(?:${endings})?|${endings})$`, "u");
+  const tokens = extractUserText(text).replace(TODO_WORD_PATTERN, " ").replace(/[\s.!~…]+$/u, "").split(/\s+/u).filter((token) => !command.test(token));
+  const last = tokens.pop()?.replace(new RegExp(`(?:${verbs})(?:${endings})?$`, "u"), "") ?? "";
+  return cleanupTarget([...tokens, last].join(" "));
 }
 
 function extractCompleteTarget(userText: string, fullText: string): string {
@@ -195,16 +200,33 @@ async function findMentionedTodo(userId: string, text: string): Promise<string |
   return mentioned.sort((a, b) => b.content.length - a.content.length)[0]?.id;
 }
 
-function mentionsTodo(text: string, content: string): boolean {
+function mentionsTodo(text: string, content: string, wholeWord = false): boolean {
   const stem = content.replace(/\s*하기$/u, "");
   return [content, ...(stem !== content && stem.length >= 2 ? [stem] : [])].some((value) => {
     const tokens = value.trim().split(/\s+/u).map((token) => token.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
-    return new RegExp(`${tokens.join("\\s*")}(?=$|[\\s\\p{P}]|을|를|은|는|이|가|도|만|완료|했|함|끝|처리|체크)`, "iu").test(text);
+    return new RegExp(`${wholeWord ? "(?<![\\p{L}\\p{N}])" : ""}${tokens.join("\\s*")}(?=$|[\\s\\p{P}]|을|를|은|는|이|가|도|만|완료|했|함|끝|처리|체크)`, "iu").test(text);
   });
 }
 
+function findNamedTodo(items: TodoItem[], target: string, exact: boolean): TodoItem | undefined {
+  const query = matchText(target);
+  if (!query) {
+    return undefined;
+  }
+  const named = items.find((item) => matchText(item.content) === query);
+  if (named || exact) {
+    return named;
+  }
+  return items.find((item) => ` ${matchText(item.content)} `.includes(` ${query} `)) ??
+    items.filter((item) => mentionsTodo(target, item.content, true)).sort((a, b) => b.content.length - a.content.length)[0];
+}
+
+function matchText(value: string): string {
+  return value.toLowerCase().replace(/[()[\]{}"'`.,!?。！？]/gu, " ").replace(/\s+/gu, " ").trim();
+}
+
 function isNegatedOrQuestion(text: string): boolean {
-  return /안\s*(?:했|끝)|못\s*(?:했|끝)|아직|않았|[?？]\s*$|했(?:나|니|냐|는지)|하려|하라고|할까|했어야|해야\s*했|할\s*거/u.test(text);
+  return /안\s*(?:했|끝)|못\s*(?:했|끝)|아직|않았|[?？]\s*$|했(?:나|니|냐|는지)|하려|하라고|할까|했어야|해야\s*했(?!던)|할\s*거(?:야|예|에|임|라|다)/u.test(text);
 }
 
 function extractSingleOpenTodoFromContext(text: string): string | undefined {
@@ -219,17 +241,17 @@ function extractSelectedOpenTodoFromContext(target: string, text: string): strin
   return index === undefined ? undefined : openItems[index];
 }
 
-async function resolveTodoTarget(userId: string, target: string, fullText: string): Promise<string> {
+async function resolveTodoTarget(userId: string, target: string, fullText: string, exact = false): Promise<string> {
   const fromContext = extractSelectedOpenTodoFromContext(target, fullText);
   if (fromContext) {
     return fromContext;
   }
-  if (parseTodoSelectorIndex(target, Number.MAX_SAFE_INTEGER) === undefined) {
-    return target;
-  }
   const open = (await listTodos(userId)).items.filter((item) => !item.completed);
   const index = parseTodoSelectorIndex(target, open.length);
-  return index === undefined ? target : open[index].id;
+  if (index !== undefined) {
+    return open[index].id;
+  }
+  return findNamedTodo(open, target, exact)?.id ?? "";
 }
 
 function extractOpenTodosFromContext(text: string): string[] {
