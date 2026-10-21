@@ -7,7 +7,7 @@ const MAX_TIMER_MS = 30 * DAY_MS;
 const MAX_SCHEDULE_MS = 366 * DAY_MS;
 const DEFAULT_SCHEDULE_TITLE = "요청하신 내용";
 const MAX_RULE_TEXT_CHARS = 600;
-const RECURRING_PATTERN = /(?:(?<![가-힣])|(?<=알림|일정|타이머|예약))매\s*(?:일(?!경제|유업|신문|우유)|주|달(?![리려린렸기아았고면게])|월|년|시간)|(?<=[\d가-힣]\s?)마다(?!가스)/u;
+const RECURRING_PATTERN = /(?:(?<![가-힣])|(?<=알림|일정|타이머|예약))매\s*(?:일(?!경제|유업|신문|우유)|주|달(?![리려린렸기아았고면게])|월|년|시간)|(?<=[\d가-힣]\s?)마다(?!가스|하|않)/u;
 export const NOON_OR_MIDNIGHT_PATTERN = /(?<=^|[^가-힣]|오늘|내일|모레|글피|요일)(?:정오|자정)(?=$|[^가-힣]|[에쯤까부전이가은는을를도만의되넘지직무경께로으엔즈와과랑나후])/gu;
 const COMMON_FRACTIONS = new Set(["1/2", "1/3", "2/3", "1/4", "3/4"]);
 const WEEK_QUALIFIER_PATTERN = /(?:이번|다음|다다음)\s*달|째\s*주|마지막\s*주/u;
@@ -43,7 +43,7 @@ export function interpretScheduleRequest(
   if (userText.length > MAX_RULE_TEXT_CHARS) {
     return decided === "list" ? { handled: true, action: "list" } : emptyOutput();
   }
-  const timeText = userText.replace(NOON_OR_MIDNIGHT_PATTERN, (word) => (word === "정오" ? "낮 12시" : "밤 12시"));
+  const timeText = /\d{1,2}\s*시(?!간)/u.test(userText) ? userText : userText.replace(NOON_OR_MIDNIGHT_PATTERN, (word) => (word === "정오" ? "낮 12시" : "밤 12시"));
   const normalized = normalizeIntentText(userText);
   const parsedTime = parseScheduleTime(timeText, now, options.meridiem);
   const related =
@@ -200,7 +200,9 @@ function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"):
   const dayOnly = normalized.match(/(?<![\d월]\s*)(?:(다?다음)\s*달\s*(?:에\s*)?)?(\d{1,2})일(?!\s*(?:뒤|후|있다가|동안|간|째))/);
   const timeStart = time.index ?? 0;
   const timeEnd = timeStart + time[0].length;
-  const relativeDay = [...normalized.matchAll(/내일\s*모레|오늘|내일|모레|글피/g)].sort(
+  const dayWords = [...normalized.matchAll(/(?:내일\s*모레|오늘|내일|모레|글피)(?=(의)|$|[^가-힣]|[은는도에엔부까중이만]|오전|오후|아침|점심|저녁|밤|낮|새벽|정오|자정)/gu)];
+  const standaloneDays = dayWords.filter((match) => !match[1]);
+  const relativeDay = (standaloneDays.length ? standaloneDays : dayWords).sort(
     (a, b) => distanceFrom(a, timeStart, timeEnd) - distanceFrom(b, timeStart, timeEnd),
   )[0];
   const weekday = normalized.match(/(?:(이번|다음|다다음|다담)\s*주\s*)?([월화수목금토일])요일/);

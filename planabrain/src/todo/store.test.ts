@@ -66,6 +66,13 @@ test("todo persistence preserves concurrent updates and damaged data", async (t)
       await assert.rejects(addTodo("legacy", "fifth"));
       assert.equal(await readFile(latest, "utf8"), "broken");
     });
+
+    await t.test("an id-shaped query that no longer exists matches nothing", async () => {
+      await addTodo("stale", "77c");
+      assert.equal((await completeTodo("stale", "62177c1dd57b")).ok, false);
+      assert.equal((await deleteTodo("stale", "62177c1dd57b")).ok, false);
+      assert.deepEqual((await listTodos("stale")).items.map((item) => [item.content, item.completed]), [["77c", false]]);
+    });
   } finally {
     if (previous === undefined) delete process.env.PLANABRAIN_TODO_DIR;
     else process.env.PLANABRAIN_TODO_DIR = previous;

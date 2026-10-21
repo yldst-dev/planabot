@@ -179,6 +179,22 @@ test("spaced repeat words, noon words with particles or date words, hour ranges 
   }
 });
 
+test("words that contain 자정, 정오 or 마다 and date words glued to other syllables keep the stated time and date", () => {
+  const morning = Date.UTC(2026, 9, 15, 1, 0);
+  for (const [text, due] of [
+    ["하천 자정과정 보고서 오후 3시 알림 등록해줘", "2026-10-15T15:00"],
+    ["업계 자정과 혁신 세미나 오후 3시 알림 등록해줘", "2026-10-15T15:00"],
+    ["정오와 오류 검토 오후 3시 알림 등록해줘", "2026-10-15T15:00"],
+    ["수고를 마다하지 않는 팀 회식 오후 7시 등록해줘", "2026-10-15T19:00"],
+    ["궂은일 마다않고 도와준 동료 점심 오후 1시 등록해줘", "2026-10-15T13:00"],
+    ["오늘의 운세 확인 오전 8시 내일 알림 등록해줘", "2026-10-16T08:00"],
+    ["오늘의집 주문 오후 3시 내일 알림 등록해줘", "2026-10-16T15:00"],
+    ["내일의 회의 오후 3시 알림 등록해줘", "2026-10-16T15:00"],
+  ] as const) {
+    assert.equal(kst(interpretScheduleRequest(text, { nowMs: morning }).dueAtMs), due, text);
+  }
+});
+
 test("rule parsing skips user text far longer than any command", () => {
   const started = performance.now();
   assert.equal(interpretScheduleRequest(`오후 3시 ${"1".repeat(50_000)} 알림`).handled, false);

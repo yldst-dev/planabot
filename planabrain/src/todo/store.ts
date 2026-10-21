@@ -207,6 +207,9 @@ function findTodoMatch(items: TodoItem[], query: string): TodoItem | undefined {
   if (!normalized) {
     return undefined;
   }
+  if (/^[0-9a-f]{12}$/u.test(normalized)) {
+    return items.find((item) => normalizeMatchText(item.id) === normalized);
+  }
   return (
     items.find((item) => normalizeMatchText(item.id) === normalized) ??
     (normalized.length >= 6 ? items.find((item) => normalizeMatchText(item.id).startsWith(normalized)) : undefined) ??

@@ -76,8 +76,8 @@ test("decided todo actions skip keyword detection", async (t) => {
     await t.test("edits, deletions and completions name their item without the todo words and never touch another item", async () => {
       for (const content of ["할머니께 전화", "우유 사기"]) await addTodo("edit", content);
       assert.equal((await interpretTodoRequest("edit", "할 일 우유 사기를 두유 사기로 바꿔줘")).action, "update");
-      assert.equal((await interpretTodoRequest("edit", "할 일 두유 사기 우유로 바꿔줘")).error, "대상 항목을 찾지 못했습니다.");
-      assert.deepEqual((await listTodos("edit")).items.map((item) => item.content), ["할머니께 전화", "두유 사기"]);
+      assert.equal((await interpretTodoRequest("edit", "할 일 두유 사기 우유로 바꿔줘")).action, "update");
+      assert.deepEqual((await listTodos("edit")).items.map((item) => item.content), ["할머니께 전화", "우유"]);
       for (const content of ["주변 청소", "해변 청소"]) await addTodo("shore", content);
       await interpretTodoRequest("shore", "할 일 해변 청소 삭제해줘");
       assert.deepEqual((await listTodos("shore")).items.map((item) => item.content), ["주변 청소"]);
@@ -85,11 +85,73 @@ test("decided todo actions skip keyword detection", async (t) => {
 
     await t.test("item names with 할 거 or 해야 했던 still complete while plans stay open", async () => {
       for (const content of ["주말 할거리 정리", "청소", "운동하기"]) await addTodo("plans", content);
-      assert.equal((await interpretTodoRequest("plans", "운동 할 거라고 했어")).handled, false);
+      for (const text of ["운동 할 거라고 했어", "운동 할 거였는데 깜빡했어", "운동은 이따 할 거고 지금은 쉬었어", "운동 할 거니까 완료 처리는 내일 해줘", "운동 할 거 같아 완료는 나중에", "운동 할 거잖아 완료 처리하지 마", "운동 해야 했던 거 깜빡했어", "운동 해야 했던 거 포기했어"]) {
+        assert.equal((await interpretTodoRequest("plans", text)).handled, false, text);
+      }
+      assert.equal((await interpretTodoRequest("plans", "운동 할 거였는데 깜빡했어", "complete")).handled, false);
       for (const text of ["주말 할거리 정리 완료", "청소 해야 했던 거 다 했어"]) {
         assert.equal((await interpretTodoRequest("plans", text)).action, "complete", text);
       }
       assert.deepEqual((await listTodos("plans")).items.filter((item) => !item.completed).map((item) => item.content), ["운동하기"]);
+    });
+
+    await t.test("updates without particles never write a cut-off name and adds, inner particles and date-only edits stay safe", async () => {
+      for (const content of ["우유 사기", "청소", "방 정리"]) await addTodo("cut", content);
+      await interpretTodoRequest("cut", "할 일 두 번째 거 방 청소로 바꿔줘");
+      await interpretTodoRequest("cut", "할 일 마지막 거 책상 정리로 바꿔줘");
+      assert.deepEqual((await listTodos("cut")).items.map((item) => item.content), ["우유 사기", "방 청소", "책상 정리"]);
+      for (const content of ["이번 주 보고서", "1번 버스 타기", "2번 출구에서 만나기"]) await addTodo("names", content);
+      await interpretTodoRequest("names", "할 일 이번 주 보고서 다음 주 보고서로 바꿔줘");
+      await interpretTodoRequest("names", "할 일 1번 버스 타기 회의로 바꿔줘");
+      assert.deepEqual((await listTodos("names")).items.map((item) => item.content), ["다음 주 보고서", "회의", "2번 출구에서 만나기"]);
+      for (const content of ["우유", "우유 사기", "택배를 보내기", "택배 찾기", "주소 확인"]) await addTodo("inner", content);
+      assert.match((await interpretTodoRequest("inner", "할 일 우유 사기 두유 사기로 바꿔줘")).message, /번호로 다시 말씀해 주십시오/u);
+      await interpretTodoRequest("inner", "할 일 택배를 보내기를 택배 부치기로 바꿔줘");
+      assert.equal((await interpretTodoRequest("inner", "할 일에 주소를 회사 주소로 변경 추가해줘")).action, "add");
+      assert.equal((await interpretTodoRequest("inner", "할 일 우유 사기를 내일로 바꿔줘")).error, "날짜나 시각만으로는 할 일 내용을 바꾸지 않습니다. 알림이 필요하면 일정으로 등록해 주십시오.");
+      assert.deepEqual((await listTodos("inner")).items.map((item) => item.content), ["우유", "우유 사기", "택배 부치기", "택배 찾기", "주소 확인", "주소를 회사 주소로 변경"]);
+      for (const content of ["운동", "운동하기", "보고서 작성"]) await addTodo("exact", content);
+      await interpretTodoRequest("exact", "할 일에서 운동 지워줘");
+      await interpretTodoRequest("exact", "할 일 2번 삭제 부탁해");
+      assert.deepEqual((await listTodos("exact")).items.map((item) => item.content), ["운동하기"]);
+    });
+
+    await t.test("negative, excluding and two-action commands change nothing on either path", async () => {
+      for (const content of ["우유 사기", "청소"]) await addTodo("neg", content);
+      for (const text of ["할 일 우유 사기 삭제하지 마", "할 일 우유 사기 지우지 마", "할 일 우유 사기 삭제 안 해도 돼", "할 일 우유 사기 완료 취소해줘", "할 일 우유 사기 체크 해제해줘", "할 일 우유 사기는 완료 아니야", "할 일 우유 사기 빼고 다 지워줘", "할 일 우유 사기 말고 나머지 다 지워줘", "할 일 우유 사기 완료하고 청소 삭제해줘", "할 일 우유 사기 지우고 청소 추가해줘", "할 일에 운동 추가하지 마"]) {
+        const result = await interpretTodoRequest("neg", text);
+        assert.equal(result.message.split("\n")[0], "확인 불가.", text);
+      }
+      for (const [text, action] of [["우유 사기 삭제하지 마", "delete"], ["우유 사기 완료 취소해줘", "complete"], ["우유 사기 완료하고 청소 삭제해줘", "delete"]] as const) {
+        assert.equal((await interpretTodoRequest("neg", text, action)).message.split("\n")[0], "확인 불가.", text);
+      }
+      assert.deepEqual((await listTodos("neg")).items.map((item) => [item.content, item.completed]), [["우유 사기", false], ["청소", false]]);
+    });
+
+    await t.test("partial or shared names are asked back with numbers on both paths while 이번 is never a position", async () => {
+      for (const content of ["할머니께 전화", "해변 청소", "주변 청소"]) await addTodo("ask", content);
+      for (const [text, action] of [["할 일 청소 삭제해줘", undefined], ["할 일 할머니 완료", undefined], ["청소 지워줘", "delete"], ["할 일 청소 산책으로 바꿔줘", undefined]] as const) {
+        const result = await interpretTodoRequest("ask", text, action);
+        assert.equal(result.error, "어느 항목인지 하나로 정하지 못했습니다. 번호로 다시 말씀해 주십시오.", text);
+        assert.match(result.message, /^확인 필요\.\n선생님\./u, text);
+      }
+      assert.match((await interpretTodoRequest("ask", "할 일 청소 삭제해줘")).message, /\n2번 해변 청소\n3번 주변 청소\n예: 할 일 2번 삭제해줘\n/u);
+      await interpretTodoRequest("ask", "할 일 이번 거 완료");
+      assert.ok((await listTodos("ask")).items.every((item) => !item.completed));
+      const reply = "직전 프라나 응답:\n오늘 할 일 입니다. 선생님.\n\n- [ ] 할머니께 전화\n- [ ] 해변 청소\n- [ ] 주변 청소\n\n질문:\n2번 삭제해줘";
+      await interpretTodoRequest("ask", reply);
+      assert.deepEqual((await listTodos("ask")).items.map((item) => item.content), ["할머니께 전화", "주변 청소"]);
+    });
+
+    await t.test("long commands under the rule limit stay fast with a full list", async () => {
+      for (let index = 0; index < 100; index += 1) await addTodo("full", `항목 ${index} 정리하기`);
+      const started = performance.now();
+      for (const unit of ["다 ", "가 로 ", "을 ", "완료 ", "할 일 "]) {
+        for (const action of [undefined, "update", "delete", "complete"] as const) {
+          await interpretTodoRequest("full", `할 일 ${unit.repeat(150)}`.slice(0, 590), action);
+        }
+      }
+      assert.ok(performance.now() - started < 3_000);
     });
 
     await t.test("a decided add registers without the todo keyword", async () => {
