@@ -12,13 +12,26 @@ export const NOON_OR_MIDNIGHT_PATTERN = /(?<=^|[^가-힣]|오늘|내일|모레|�
 const COMMON_FRACTIONS = new Set(["1/2", "1/3", "2/3", "1/4", "3/4"]);
 const WEEK_QUALIFIER_PATTERN = /(?:이번|다음|다다음)\s*달|째\s*주|마지막\s*주/u;
 const HELD = /(?:취소|삭제|지우|지워|없애|제거|등록|추가|설정|예약|알려|맞춰)\s*(?:하|해|주|줘)?\s*(?:지\s*(?:마|말|않)|안\s*(?:해|하|돼|되))|(?:취소|삭제|지우|지워|없애|제거|등록|추가|설정|예약)\s*(?:하면|해선|해서는|면)\s*안|할까|(?:었|았|였|줬|했|췄|됐)어[\sㅋㅎㅠㅜ.!~]*$|[?？][\sㅋㅎㅠㅜ~!.]*$/u;
-const HELD_CANCEL = /나중에|이따|려고\s*(?:했|해|하)|려다|했대|했다고|하래|라고\s*했|할게|(?:하|되|오|나|마치|지|치|으|쁘)면(?:\s|$)/u;
-const REQUEST_QUESTION = /(?:줄래요?|줄래예|줄랑가|주실래요|주시겠어요|주시겠습니까|줘요?|주세요|주면\s*안\s*(?:돼요?|될까요?|되나요?)|부탁(?:해|드려)?도\s*(?:될까요?|되나요?|돼요?)|수\s*있(?:어요?|나요|니|을까요?|습니까|으세요|으신가요|겠어요?|겠니))\s*[?？][?？\sㅋㅎㅠㅜ~!.]*$/u;
+const HELD_CANCEL = /나중에|이따|려고\s*(?:했|해|하)|려다|했대|했다고|하래|라고\s*했|할게|[주하]라(?:고|더|던|는)|[한된]대요?(?:\s|$)|[다라]던데|더라(?:\s|$)|야\s*(?:하나|되나|할까|될까|하려나|되려나|할지|될지|하는지|되는지|하겠|되겠)|[되하]려나|(?:같|싶|하)기도\s*하|뭘\s*(?:취소|삭제|지우|지워|없애)|주시?면\s*안\s*(?:돼요?|된다)(?=[\s.!~ㅋㅎㅠㅜ]*$)/u;
+const CONDITION = /(?:하|되|오|가|나|보|마치|지|치|기|내|비|싸|크|쓰|피|으|쁘|우|프|히|리|뀌|(?<!주)시|르|래|거)면(?:\s|$)|(?<=[가-힣])(?:이라|다|이|거라)면(?:\s|$)|거든\s+(?=\S)|경우(?:에|엔|에는)?(?:\s|$)/u;
+const POLITE_IF = /(?<![가-힣])(?:가능하면|가능하다면|웬만하면|되도록이면|그렇다면|괜찮으시면|시간\s*되시면)(?![가-힣])/gu;
+const CANCEL_WORD = /취소|삭제|지워|지우|없애|제거/u;
+const NOT_ADD_REQUEST = /(?:등록|추가|설정|예약|생성|맞춰|맞추|알림)\s*(?:은|는|도|을|를)?\s*(?:예정|노노|ㄴㄴ|필요\s*없|반대|고민|검토|각(?:\s|$)|완료|보류|금지)/u;
+const REQUEST_QUESTION = /(?:줄래요?|줄래예|줄랑가|주실래요|주시겠어요|주시겠습니까|주겠니|주겠어요?|줘요?|주세요|주시?면\s*안\s*(?:돼요?|될까요?|되나요?)|부탁(?:해|드려)?도\s*(?:될까요?|되나요?|돼요?)|수\s*있(?:어요?|나요|니|을까요?|습니까|으세요|으신가요|으실까요|으려나|겠어요?|겠니))\s*[?？][?？\sㅋㅎㅠㅜ~!.]*$/u;
 const VERBAL = /(?:취소|삭제|제거|등록|추가|설정|예약)\s*(?:은|는|도|좀|을|를)?\s*(?:하(?!기)|하기\s*싫|해|했|할|한|합|함|된|됐|돼|안\s|못\s|말|금지|가능|대신)|지워|지우(?!기|개)|지웠|없애|없앴|알려(?!주기|진|지)|맞춰|맞추(?!기)|맞췄|깨워|깨우(?!기)|깨울|깨웠/u;
-const REQUEST_TAIL = String.raw`\s*(?:좀\s*)?(?:처리\s*)?(?:해\s*|하)?(?:줘|줭|죠|주세요|주십시오|주라|주셈|줄래|줄랑|줄\s*수|주실|주시|주면|주이소|부탁|버려|놔|둬|놓아|두자|놓자|도\s*(?:돼|됩니다|괜찮)|자(?=[\s.!~]*$)|요(?=[\s.!~?ㅋㅎㅠㅜ]*$)|라(?=[\s.!~]*$)|ㄱ|고\s*싶|할래|할게|합니다(?=[\s.!~]*$)|(?=[\s.!~?ㅋㅎㅠㅜ\p{Extended_Pictographic}\u{FE0F}]*$))`;
+const REQUEST_END = String.raw`(?=(?:[\s.!~?？ㅋㅎㅠㅜㅇ^;:)(><*…\p{Extended_Pictographic}\u{FE0F}]|:[DdPp]|plz|pls|please|\([가-힣]{1,4}\))*$)`;
+const REQUEST_TAIL = String.raw`\s*(?:을|를|도)?\s*(?:좀\s*|으?로\s*)?(?:처리\s*)?(?:해\s*|하)?(?:줘|줭|죠|쥬|조(?![가-힣])|주세요|주세용|주세여|주새요|주십시오|주십쇼|주셔|주쇼|주소(?![가-힣])|주라|주랑께|랑께|도고|주셈|셈|세요|세용|셔요|십시오|십쇼|라잉|삐라|줄래|줄랑|줄\s*수|주실|주시|주면|주이소|줬으면\s*(?:해|좋겠|싶)|부탁|바랍니다|바람(?![가-힣])|요망|요청(?:드립니다|드려요|합니다|해요?)?${REQUEST_END}|시켜|혀(?![가-힣])|버려|놔|둬|놓아|놓을래|둘래|두자|놓자|도\s*(?:돼|됩니다|괜찮)|자${REQUEST_END}|요${REQUEST_END}|라${REQUEST_END}|ㄱ|고\s*싶|할래|할게|합니다${REQUEST_END}|합시다|주겠|(?:두|놓으)면\s*좋겠|${REQUEST_END})`;
 const REQUESTED = new RegExp(String.raw`(?<!안\s*)(?:취소|삭제|지워|지우|없애|제거|등록|추가|설정|예약|알려|맞춰|맞추|깨워)${REQUEST_TAIL}`, "u");
 const CANCEL_COMMAND = new RegExp(String.raw`(?:취소|삭제|지워|지우|없애|제거)${REQUEST_TAIL}`, "u");
-const POLITE_TAIL = /\s*(?:좀\s*)?(?:(?:해\s*)?(?:줘요?|주세요|주십시오|줄래요?|줄래예|줄랑가|주실래요|주시겠어요|주시겠습니까|주면\s*안\s*(?:돼요?|될까요?|되나요?)|(?:줄|주실|주시)\s*수\s*있(?:어요?|나요|니|을까요?|습니까|으세요|으신가요|겠어요?|겠니))|부탁(?:해요?|드려요|드립니다|합니다)?(?:도\s*(?:될까요?|되나요?|돼요?))?)[\s?？!~.ㅋㅎㅠㅜ\p{Extended_Pictographic}\u{FE0F}]*$/u;
+const POLITE_TAIL = /\s*(?:좀\s*)?(?:(?<=[가-힣])(?:하세요|하세용|하셔요|하셈|합시다|하십시오|하십쇼|하랑께|해라잉|해삐라)|(?:해\s*)?(?:줘요?|줘용|줘염|줘잉|줭|주세요|주세용|주세여|주새요|주셔요?|주셔용|주십쇼|주쇼|주라|주랑께|주셈|주이소|쥬(?:세요|세용)?|도고|줬으면\s*(?:해요?|좋겠어요?|싶어요?)|주십시오|줄래요?|줄래예|줄랑가|주실래요|주시겠어요|주시겠습니까|주겠니|주겠어요?|주시?면\s*안\s*(?:돼요?|될까요?|되나요?)|(?:줄|주실|주시)\s*수\s*있(?:어요?|나요|니|을까요?|습니까|으세요|으신가요|으실까요|겠어요?|겠니))|부탁(?:해요?|드려요|드립니다|합니다)?(?:도\s*(?:될까요?|되나요?|돼요?))?)[\s?？!~.ㅋㅎㅠㅜ^;:)(><*…\p{Extended_Pictographic}\u{FE0F}]*$/u;
+const TRAILING_EMOTICON = /(?:\s*(?:\^\^|:\)|:[DdPp]|;\)|[ㅋㅎㅠㅜ~!.]|\p{Extended_Pictographic}|\u{FE0F}))+$/u;
+const HALF_HOUR = String.raw`반(?:(?<=시간?반)|(?=$|[^가-힣]|[에엔쯤경께이인은을만뒤후짜되돼됐될즈넘요]|도(?![가-힣])|까[지진]|부[터턴]|으?[로론]|정도|동안|타이머|알림|있다가))`;
+const RELATIVE_TIME = new RegExp(String.raw`(?<!\d)(?:(\d+)\s*일\s*)?(?:(\d+)\s*시간\s*(${HALF_HOUR}\s*)?)?(?:(\d+)\s*분\s*)?(?:(\d+)\s*초\s*)?(?:뒤|후|있다가)`, "g");
+const DURATION_UNIT = new RegExp(String.raw`(?<!\d)(?<!\d\s*시\s*)(\d+)\s*(초|분(?!기)|시간)(\s*${HALF_HOUR})?(?!\s*(?:반\s*)?전)`, "g");
+const ABSOLUTE_TIME = new RegExp(String.raw`(\d{4})[-.\/년]\s*(\d{1,2})[-.\/월]\s*(\d{1,2})일?\s*(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})(?:분|(?=$|[\s,.]|에|쯤|까지|부터|으?로|[~\-]\s*\d{1,2}\s*시(?!간)))|(${HALF_HOUR})))?`);
+const KOREAN_TIME = new RegExp(String.raw`(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})(?:분|(?=$|[\s,.]|에|쯤|까지|부터|으?로|[~\-]\s*\d{1,2}\s*시(?!간)))(\s*전(?:까지)?(?=$|[\s,.]|에|쯤))?|(${HALF_HOUR})))?`);
+const TIME_PARTICLE = /^\s?(?:에는?|엔|에도|쯤에?|즈음에?|경에?|께|까지는?|까진|부터는?|부턴|요|이요|인데|되면|돼서|넘어서?|도|은|을|만)(?![가-힣])/u;
+const COMMAND_HELD = "취소하라는 말로 읽지 못했습니다.\n\"2번 취소\"처럼 다시 말씀해 주십시오.";
 export const EARLIER_COMMAND = /(?:줘|주세요|주십시오|해라|주라|주셈)[\s.!~,]/u;
 
 export type ScheduleInterpretOutput = {
@@ -68,9 +81,10 @@ export function interpretScheduleRequest(
   }
 
   const held = (HELD.test(normalized) && !REQUEST_QUESTION.test(normalized)) || (VERBAL.test(normalized) && !REQUESTED.test(normalized));
-  if (decided ? decided === "cancel" : isCancelRequest(normalized)) {
-    if (held || HELD_CANCEL.test(normalized) || (/려고/u.test(normalized) && !EARLIER_COMMAND.test(normalized))) {
-      return emptyOutput();
+  const unrequestedCancel = CANCEL_WORD.test(normalized) && !CANCEL_COMMAND.test(normalized);
+  if (decided ? decided === "cancel" && !(options.command && unrequestedCancel && parsedTime) : isCancelRequest(normalized)) {
+    if (held || unrequestedCancel || isConditional(normalized) || HELD_CANCEL.test(normalized) || (/려고/u.test(normalized) && !EARLIER_COMMAND.test(normalized))) {
+      return options.command ? { handled: true, action: "cancel", error: COMMAND_HELD } : emptyOutput();
     }
     return {
       handled: true,
@@ -86,7 +100,9 @@ export function interpretScheduleRequest(
     };
   }
 
-  if (held && !options.command) {
+  const conditionText = parsedTime ? timeText.replace(/\s+/g, " ").trim().slice(0, Math.min(...parsedTime.matched.map(([start]) => start))) : normalized;
+  const unrequestedAdd = NOT_ADD_REQUEST.test(normalized) && !REQUESTED.test(normalized);
+  if ((held || unrequestedAdd || (isConditional(conditionText) && !/라고/u.test(normalized))) && !options.command) {
     return emptyOutput();
   }
 
@@ -146,8 +162,7 @@ function parseScheduleTime(text: string, now: number, meridiem?: "am" | "pm"): P
 
 function parseRelativeTime(text: string, now: number): ParsedTime | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
-  const pattern = /(?<!\d)(?:(\d+)\s*일\s*)?(?:(\d+)\s*시간\s*(반(?=$|[^가-힣]|[에쯤경께이은만뒤후짜]|까지|부터|으?로|정도|동안|타이머|알림|있다가)\s*)?)?(?:(\d+)\s*분\s*)?(?:(\d+)\s*초\s*)?(?:뒤|후|있다가)/g;
-  for (const match of normalized.matchAll(pattern)) {
+  for (const match of normalized.matchAll(RELATIVE_TIME)) {
     const durationMs =
       Number(match[1] ?? 0) * DAY_MS +
       Number(match[2] ?? 0) * HOUR_MS +
@@ -159,7 +174,7 @@ function parseRelativeTime(text: string, now: number): ParsedTime | undefined {
     }
   }
   const cue = Math.max(normalized.lastIndexOf("타이머"), normalized.lastIndexOf("알림"));
-  const units = [...normalized.matchAll(/(?<!\d)(?<!\d\s*시\s*)(\d+)\s*(초|분(?!기)|시간)(\s*반(?=$|[^가-힣]|[에쯤경께이은만뒤후짜]|까지|부터|으?로|정도|동안|타이머|알림|있다가))?(?!\s*(?:반\s*)?전)/g)].filter(
+  const units = [...normalized.matchAll(DURATION_UNIT)].filter(
     (unit) => unit.index + unit[0].length <= cue,
   );
   const durationMs = units.reduce(
@@ -181,7 +196,7 @@ function parseRelativeTime(text: string, now: number): ParsedTime | undefined {
 
 function parseAbsoluteDateTime(text: string, meridiem?: "am" | "pm"): ParsedTime | null | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
-  const match = normalized.match(/(\d{4})[-.\/년]\s*(\d{1,2})[-.\/월]\s*(\d{1,2})일?\s*(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})(?:분|(?=$|[\s,.]|에|쯤|까지|부터|으?로|[~\-]\s*\d{1,2}\s*시(?!간)))|(반)(?=$|[^가-힣]|[에쯤경께이은만뒤후짜]|까지|부터|으?로|정도|동안|타이머|알림|있다가)))?/);
+  const match = normalized.match(ABSOLUTE_TIME);
   if (!match) {
     return undefined;
   }
@@ -204,7 +219,7 @@ function parseAbsoluteDateTime(text: string, meridiem?: "am" | "pm"): ParsedTime
 
 function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"): ParsedTime | null | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
-  const time = normalized.match(/(?:(오전|오후|새벽|아침|밤|저녁|낮)\s*)?(\d{1,2})시(?!간)(?:\s*(?:(\d{1,2})(?:분|(?=$|[\s,.]|에|쯤|까지|부터|으?로|[~\-]\s*\d{1,2}\s*시(?!간)))(\s*전(?:까지)?(?=$|[\s,.]|에|쯤))?|(반)(?=$|[^가-힣]|[에쯤경께이은만뒤후짜]|까지|부터|으?로|정도|동안|타이머|알림|있다가)))?/);
+  const time = normalized.match(KOREAN_TIME);
   if (!time) {
     return undefined;
   }
@@ -300,7 +315,7 @@ function parseKoreanDateTime(text: string, now: number, meridiem?: "am" | "pm"):
     dueAtMs,
     matched: [
       ...(dateText ? [[dateIndex, dateIndex + dateText.length] as [number, number]] : []),
-      [timeStart, timeEnd],
+      [timeStart, timeEnd + (normalized.slice(timeEnd).match(TIME_PARTICLE)?.[0].length ?? 0)],
       ...(before ? [[beforeIndex, beforeIndex + before[0].length] as [number, number]] : []),
     ],
     kind: "schedule"
@@ -332,10 +347,11 @@ function extractScheduleTitle(text: string, parsedTime: ParsedTime): string {
   }
   value = value
     .replace(/프라나야/g, " ")
+    .replace(TRAILING_EMOTICON, "")
     .replace(POLITE_TAIL, "")
-    .replace(/^\s*(?:(?:알려\s*줘|알려\s*주세요|알림|타이머|리마인더|리마인드|예약|등록|추가|생성|설정|맞춰)(?:\s*(?:해줘|해주세요|해|줘))?(?![가-힣])\s*)+/gi, " ")
-    .replace(/(?:일정|스케줄|타이머|알림|리마인더|리마인드|예약)(?:을|를|에|로)?/gi, " ")
-    .replace(/(?:등록|추가|생성|설정|맞춰|알려|예약|깨워)(?:\s*(?:해줘|해주세요|해|합니다|해라|줘|할게요?|(?:해\s*)?(?:놔|둬)))?$/gi, " ")
+    .replace(/^\s*(?:(?:에|때|쯤)\s+)?(?:(?:알려\s*(?:줘요?|주세요|줄래요?|주실래요|주라|주셈|주이소|줭)|알림|타이머|리마인더|리마인드|예약|등록|추가|생성|설정|맞춰)(?:\s*(?:해\s*줘요?|해\s*주세요|해|줘))?(?![가-힣])[\s?？:：,.!]*)+/giu, " ")
+    .replace(/(?:일정|스케줄|타이머|알림|리마인더|리마인드|예약)(?:을|를|에|로|이|가|은|는|도)?(?=$|[^가-힣]|등록|추가|설정|생성|맞춰|해|좀|부탁|줘)/giu, " ")
+    .replace(/(?<![가-힣])(?:등록|추가|생성|설정|맞춰|알려|예약|깨워)(?:\s*(?:해줘|해주세요|해|합니다|해라|줘|할게요?|(?:해\s*)?(?:놔|둬|둘래|놓을래)))?$/giu, " ")
     .replace(/(?:해줘|해주세요|해|줘|부탁)$/gi, " ")
     .replace(/\s*(?<![으하])(?:이라고요|라고요|이라고|라고|이라)\s*$/g, " ")
     .replace(/(?:에|때|쯤)$/g, " ")
@@ -504,6 +520,14 @@ function isCancelRequest(text: string): boolean {
   return hasAny(text, ["취소", "삭제", "지워", "제거", "없애"]);
 }
 
+function isConditional(text: string): boolean {
+  const value = text.replace(POLITE_IF, " ").replace(/(?:줬|했|됐|었|았|였)으면\s*(?:좋겠|싶|해|하)/gu, " ");
+  return (
+    CONDITION.test(value) ||
+    [...value.matchAll(/([가-힣])\s*때(?:는|엔|에는|에|가)?(?:\s|$)/gu)].some((match) => (match[1].charCodeAt(0) - 0xac00) % 28 === 8)
+  );
+}
+
 function isListRequest(text: string): boolean {
   return hasAny(text, ["뭐", "무엇", "목록", "보여", "알려", "확인", "남았", "있어", "있나요"]);
 }
@@ -523,7 +547,7 @@ function extractUserText(text: string): string {
 
 function cleanupText(text: string): string {
   return text
-    .replace(/^[\s:：,.\-에때쯤]+/, "")
+    .replace(/^(?:[\s:：,.\-]|(?:쯤에?|때에?|에는?|엔)(?![가-힣]))+/u, "")
     .replace(/(?:을|를|은|는|도|좀|제발|부탁)$/g, "")
     .replace(/\s+/g, " ")
     .trim()

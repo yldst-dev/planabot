@@ -264,10 +264,91 @@ test("only request forms cancel or add, polite questions and commands still run,
     assert.equal(result.title, title, text);
     assert.equal(kst(result.dueAtMs).slice(11), time, text);
   }
-  for (const [text, handled] of [["내일 오전 8시 고데기 껐어?", true], ["오후 7시 산책할까 고민하기", true], ["우유 알림 취소하지 마", false]] as const) {
-    assert.equal(interpretScheduleRequest(text, { nowMs: now, action: commandAction(text), command: true }).handled, handled, text);
+  for (const text of ["내일 오전 8시 고데기 껐어?", "오후 7시 산책할까 고민하기"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now, action: commandAction(text), command: true }).action, "add", text);
   }
+  assert.match(interpretScheduleRequest("우유 알림 취소하지 마", { nowMs: now, action: "cancel", command: true }).error ?? "", /^취소하라는 말로 읽지 못했습니다/u);
   assert.equal(interpretScheduleRequest("내일 오전 8시 고데기 껐어?", { nowMs: now, action: "add", command: true }).title, "고데기 껐어?");
+});
+
+test("cancel words need a request right after them, conditions and hearsay hold, and polite or dialect endings still run", () => {
+  for (const text of [
+    "율무 라떼 알림 삭제는 보류",
+    "율무 라떼 알림 취소 계획 중",
+    "율무 라떼 알림 취소 처리됐음",
+    "율무 라떼 알림 취소 필요 없어",
+    "비가 그치면 율무 라떼 알림 취소해 줘",
+    "회사에 가면 율무 라떼 알림 지워 줘",
+    "점심이 늦으면 율무 라떼 알림 삭제해 줘",
+    "출근할 때 율무 라떼 알림 취소해 줘",
+    "손님 올 경우 율무 라떼 알림 취소해 줘",
+    "언니가 율무 라떼 알림 취소해 주라던데",
+    "율무 라떼 알림 취소해 줘야 한대",
+    "율무 라떼 알림 지워 줘야 하나",
+    "율무 라떼 알림 취소해 주면 안 돼",
+  ]) {
+    for (const action of [undefined, "cancel"] as const) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
+    }
+  }
+  for (const text of [
+    "율무 라떼 알림 취소",
+    "율무 라떼 알림 취소요",
+    "율무 라떼 알림 취소를 해 줘",
+    "율무 라떼 알림 취소해 주셔요",
+    "율무 라떼 알림 취소하셈",
+    "율무 라떼 알림 삭제합시다",
+    "율무 라떼 알림 취소해 주십쇼",
+    "율무 라떼 알림 지워^^",
+    "율무 라떼 알림 취소해 줬으면 해",
+    "가능하면 율무 라떼 알림 취소해 줘",
+    "그렇다면 율무 라떼 알림 지워 줘",
+    "꼭 율무 라떼 알림 취소해 줘야 해",
+    "율무 라떼 알림 취소해 줘. 오늘은 안 마시거든",
+  ]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now }).target?.replace(/^(?:가능하면|그렇다면|꼭)\s*/u, ""), "율무 라떼", text);
+  }
+  assert.equal(interpretScheduleRequest("'율무'라고 적힌 알림 취소해 줘", { nowMs: now }).action, "cancel");
+  assert.equal(interpretScheduleRequest("라면 타이머 취소해 줘", { nowMs: now }).target, "라면");
+});
+
+test("adds hold for unrequested or conditional wording, 반 reads glued and particle forms, and glued words stay in titles", () => {
+  for (const text of ["내일 오전 9시 율무 라떼 알림 등록 예정", "내일 오전 9시 율무 라떼 알림 설정은 노노", "날이 추우면 내일 오전 9시 율무 라떼 알림 등록해 줘"]) {
+    for (const action of [undefined, "add"] as const) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
+    }
+  }
+  for (const [text, title, time] of [
+    ["내일 오전 9시 율무 라떼 알림 등록하세요", "율무 라떼", "09:00"],
+    ["내일 오전 9시 율무 라떼 알림 맞춰 주세용", "율무 라떼", "09:00"],
+    ["내일 오전 9시 율무 라떼 알림 등록해^^", "율무 라떼", "09:00"],
+    ["내일 오후 6시에 퇴근하면 운동 가기 알림 등록해 줘", "퇴근하면 운동 가기", "18:00"],
+    ["오후 7시 반엔 율무 라떼 알림 등록해 줘", "율무 라떼", "19:30"],
+    ["오후 7시 반즈음 율무 라떼 알림 등록해 줘", "율무 라떼", "19:30"],
+    ["율무 라떼 알림 오후 7시반요", "율무 라떼", "19:30"],
+    ["오후 7시반헬스 알림 등록해 줘", "헬스", "19:30"],
+    ["1시간반 뒤 율무 라떼 타이머", "율무 라떼", "15:30"],
+    ["오후 7시 반찬 가게 들르기 알림 등록해 줘", "반찬 가게 들르기", "19:00"],
+    ["오후 7시에 율무 라떼 끓이기 알려 주셈", "율무 라떼 끓이기", "19:00"],
+    ["오후 7시에 알려 줄래? 율무 라떼 끓이기", "율무 라떼 끓이기", "19:00"],
+    ["오후 7시 알림 설정해 줘: 율무 라떼 끓이기", "율무 라떼 끓이기", "19:00"],
+    ["오후 7시 알림장 확인 알림 등록해 줘", "알림장 확인", "19:00"],
+    ["오후 7시 예약금 입금 알림 등록해 줘", "예약금 입금", "19:00"],
+    ["오후 7시 추가근무 신청 알림 등록해 줘", "추가근무 신청", "19:00"],
+    ["오후 7시 에어컨 청소 알림 등록해 줘", "에어컨 청소", "19:00"],
+    ["오후 7시쯤에 율무 라떼 알림 등록해 줘", "율무 라떼", "19:00"],
+  ]) {
+    const result = interpretScheduleRequest(text, { nowMs: now, action: "add" });
+    assert.equal(result.title, title, text);
+    assert.equal(kst(result.dueAtMs).slice(11), time, text);
+  }
+  for (const text of ["내일 오후 3시 율무 라떼 주문 취소 전화하기", "내일 오후 3시 항공권 취소 수수료 확인"]) {
+    const result = interpretScheduleRequest(text, { nowMs: now, action: commandAction(text), command: true });
+    assert.equal(result.action, "add", text);
+    assert.equal(kst(result.dueAtMs).slice(11), "15:00", text);
+  }
+  assert.equal(interpretScheduleRequest("율무 라떼 알림 취소", { nowMs: now, action: "cancel", command: true }).target, "율무 라떼");
+  assert.match(interpretScheduleRequest("2번 취소 예정", { nowMs: now, action: "cancel", command: true }).error ?? "", /^취소하라는 말로 읽지 못했습니다/u);
 });
 
 test("rule parsing skips user text far longer than any command", () => {
