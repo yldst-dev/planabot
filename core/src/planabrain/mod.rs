@@ -362,7 +362,9 @@ pub(crate) fn extract_plana_question(text: &str) -> Option<String> {
     for prefix in prefixes {
         if let Some(rest) = trimmed.strip_prefix(prefix) {
             let question = rest
-                .trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ':' | '-' | '—'))
+                .trim_start_matches(|c: char| {
+                    c.is_whitespace() || matches!(c, ':' | '-' | '—' | ',' | '.' | '!' | '~')
+                })
                 .trim();
             return Some(question.to_string());
         }
@@ -989,6 +991,28 @@ mod tests {
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
     use std::process::Command as ProcessCommand;
+
+    #[test]
+    fn question_after_the_name_drops_leading_punctuation() {
+        for text in [
+            "프라나야, 할 일 보여줘",
+            "프라나야 , 할 일 보여줘",
+            "프라나야~ 할 일 보여줘",
+            "프라나야! 할 일 보여줘",
+            "프라나야: 할 일 보여줘",
+        ] {
+            assert_eq!(
+                super::extract_plana_question(text).as_deref(),
+                Some("할 일 보여줘"),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            super::extract_plana_question("프라나야").as_deref(),
+            Some("")
+        );
+        assert_eq!(super::extract_plana_question("안녕 프라나야"), None);
+    }
 
     #[test]
     fn memory_exchange_sends_the_turn_start_time() {
