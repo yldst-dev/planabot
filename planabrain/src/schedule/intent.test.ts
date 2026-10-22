@@ -445,3 +445,34 @@ test("a cancel padded with long runs of spaces is read quickly", () => {
   interpretScheduleRequest(`삭제${" ".repeat(290)}ㅇ${" ".repeat(290)}2번 취소해 줘`, { nowMs: now, action: "cancel" });
   assert.ok(performance.now() - started < 50);
 });
+
+test("honorific endings run only when the rest is a request, reasons elsewhere do not hold, and misread or quoted commands stay put", () => {
+  for (const text of [
+    "3번 알림 지워 주시지 마세요",
+    "커튼 세탁 알림 삭제해 주시면 안 됩니다",
+    "2번 알림 취소해 주실 필요 없어요",
+    "커튼 세탁 알림 지워 주시던데요",
+    "1번 알림 취소해 주셔도 소용없어요",
+    "커튼 세탁 알림 삭제해 주셔야 할 필요는 없어요",
+    "4번 알림 취소해 줄 수도 있었는데",
+    "커튼 세탁 알림 삭제 부탁드렸더니 됐네요",
+  ]) {
+    for (const action of [undefined, "cancel"] as const) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
+    }
+    assert.match(interpretScheduleRequest(text, { nowMs: now, action: "cancel", command: true }).error ?? "", /^취소하라는 말로 읽지 못했습니다/u, text);
+  }
+  assert.equal(interpretScheduleRequest("모레 오후 2시 보일러 점검 알림 맞춰 주시지 마세요", { nowMs: now, action: "add" }).handled, false);
+  for (const text of [
+    "커튼 세탁 알림 취소해 주셨으면 좋겠어요",
+    "커튼 세탁 알림 지워 주시면 고마울 것 같아요",
+    "커튼 세탁 알림 삭제해 주시길 바랍니다",
+    "커튼 세탁 알림 취소해 주실 수 있을까요?",
+  ]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now }).target, "커튼 세탁", text);
+  }
+  assert.equal(interpretScheduleRequest("2번 알림 지워 줘. 어제 등록해 놔서 헷갈려", { nowMs: now }).target, "2번");
+  assert.equal(interpretScheduleRequest("서류 추가해서 제출하기 알림 취소해 줘", { nowMs: now }).target, "서류 추가해서 제출하기");
+  assert.equal(interpretScheduleRequest("약속 취소해서 4번 알림 삭제해 줘", { nowMs: now }).action, "cancel");
+  assert.equal(interpretScheduleRequest("내일 오전 10시에 서류 추가해서 제출하기 알림 등록해 줘", { nowMs: now }).title, "서류 추가해서 제출하기");
+});

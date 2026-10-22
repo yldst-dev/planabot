@@ -16,16 +16,17 @@ const HELD_CANCEL = /나중에|이따|려고\s*(?:했|해|하)|려다|했대|했
 const CONDITION = /(?:하|되|오|가|나|보|마치|지|치|기|내|비|싸|크|쓰|피|으|쁘|우|프|히|리|뀌|(?<!주)시|르|래|거)면(?:\s|$)|(?<=[가-힣])(?:이라|다|이|거라)면(?:\s|$)|거든\s+(?=\S)|경우(?:에|엔|에는)?(?:\s|$)/u;
 const POLITE_IF = /(?<![가-힣])(?:가능하면|가능하다면|가능하시면|가능하시다면|웬만하면|되도록이면|되도록|가급적이면|가급적|그렇다면|괜찮으시면|괜찮으시다면|될\s*수\s*있으면|될\s*수\s*있다면)(?![가-힣])|(?<=^\s*(?:(?:혹시|그럼|그러면)\s+)?)시간\s*되(?:시)?면(?![가-힣])/gu;
 const LEAD_ADVERB = /(?<![가-힣])(?:혹시|꼭|제발|일단)(?![가-힣])/gu;
-const THANKED = /(?:취소|삭제|지워|지우|없애|제거|등록|추가|설정|예약|맞춰|알려|깨워|부탁)(?:\s*(?:해|하|시켜|줘|주셔|주시|주|놔|놓아|둬|버려|드려))+\s*(?:서|니까?|는\s*덕분|길래|가지고|더니)(?![가-힣])/u;
 const CANCEL_WORD = /취소|삭제|지워|지우|없애|제거/u;
 const NOT_ADD_REQUEST = /(?:등록|추가|설정|예약|생성|맞춰|맞추|알림)\s*(?:은|는|도|을|를)?\s*(?:예정|노노|ㄴㄴ|필요\s*없|반대|고민|검토|각(?:\s|$)|완료|보류|금지)/u;
 const REQUEST_QUESTION = /(?:줄래요?|줄래예|줄랑가|주실래요|주시겠어요|주시겠습니까|주겠니|주겠어요?|줘요?|주세요|주시?면\s*안\s*(?:돼요?|될까요?|되나요?)|부탁(?:해|드려)?도\s*(?:될까요?|되나요?|돼요?)|수\s*있(?:어요?|나요|니|을까요?|습니까|으세요|으신가요|으실까요|으려나|겠어요?|겠니))\s*[?？][?？\sㅋㅎㅠㅜ~!.]*$/u;
 const VERBAL = /(?:취소|삭제|제거|등록|추가|설정|예약)\s*(?:은|는|도|좀|을|를)?\s*(?:하(?!기)|하기\s*싫|해|했|할|한|합|함|된|됐|돼|안\s|못\s|말|금지|가능|대신)|지워|지우(?!기|개)|지웠|없애|없앴|알려(?!주기|진|지)|맞춰|맞추(?!기)|맞췄|깨워|깨우(?!기)|깨울|깨웠/u;
 const REQUEST_END = String.raw`(?=(?:[\s.!~?？ㅋㅎㅠㅜㅇ^;:)(><*…\p{Extended_Pictographic}\u{FE0F}]|:[DdPp]|plz|pls|please|\([가-힣]{1,4}\))*$)`;
-const REQUEST_TAIL = String.raw`\s*(?:을|를|도)?\s*(?:좀\s*|으?로\s*)?(?:처리\s*)?(?:해\s*|하)?(?:줘(?!서)|줭|죠|쥬|조(?![가-힣])|주세요|주세용|주세여|주새요|주십시오|주십쇼|주셔(?!서)|주쇼|주소(?![가-힣])|주라|주랑께|랑께|도고|주셈|셈|세요|세용|셔요|십시오|십쇼|라잉|삐라|줄래|줄랑|줄\s*수|주실|주시|주면|주이소|줬으면\s*(?:해|좋겠|싶)|부탁(?!해서)|바랍니다|바람(?![가-힣])|요망|요청(?:드립니다|드려요|합니다|해요?)?${REQUEST_END}|시켜(?![야서])|혀(?![가-힣])|버려|놔|둬|놓아|놓을래|둘래|두자|놓자|도\s*(?:돼|됩니다|괜찮)|자${REQUEST_END}|요${REQUEST_END}|라${REQUEST_END}|ㄱ|고\s*싶|할래|할게|합니다${REQUEST_END}|합시다|주겠|(?:두|놓으)면\s*좋겠|${REQUEST_END})`;
+const GOOD = String.raw`(?:정말|진짜|너무|참|좀|더|많이|넘)?\s*(?:돼|되(?:요|겠|죠)|됩니다|좋|감사|고맙|고마울|고마워|편하|편할|땡큐|최고)`;
+const THANKS_AFTER = String.raw`(?!(?:\s*(?:해|하|시켜|줘|주셔|주시|주|놔|놓아|둬|버려|드려))*\s*(?:서|니까?|는\s*덕분|길래|가지고|더니)(?![가-힣]))`;
+const REQUEST_TAIL = String.raw`\s*(?:(?:을|를|도)\s*)?(?:(?:좀|으?로)\s*)?(?:처리\s*)?(?:해\s*|하)?(?:줘|줭|죠|쥬|조(?![가-힣])|주세요|주세용|주세여|주새요|주십시오|주십쇼|주쇼|주소(?![가-힣])|주라|주랑께|랑께|도고|주셈|셈|세요|세용|셔요|십시오|십쇼|라잉|삐라|줄래|줄랑|주이소|주셔(?:요|용|야\s*(?:해요?|합니다|돼요?|됩니다|겠어요?|죠)|도\s*(?:돼요?|되요|됩니다|괜찮아요?|괜찮습니다|상관\s*없어요?))|주시(?:겠어요?|겠습니까|겠니|죠|지요|고요|길\s*(?:바랍니다|부탁)|기\s*바랍니다|라고요?${REQUEST_END}|면\s*${GOOD}|면\s*안\s*(?:될까요?|되나요?|되겠습니까|돼요?\s*[?？]))|주실(?:래요?|\s*수\s*있(?:나요|어요|을까요|으세요|으신가요|으실까요|겠어요|습니까))|주면\s*${GOOD}|주면\s*안\s*(?:될까|되나|돼\s*[?？])|줄\s*수\s*있(?:어요?|나요?|니|을까요?|겠니|겠어요?|겠습니까|습니까|으세요)|주겠(?:니|어요?|습니까)|줬으면\s*(?:해|좋겠|싶)|주셨으면\s*(?:해요?|좋겠|싶|합니다)|부탁(?!해서|했|드려서|드렸)|바랍니다|바람(?![가-힣])|요망|요청(?:드립니다|드려요|합니다|해요?)?${REQUEST_END}|시켜(?![야서])|혀(?![가-힣])|버려|놔|둬|놓아|놓을래|둘래|두자|놓자|도\s*(?:돼|됩니다|괜찮)|자${REQUEST_END}|요${REQUEST_END}|라${REQUEST_END}|ㄱ|고\s*싶|할래|할게|합니다${REQUEST_END}|합시다|(?:두|놓으)면\s*좋겠|${REQUEST_END})${THANKS_AFTER}`;
 const REQUESTED = new RegExp(String.raw`(?<!안\s*)(?:취소|삭제|지워|지우|없애|제거|등록|추가|설정|예약|알려|맞춰|맞추|깨워)${REQUEST_TAIL}`, "u");
 const CANCEL_COMMAND = new RegExp(String.raw`(?:취소|삭제|지워|지우|없애|제거)${REQUEST_TAIL}`, "u");
-const POLITE_TAIL = /\s*(?:좀\s*)?(?:(?<=[가-힣])(?:하세요|하세용|하셔요|하셈|합시다|하십시오|하십쇼|하랑께|해라잉|해삐라)|(?:해\s*)?(?:줘요?|줘용|줘염|줘잉|줭|주세요|주세용|주세여|주새요|주셔요?|주셔용|주십쇼|주쇼|주라|주랑께|주셈|주이소|쥬(?:세요|세용)?|도고|줬으면\s*(?:해요?|좋겠어요?|싶어요?)|주십시오|줄래요?|줄래예|줄랑가|주실래요|주시겠어요|주시겠습니까|주겠니|주겠어요?|주시?면\s*안\s*(?:돼요?|될까요?|되나요?)|주셔야\s*(?:해요?|합니다|돼요?|됩니다|겠어요?)|주셔도\s*(?:돼요?|됩니다|괜찮아요?|괜찮습니다)|(?:줄|주실|주시)\s*수\s*있(?:어요?|나요|니|을까요?|습니까|으세요|으신가요|으실까요|겠어요?|겠니))|부탁(?:해요?|드려요|드립니다|합니다)?(?:도\s*(?:될까요?|되나요?|돼요?))?)[\s?？!~.ㅋㅎㅠㅜ^;:)(><*…\p{Extended_Pictographic}\u{FE0F}]*$/u;
+const POLITE_TAIL = /\s*(?:좀\s*)?(?:(?<=[가-힣])(?:하세요|하세용|하셔요|하셈|합시다|하십시오|하십쇼|하랑께|해라잉|해삐라)|(?:해\s*)?(?:줘요?|줘용|줘염|줘잉|줭|주세요|주세용|주세여|주새요|주셔요?|주셔용|주십쇼|주쇼|주라|주랑께|주셈|주이소|쥬(?:세요|세용)?|도고|줬으면\s*(?:해요?|좋겠어요?|싶어요?)|주십시오|줄래요?|줄래예|줄랑가|주실래요|주시겠어요|주시겠습니까|주겠니|주겠어요?|주시?면\s*안\s*(?:돼요?|될까요?|되나요?)|주시?면\s*(?:정말|진짜|너무|참|좀|더)?\s*(?:돼요?|됩니다|좋겠어요?|좋겠습니다|감사하겠습니다|감사해요|고맙겠어요?|고맙겠습니다|고마울\s*것\s*같아요)|주셨으면\s*(?:해요?|좋겠어요?|좋겠습니다|싶어요?|합니다)|주시죠|주시지요|주시[길기]\s*바랍니다|주셔야\s*(?:해요?|합니다|돼요?|됩니다|겠어요?)|주셔도\s*(?:돼요?|됩니다|괜찮아요?|괜찮습니다)|(?:줄|주실|주시)\s*수\s*있(?:어요?|나요|니|을까요?|습니까|으세요|으신가요|으실까요|겠어요?|겠니))|부탁(?:해요?|드려요|드립니다|합니다)?(?:도\s*(?:될까요?|되나요?|돼요?))?)[\s?？!~.ㅋㅎㅠㅜ^;:)(><*…\p{Extended_Pictographic}\u{FE0F}]*$/u;
 const TRAILING_EMOTICON = /(?:\s*(?:\^\^|:\)|:[DdPp]|;\)|[ㅋㅎㅠㅜ~!.]|\p{Extended_Pictographic}|\u{FE0F}))+$/u;
 const HALF_HOUR = String.raw`반(?:(?<=시간?반)|(?=$|[^가-힣]|[에엔쯤경께이인은을만뒤후짜되돼됐될즈넘요]|도(?![가-힣])|까[지진]|부[터턴]|으론|으?로|정도|동안|타이머|알림|있다가))`;
 const RELATIVE_TIME = new RegExp(String.raw`(?<!\d)(?:(\d+)\s*일\s*)?(?:(\d+)\s*시간\s*(${HALF_HOUR}\s*)?)?(?:(\d+)\s*분\s*)?(?:(\d+)\s*초\s*)?(?:뒤|후|있다가)`, "g");
@@ -86,7 +87,7 @@ export function interpretScheduleRequest(
   const held = (HELD.test(normalized) && !REQUEST_QUESTION.test(normalized)) || (VERBAL.test(normalized) && !REQUESTED.test(normalized));
   const unrequestedCancel = CANCEL_WORD.test(normalized) && !CANCEL_COMMAND.test(normalized);
   if (decided ? decided === "cancel" && !(options.command && unrequestedCancel && parsedTime) : isCancelRequest(normalized)) {
-    if (held || unrequestedCancel || isConditional(normalized) || THANKED.test(normalized) || HELD_CANCEL.test(normalized) || (/려고/u.test(normalized) && !EARLIER_COMMAND.test(normalized))) {
+    if (held || unrequestedCancel || isConditional(normalized) || HELD_CANCEL.test(normalized) || (/려고/u.test(normalized) && !EARLIER_COMMAND.test(normalized))) {
       return options.command ? { handled: true, action: "cancel", error: COMMAND_HELD } : emptyOutput();
     }
     return {
@@ -106,7 +107,7 @@ export function interpretScheduleRequest(
   const conditionText = parsedTime ? timeText.replace(/\s+/g, " ").trim().slice(0, Math.min(...parsedTime.matched.map(([start]) => start))) : normalized;
   const unrequestedAdd = NOT_ADD_REQUEST.test(normalized) && !REQUESTED.test(normalized);
   const cancelInstead = CANCEL_COMMAND.test(normalized) && !ADD_COMMAND.test(normalized);
-  if ((held || unrequestedAdd || cancelInstead || THANKED.test(normalized) || (isConditional(conditionText) && !/라고/u.test(normalized))) && !options.command) {
+  if ((held || unrequestedAdd || cancelInstead || (isConditional(conditionText) && !/라고/u.test(normalized))) && !options.command) {
     return emptyOutput();
   }
 
@@ -526,7 +527,7 @@ function isCancelRequest(text: string): boolean {
 }
 
 function isConditional(text: string): boolean {
-  const value = text.replace(POLITE_IF, " ").replace(/(?:줬|했|됐|었|았|였)으면\s*(?:좋겠|싶|해|하)/gu, " ");
+  const value = text.replace(POLITE_IF, " ").replace(/(?:줬|했|됐|었|았|였|셨)으면\s*(?:좋겠|싶|해|하)/gu, " ");
   return (
     CONDITION.test(value) ||
     [...value.matchAll(/([가-힣])\s*때(?:는|엔|에는|에|가)?(?:\s|$)/gu)].some((match) => (match[1].charCodeAt(0) - 0xac00) % 28 === 8)
