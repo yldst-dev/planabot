@@ -1,4 +1,4 @@
-use crate::bot::{AppState, HandlerResult};
+use crate::bot::{AppState, HandlerResult, extract_gallery_id_from_url};
 use crate::urlchanger::delivery::{LinkPlan, LinkReply, deliver_link_plan};
 use crate::urlchanger::google_share::resolve_google_share_link;
 use crate::urlchanger::instagram::{InstagramMedia, InstagramMediaKind, fetch_instagram_media};
@@ -167,14 +167,19 @@ fn youtube_plan(
 ) -> Option<LinkPlan> {
     let cleaned_text = youtube_cleaned_text(links);
     let reposted = build_cleaned_message_text(original_text, links);
-    let message = if reposted.contains('\n') {
-        format!("정리 완료.\n선생님.\n{}:\n{}", username, reposted)
-    } else {
-        format!("정리 완료.\n선생님.\n{}: {}", username, reposted)
-    };
     let expanded = links
         .iter()
         .any(|link| is_youtube_short_link(&link.original));
+    let status = if expanded || had_tracking {
+        "정리 완료."
+    } else {
+        "확인 완료."
+    };
+    let message = if reposted.contains('\n') {
+        format!("{status}\n선생님.\n{}:\n{}", username, reposted)
+    } else {
+        format!("{status}\n선생님.\n{}: {}", username, reposted)
+    };
     let reply_text = match (expanded, had_tracking) {
         (true, _) => {
             format!("정리 완료.\n선생님.\n영상 주소를 기본 형식으로 바꿨습니다.\n{cleaned_text}")
@@ -552,7 +557,8 @@ fn music_links_need_reply(text: &str) -> bool {
             || !(contains_x_link(text)
                 || contains_instagram_link(text)
                 || contains_threads_link(text)
-                || contains_google_share_link(text)))
+                || contains_google_share_link(text)
+                || extract_gallery_id_from_url(text).is_some()))
 }
 
 fn is_youtube_only(links: &[MusicLink]) -> bool {
@@ -743,7 +749,7 @@ mod tests {
         let links = extract_music_links(text);
         let plan = youtube_plan("sensei", text, &links, false, thumbnail()).unwrap();
         let message =
-            "정리 완료.\n선생님.\nsensei: 이거 봐 https://www.youtube.com/watch?v=Vc-ByDGOuQE";
+            "확인 완료.\n선생님.\nsensei: 이거 봐 https://www.youtube.com/watch?v=Vc-ByDGOuQE";
         assert_eq!(
             reposted(&plan.admin[0]),
             format!("{message}\n\n영상 제목\n채널")
@@ -884,6 +890,9 @@ mod tests {
         ));
         assert!(!music_links_need_reply(
             "https://www.youtube.com/watch?v=d7hGpiHLSRI https://www.instagram.com/p/abc/"
+        ));
+        assert!(!music_links_need_reply(
+            "https://hitomi.la/galleries/1234567.html https://www.youtube.com/watch?v=d7hGpiHLSRI"
         ));
         assert!(music_links_need_reply(
             "이거 봐 https://www.youtube.com/watch?v=d7hGpiHLSRI"

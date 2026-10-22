@@ -21,6 +21,7 @@ use teloxide::utils::command::BotCommands;
 
 use crate::urlchanger;
 
+pub(crate) use gallery::extract_gallery_id_from_url;
 pub use state::AppState;
 pub(crate) use telegram::{
     SendOptions, send_in_thread, send_photo_in_thread, send_photo_reply_with_fallback,

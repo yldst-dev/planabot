@@ -83,7 +83,7 @@ pub(crate) fn extract_gallery_id(
     None
 }
 
-fn extract_gallery_id_from_url(text: &str) -> Option<String> {
+pub(crate) fn extract_gallery_id_from_url(text: &str) -> Option<String> {
     if let Some(cap) = HITOMI_READER_RE.captures(text) {
         return Some(cap[1].to_string());
     }
