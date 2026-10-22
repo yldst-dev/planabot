@@ -357,3 +357,43 @@ test("rule parsing skips user text far longer than any command", () => {
   assert.equal(interpretScheduleRequest(`${"일정 ".repeat(1_000)}보여줘`, { action: "list" }).action, "list");
   assert.ok(performance.now() - started < 1_000);
 });
+
+test("thanks or reasons after a request do not run it, polite openers do and stay out of targets, and words after a time stay in titles", () => {
+  for (const [text, action] of [
+    ["2번 알림 지워 주셔서 고마워요", "cancel"],
+    ["독서 모임 알림 취소해 줘서 고마워", "cancel"],
+    ["3번 알림 삭제해 줘서 다행이야", "cancel"],
+    ["독서 모임 알림 취소시켜서 한숨 돌렸어", "cancel"],
+    ["독서 모임 알림 취소시켜야 해서 바빠", "cancel"],
+    ["독서 모임 알림 취소 부탁해서 미안해", "cancel"],
+    ["오후 8시 독서 모임 알림 등록해 줘서 고마워", "add"],
+  ] as const) {
+    for (const decided of [undefined, action]) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action: decided }).handled, false, `${text} ${decided}`);
+    }
+  }
+  for (const [text, target] of [
+    ["가급적이면 2번 알림 취소해 줘", "2번"],
+    ["가능하면 3번 알림 지워 줘", "3번"],
+    ["가능하시면 독서 모임 알림 취소해 주세요", "독서 모임"],
+    ["괜찮으시다면 독서 모임 알림 삭제해 주세요", "독서 모임"],
+    ["될 수 있으면 독서 모임 알림 취소해 줘", "독서 모임"],
+    ["시간 되면 독서 모임 알림 취소해 줘", "독서 모임"],
+    ["꼭 2번 알림 취소해 줘", "2번"],
+  ]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now }).target, target, text);
+  }
+  assert.equal(interpretScheduleRequest("4시 되면 독서 모임 알림 취소해 줘", { nowMs: now }).handled, false);
+  for (const [text, title, time] of [
+    ["될 수 있으면 오후 8시 독서 모임 알림 등록해 줘", "독서 모임", "20:00"],
+    ["오후 4시 반론 준비 알림 등록해 줘", "반론 준비", "16:00"],
+    ["저녁 8시 만 보 걷기 알림 등록해 줘", "만 보 걷기", "20:00"],
+    ["오후 4시 은 반지 찾기 알림 등록해 줘", "은 반지 찾기", "16:00"],
+    ["오후 4시 요 앞 마트 알림 등록해 줘", "요 앞 마트", "16:00"],
+    ["오후 4시 반엔 독서 모임 알림 등록해 줘", "독서 모임", "16:30"],
+  ]) {
+    const result = interpretScheduleRequest(text, { nowMs: now, action: "add" });
+    assert.equal(result.title, title, text);
+    assert.equal(kst(result.dueAtMs).slice(11), time, text);
+  }
+});
