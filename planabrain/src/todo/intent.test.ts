@@ -371,6 +371,10 @@ test("decided todo actions skip keyword detection", async (t) => {
         assert.equal((await interpretTodoRequest("pointers", text)).error, "추가할 내용을 확인하지 못했습니다. 예: 할 일에 우유 사기 추가해줘", text);
       }
       assert.deepEqual((await listTodos("pointers")).items, []);
+      for (const text of ["할 일에 저녁 중 추가해 줘", "할 일에 다섯 시 반까지 추가해 줘", "할 일에 걔네 추가해 줘", "할 일에 이것들 몽땅 추가해 줘"]) {
+        assert.equal((await interpretTodoRequest("pointers", text)).error, "추가할 내용을 확인하지 못했습니다. 예: 할 일에 우유 사기 추가해줘", text);
+      }
+      assert.equal((await interpretTodoRequest("pointers", "할 일에 저녁 장보기 추가해 줘")).action, "add");
       for (const unit of ["3.3", "12.1", "4/4", "1.1."]) {
         const started = performance.now();
         await interpretTodoRequest("pointers", `할 일에 ${unit.repeat(30)}끝 추가해 줘`);
