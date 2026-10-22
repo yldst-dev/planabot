@@ -365,7 +365,9 @@ pub(crate) fn extract_plana_question(text: &str) -> Option<String> {
                 .trim_start_matches(|c: char| {
                     matches!(c, ',' | '.' | '!' | '~' | '…' | '～' | '，' | '！')
                 })
-                .trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ':' | '-' | '—'))
+                .trim_start_matches(|c: char| {
+                    c.is_whitespace() || matches!(c, ':' | '-' | '—' | ',' | '，')
+                })
                 .trim();
             return Some(question.to_string());
         }
@@ -994,7 +996,7 @@ mod tests {
     use std::process::Command as ProcessCommand;
 
     #[test]
-    fn question_after_the_name_drops_only_punctuation_attached_to_the_name() {
+    fn question_after_the_name_drops_separators_but_keeps_symbols_that_start_a_word() {
         for text in [
             "프라나야, 할 일 보여줘",
             "프라나야,할 일 보여줘",
@@ -1005,6 +1007,9 @@ mod tests {
             "프라나야～ 할 일 보여줘",
             "프라나야， 할 일 보여줘",
             "프라나야！ 할 일 보여줘",
+            "프라나야 , 할 일 보여줘",
+            "프라나야 ,할 일 보여줘",
+            "프라나야 ， 할 일 보여줘",
         ] {
             assert_eq!(
                 super::extract_plana_question(text).as_deref(),
