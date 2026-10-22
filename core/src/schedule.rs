@@ -199,14 +199,16 @@ impl ScheduleStore {
         let (result, snapshot) = {
             let mut items = lock_items(&self.items).clone();
             let pending = list_pending_for_user(&items, owner_user_id, chat_id);
-            let Some(target) = find_schedule_match(&pending, query) else {
-                let visible = pending;
-                return Ok(ScheduleMutation {
-                    ok: false,
-                    item: None,
-                    items: visible,
-                    error: Some("대상 항목을 찾지 못했습니다.".to_string()),
-                });
+            let target = match find_schedule_match(&pending, query) {
+                Ok(target) => target,
+                Err(error) => {
+                    return Ok(ScheduleMutation {
+                        ok: false,
+                        item: None,
+                        items: pending,
+                        error: Some(error.to_string()),
+                    });
+                }
             };
             let mut changed = None;
             for item in items.iter_mut() {
@@ -601,38 +603,61 @@ fn list_pending_for_user(
     out
 }
 
-fn find_schedule_match(items: &[ScheduleItem], query: &str) -> Option<ScheduleItem> {
+fn find_schedule_match(items: &[ScheduleItem], query: &str) -> Result<ScheduleItem, &'static str> {
+    const NOT_FOUND: &str = "대상 항목을 찾지 못했습니다.";
     let normalized = normalize_match_text(query);
-    if let Some(index) = parse_selector_index(&normalized.replace(' ', ""), items.len()) {
-        return items.get(index).cloned();
+    let compact = normalized.replace(' ', "");
+    if let Some(index) = parse_selector_index(&compact, items.len()) {
+        return items.get(index).cloned().ok_or(NOT_FOUND);
     }
-    if normalized.is_empty() {
-        return None;
+    if compact
+        .trim_end_matches(['번', '째'])
+        .parse::<usize>()
+        .is_ok()
+    {
+        return Err(NOT_FOUND);
     }
-    items
+    let short = normalized.chars().count() < 2;
+    let exact = items
         .iter()
         .find(|item| normalize_match_text(&item.id) == normalized)
         .or_else(|| {
             items
                 .iter()
-                .find(|item| normalize_match_text(&item.id).starts_with(&normalized))
+                .find(|item| !short && normalize_match_text(&item.id).starts_with(&normalized))
         })
         .or_else(|| {
             items
                 .iter()
                 .find(|item| normalize_match_text(&item.title) == normalized)
-        })
-        .or_else(|| {
-            items
-                .iter()
-                .find(|item| normalize_match_text(&item.title).contains(&normalized))
-        })
-        .or_else(|| {
-            items
-                .iter()
-                .find(|item| normalized.contains(&normalize_match_text(&item.title)))
-        })
-        .cloned()
+        });
+    if let Some(item) = exact {
+        return Ok(item.clone());
+    }
+    if short {
+        return Err(NOT_FOUND);
+    }
+    let titles = items
+        .iter()
+        .map(|item| (item, normalize_match_text(&item.title)))
+        .collect::<Vec<_>>();
+    for hits in [
+        titles
+            .iter()
+            .filter(|(_, title)| title.contains(&normalized))
+            .collect::<Vec<_>>(),
+        titles
+            .iter()
+            .filter(|(_, title)| normalized.contains(title.as_str()))
+            .collect::<Vec<_>>(),
+    ] {
+        match hits.as_slice() {
+            [] => {}
+            [(item, _)] => return Ok((*item).clone()),
+            _ => return Err("대상 항목이 여러 개입니다. 목록의 번호로 다시 말씀해 주십시오."),
+        }
+    }
+    Err(NOT_FOUND)
 }
 
 fn parse_selector_index(value: &str, item_count: usize) -> Option<usize> {
@@ -655,7 +680,7 @@ fn parse_selector_index(value: &str, item_count: usize) -> Option<usize> {
         .trim_end_matches("항목")
         .parse::<usize>()
     {
-        let index = number.saturating_sub(1);
+        let index = number.checked_sub(1)?;
         return (index < item_count).then_some(index);
     }
     let ordinals: [&[&str]; 10] = [
@@ -939,6 +964,31 @@ mod tests {
             last_error: None,
             attempts: 0,
         }
+    }
+
+    #[test]
+    fn cancel_target_must_name_exactly_one_reminder() {
+        let titled = |id: &str, title: &str| super::ScheduleItem {
+            title: title.to_string(),
+            ..pending_item(id, 1, 10, 1)
+        };
+        let items = vec![
+            titled("s1", "다이소 들르기"),
+            titled("s2", "헬스장 등록"),
+            titled("s3", "헬스장 PT"),
+            titled("s4", "약"),
+            titled("s5", "10번 버스 타기"),
+        ];
+        let found = |query: &str| find_schedule_match(&items, query).map(|item| item.id);
+        assert_eq!(found("다").unwrap_err(), "대상 항목을 찾지 못했습니다.");
+        assert!(found("헬스장").unwrap_err().contains("여러 개"));
+        assert_eq!(found("0번").unwrap_err(), "대상 항목을 찾지 못했습니다.");
+        assert_eq!(found("9번").unwrap_err(), "대상 항목을 찾지 못했습니다.");
+        assert_eq!(found("약").unwrap(), "s4");
+        assert_eq!(found("다이소").unwrap(), "s1");
+        assert_eq!(found("헬스장 pt").unwrap(), "s3");
+        assert_eq!(found("헬스장 등록 줄래").unwrap(), "s2");
+        assert_eq!(found("2번").unwrap(), "s2");
     }
 
     #[test]
