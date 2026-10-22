@@ -363,13 +363,17 @@ pub(crate) fn extract_plana_question(text: &str) -> Option<String> {
         if let Some(rest) = trimmed.strip_prefix(prefix) {
             let question = rest
                 .trim_start_matches(|c: char| {
-                    matches!(c, ',' | '.' | '!' | '~' | '…' | '～' | '，' | '！')
+                    matches!(
+                        c,
+                        ',' | '.' | '!' | '~' | '…' | '～' | '，' | '！' | ':' | '-' | '—'
+                    )
                 })
-                .trim_start_matches(|c: char| {
-                    c.is_whitespace() || matches!(c, ':' | '-' | '—' | ',' | '，')
-                })
-                .trim();
-            return Some(question.to_string());
+                .trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ',' | '，'));
+            let question = match question.strip_prefix([':', '-', '—']) {
+                Some(after) if after.is_empty() || after.starts_with(char::is_whitespace) => after,
+                _ => question,
+            };
+            return Some(question.trim().to_string());
         }
     }
 
@@ -1021,6 +1025,13 @@ mod tests {
             ("프라나야 .env 파일이 뭐야", ".env 파일이 뭐야"),
             ("프라나야 ~부터 뜻이 뭐야", "~부터 뜻이 뭐야"),
             ("프라나야 !important 뜻", "!important 뜻"),
+            ("프라나야 -3도면 패딩 입어야 해?", "-3도면 패딩 입어야 해?"),
+            ("프라나야 :D 고마워", ":D 고마워"),
+            ("프라나야 -h 옵션 뭐야", "-h 옵션 뭐야"),
+            ("프라나야 - 할 일 보여줘", "할 일 보여줘"),
+            ("프라나야 — 할 일 보여줘", "할 일 보여줘"),
+            ("프라나야:할 일 보여줘", "할 일 보여줘"),
+            ("프라나야 : 할 일 보여줘", "할 일 보여줘"),
         ] {
             assert_eq!(
                 super::extract_plana_question(text).as_deref(),
@@ -1028,7 +1039,7 @@ mod tests {
                 "{text}"
             );
         }
-        for text in ["프라나야", "프라나야!", "프라나야~~"] {
+        for text in ["프라나야", "프라나야!", "프라나야~~", "프라나야 -"] {
             assert_eq!(
                 super::extract_plana_question(text).as_deref(),
                 Some(""),
