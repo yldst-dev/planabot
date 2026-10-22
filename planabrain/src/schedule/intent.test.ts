@@ -398,6 +398,48 @@ test("thanks or reasons after a request do not run it, polite openers do and sta
   }
 });
 
+test("time conditions in the middle stay held, gratitude endings hold, 주셔야 runs, spaced particles leave titles and content keeps its own words", () => {
+  for (const text of ["점심 시간 되면 블라인드 세척 알림 취소해 줘", "4시간 되면 블라인드 세척 알림 지워 줘", "퇴근 시간 되면 3번 알림 삭제해 줘", "3번 알림 지워 줘, 잘 시간 되면"]) {
+    for (const action of [undefined, "cancel"] as const) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
+    }
+    assert.match(interpretScheduleRequest(text, { nowMs: now, action: "cancel", command: true }).error ?? "", /^취소하라는 말로 읽지 못했습니다/u, text);
+  }
+  assert.equal(interpretScheduleRequest("식사 시간 되면 오후 4시 블라인드 세척 알림 등록해 줘", { nowMs: now }).handled, false);
+  for (const text of ["2시간 되면 블라인드 세척 알림 취소해 줘", "30분 뒤 블라인드 세척 알림 지워 줘"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now, action: "add" }).handled, false, text);
+  }
+  for (const text of [
+    "3번 알림 지워 놔서 다행이다",
+    "블라인드 세척 알림 삭제해 둬서 고마워",
+    "2번 알림 지워 버려서 아쉬워",
+    "블라인드 세척 알림 취소시켜 줘서 고마워",
+    "1번 알림 취소해 주시니 편하네요",
+    "블라인드 세척 알림 취소 부탁드려서 죄송해요",
+    "블라인드 세척 알림 취소해 주길래 놀랐어",
+  ]) {
+    for (const action of [undefined, "cancel"] as const) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
+    }
+  }
+  for (const text of ["블라인드 세척 알림 취소해 주셔야 해요", "블라인드 세척 알림 삭제해 주셔도 돼요", "블라인드 세척 알림 지워 놔"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now }).target, "블라인드 세척", text);
+  }
+  for (const [text, title, time] of [
+    ["내일 오후 3시 차량 점검 알림 등록해 주셔야 해요", "차량 점검", "15:00"],
+    ["오후 4시 까지 약국 들르기 알림 등록해 줘", "약국 들르기", "16:00"],
+    ["오후 4시 부터 차량 점검 알림 등록해 줘", "차량 점검", "16:00"],
+    ["오후 4시 반 즈음 약국 들르기 알림 등록해 줘", "약국 들르기", "16:30"],
+    ["오후 4시 가급적 빨리 서류 내기 알림 등록해 줘", "가급적 빨리 서류 내기", "16:00"],
+    ["꼭 오후 4시 약국 들르기 알림 등록해 줘", "약국 들르기", "16:00"],
+    ["오후 4시 꼭 챙길 서류 알림 등록해 줘", "꼭 챙길 서류", "16:00"],
+  ]) {
+    const result = interpretScheduleRequest(text, { nowMs: now, action: "add" });
+    assert.equal(result.title, title, text);
+    assert.equal(kst(result.dueAtMs).slice(11), time, text);
+  }
+});
+
 test("a cancel padded with long runs of spaces is read quickly", () => {
   const started = performance.now();
   interpretScheduleRequest(`삭제${" ".repeat(290)}ㅇ${" ".repeat(290)}2번 취소해 줘`, { nowMs: now, action: "cancel" });
