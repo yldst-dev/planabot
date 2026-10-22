@@ -87,7 +87,7 @@ export function interpretScheduleRequest(
   const held = (HELD.test(normalized) && !REQUEST_QUESTION.test(normalized)) || (VERBAL.test(normalized) && !REQUESTED.test(normalized));
   const unrequestedCancel = CANCEL_WORD.test(normalized) && !CANCEL_COMMAND.test(normalized);
   if (decided ? decided === "cancel" && !(options.command && unrequestedCancel && parsedTime) : isCancelRequest(normalized)) {
-    if (held || unrequestedCancel || isConditional(normalized) || HELD_CANCEL.test(normalized) || (/려고/u.test(normalized) && !EARLIER_COMMAND.test(normalized))) {
+    if (held || unrequestedCancel || isConditional(normalized) || (ADD_COMMAND.test(normalized) && !CANCEL_COMMAND.test(normalized)) || HELD_CANCEL.test(normalized) || (/려고/u.test(normalized) && !EARLIER_COMMAND.test(normalized))) {
       return options.command ? { handled: true, action: "cancel", error: COMMAND_HELD } : emptyOutput();
     }
     return {
@@ -106,7 +106,8 @@ export function interpretScheduleRequest(
 
   const conditionText = parsedTime ? timeText.replace(/\s+/g, " ").trim().slice(0, Math.min(...parsedTime.matched.map(([start]) => start))) : normalized;
   const unrequestedAdd = NOT_ADD_REQUEST.test(normalized) && !REQUESTED.test(normalized);
-  const cancelInstead = CANCEL_COMMAND.test(normalized) && !ADD_COMMAND.test(normalized);
+  const unquoted = normalized.replace(/'[^']*'|"[^"]*"|‘[^’]*’|“[^”]*”|「[^」]*」/gu, " ");
+  const cancelInstead = CANCEL_COMMAND.test(unquoted) && !ADD_COMMAND.test(unquoted);
   if ((held || unrequestedAdd || cancelInstead || (isConditional(conditionText) && !/라고/u.test(normalized))) && !options.command) {
     return emptyOutput();
   }

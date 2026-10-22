@@ -475,4 +475,8 @@ test("honorific endings run only when the rest is a request, reasons elsewhere d
   assert.equal(interpretScheduleRequest("서류 추가해서 제출하기 알림 취소해 줘", { nowMs: now }).target, "서류 추가해서 제출하기");
   assert.equal(interpretScheduleRequest("약속 취소해서 4번 알림 삭제해 줘", { nowMs: now }).action, "cancel");
   assert.equal(interpretScheduleRequest("내일 오전 10시에 서류 추가해서 제출하기 알림 등록해 줘", { nowMs: now }).title, "서류 추가해서 제출하기");
+  for (const text of ["모레 오전 8시에도 운동화 빨기 알림 등록해 줘", "내일 오후 3시 운동화 빨기 알림 추가해 줘"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now, action: "cancel" }).handled, false, text);
+  }
+  assert.equal(interpretScheduleRequest("내일 오후 3시 '배송 취소해 줘' 문자 보내기 알림", { nowMs: now, action: "add" }).title, "'배송 취소해 줘' 문자 보내기");
 });
