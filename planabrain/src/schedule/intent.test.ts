@@ -195,6 +195,22 @@ test("words that contain 자정, 정오 or 마다 and date words glued to other 
   }
 });
 
+test("자정 or 정오 before an hour, glued repeat words and date words before 쯤 or 로 keep their meaning", () => {
+  const morning = Date.UTC(2026, 9, 21, 1, 0);
+  for (const [text, due] of [
+    ["자정 12시에 깨워줘", "2026-10-22T00:00"],
+    ["내일 자정 12시에 알림 등록해줘", "2026-10-23T00:00"],
+    ["모레쯤 오후 2시에 알려줘", "2026-10-23T14:00"],
+    ["자정 넘어서 1시에 알려줘", "2026-10-22T01:00"],
+    ["내일로 오후 3시 회의 알림 잡아줘", "2026-10-22T15:00"],
+  ] as const) {
+    assert.equal(kst(interpretScheduleRequest(text, { nowMs: morning }).dueAtMs), due, text);
+  }
+  for (const text of ["월요일마다하는 회의 3시에 알려줘", "아침마다하는 운동 7시 알림 등록"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: morning }).error, "반복 일정은 아직 지원하지 않습니다.", text);
+  }
+});
+
 test("rule parsing skips user text far longer than any command", () => {
   const started = performance.now();
   assert.equal(interpretScheduleRequest(`오후 3시 ${"1".repeat(50_000)} 알림`).handled, false);
