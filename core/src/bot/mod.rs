@@ -178,9 +178,10 @@ where
     let shutdown_started = state::note_shutdown_start();
     state::record_shutdown_mark().await;
     let offset = NEXT_OFFSET.load(Ordering::SeqCst);
-    if offset > 0 {
+    let remaining = TURN_DRAIN_LIMIT.saturating_sub(shutdown_started.elapsed());
+    if offset > 0 && !remaining.is_zero() {
         let confirm = bot.get_updates().offset(offset).limit(1).timeout(0).send();
-        let _ = tokio::time::timeout(FINAL_CONFIRM_LIMIT, confirm).await;
+        let _ = tokio::time::timeout(FINAL_CONFIRM_LIMIT.min(remaining), confirm).await;
     }
     let budget = TURN_DRAIN_LIMIT.saturating_sub(shutdown_started.elapsed());
     if !drain_state.tasks.drain(budget).await {
