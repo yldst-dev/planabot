@@ -204,6 +204,10 @@ test("decided todo actions skip keyword detection", async (t) => {
         await interpretTodoRequest("full", `할 일 ${`${word} `.repeat(280)}없는항목 삭제해줘`.slice(0, 590));
       }
       assert.ok(performance.now() - fillers < 1_000);
+      for (let index = 0; index < 100; index += 1) await addTodo("fresh", `점검 ${index}호기`);
+      const fresh = performance.now();
+      await interpretTodoRequest("fresh", "할 일 없는 이름 삭제해줘");
+      assert.ok(performance.now() - fresh < 80);
     });
 
     await t.test("completions with other words after a name, two items or a reply to a confirmation are asked back or left alone", async () => {
@@ -254,6 +258,74 @@ test("decided todo actions skip keyword detection", async (t) => {
       }
       assert.match((await interpretTodoRequest("plan2", "할 일 분리수거를 완료로 바꿔줘")).error ?? "", /'할 일 2번 완료'처럼/u);
       assert.deepEqual((await listTodos("plan2")).items.map((item) => [item.content, item.completed]), [["환기", false], ["분리수거", false]]);
+    });
+
+    await t.test("partial edits, other people's checklists and praise change nothing while list numbers settle an ask", async () => {
+      for (const content of ["창고 정리", "욕실 실리콘 보수"]) await addTodo("partial", content);
+      for (const text of ["할 일 2번에서 실리콘을 타일로 바꿔줘", "할 일 욕실 실리콘 보수에서 실리콘을 타일로 바꿔줘"]) {
+        assert.match((await interpretTodoRequest("partial", text)).message, /^확인 필요\.\n선생님\.\n어느 항목을 무엇으로 바꿀지/u, text);
+      }
+      assert.equal((await interpretTodoRequest("partial", "할 일 2번에서 욕실 타일 보수로 바꿔줘")).action, "update");
+      assert.deepEqual((await listTodos("partial")).items.map((item) => item.content), ["창고 정리", "욕실 타일 보수"]);
+      for (const content of ["세차", "우편함 확인"]) await addTodo("others", content);
+      for (const [context, text] of [["- [ ] 세차", "다 했어"], ["이번 주 할 일\n- [ ] 우편함 확인\n- [ ] 세차", "이거 목록이야?"]]) {
+        assert.equal((await interpretTodoRequest("others", `참고 메시지:\n${context}\n\n질문:\n${text}`)).handled, false, text);
+      }
+      const list = await interpretTodoRequest("others", "할 일 보여줘");
+      for (const text of ["오 잘했어", "수고했어", "응 했어요"]) {
+        assert.equal((await interpretTodoRequest("others", `직전 프라나 응답:\n${list.message}\n\n질문:\n${text}`)).handled, false, text);
+      }
+      assert.ok((await listTodos("others")).items.every((item) => !item.completed));
+      assert.match((await interpretTodoRequest("others", "할 일 다 했어")).error ?? "", /^대상 항목을 찾지 못했습니다/u);
+      for (const content of ["2번 출구에서 만나기", "세차"]) await addTodo("numbered", content);
+      const asked = await interpretTodoRequest("numbered", "할 일 2번 삭제해줘");
+      assert.equal(asked.message.split("\n")[0], "확인 필요.");
+      assert.match((await interpretTodoRequest("numbered", `직전 프라나 응답:\n${asked.message}\n\n질문:\n2번 삭제해줘`)).message, /"세차" 항목을 지웠습니다/u);
+    });
+
+    await t.test("polite questions, casual endings and a reason after the command still run", async () => {
+      const cases: Array<[string, "delete" | "complete"]> = [
+        ["할 일 세차 지워줭~", "delete"],
+        ["할 일 세차 삭제 ㄱㄱ", "delete"],
+        ["할 일 세차만 삭제해줘", "delete"],
+        ["할 일 세차 삭제해 주실래요?", "delete"],
+        ["할 일 세차 삭제해 주시겠어요?", "delete"],
+        ["할 일 세차 삭제해 줄 수 있어?", "delete"],
+        ["할 일 세차 완료했당 ㅎㅎ", "complete"],
+        ["할 일 세차 끝냄", "complete"],
+        ["할 일 세차 완료해 주실 수 있나요?", "complete"],
+      ];
+      for (const [index, [text, action]] of cases.entries()) {
+        await addTodo(`polite${index}`, "세차");
+        assert.equal((await interpretTodoRequest(`polite${index}`, text)).action, action, text);
+        assert.deepEqual((await listTodos(`polite${index}`)).items.map((item) => item.completed), action === "delete" ? [] : [true], text);
+      }
+      assert.equal((await interpretTodoRequest("polite-add", "할 일에 세차 추가해 줄 수 있을까요?")).action, "add");
+      assert.equal((await interpretTodoRequest("polite-add", "할 일 세차 삭제할 수 있어?")).handled, false);
+      for (const content of ["창고 정리", "세차"]) await addTodo("reason", content);
+      assert.equal((await interpretTodoRequest("reason", "할 일 창고 정리를 창고 비우기로 바꿔줘. 이사 가서 바꾸려고")).action, "update");
+      for (const text of ["할 일 세차를 손세차로 바꾸려고", "할 일 세차를 손세차로 바꾸려고요"]) {
+        assert.equal((await interpretTodoRequest("reason", text)).handled, false, text);
+      }
+      assert.deepEqual((await listTodos("reason")).items.map((item) => item.content), ["창고 비우기", "세차"]);
+    });
+
+    await t.test("renames take names that only start with a field word and adds refuse pointer words", async () => {
+      await addTodo("fields", "보고서 초안");
+      for (const content of ["시간 관리 책 읽기", "마감 연장 신청서", "2028년 예산안 검토"]) {
+        assert.equal((await interpretTodoRequest("fields", `할 일 1번을 ${content}로 바꿔줘`)).action, "update", content);
+        assert.equal((await listTodos("fields")).items[0]?.content, content);
+      }
+      for (const content of ["마감 금요일", "금요일까지", "2028년 3월", "상태 완료", "순서 맨 위"]) {
+        assert.match((await interpretTodoRequest("fields", `할 일 1번을 ${content}로 바꿔줘`)).error ?? "", /^날짜나 시각, 상태, 순서는/u, content);
+      }
+      for (const text of ["저거 내 할 일에도 추가해줘", "방금 그거 할 일에 추가해줘", "비 그치면 할 일에 세차 추가해줘"]) {
+        assert.equal((await interpretTodoRequest("pointer", text)).error, "추가할 내용을 확인하지 못했습니다. 예: 할 일에 우유 사기 추가해줘", text);
+      }
+      for (const text of ["할 일에 아까 산 책 반품 추가해줘", "할 일에 할 일 목록 정리 추가해줘"]) {
+        assert.equal((await interpretTodoRequest("pointer", text)).action, "add", text);
+      }
+      assert.deepEqual((await listTodos("pointer")).items.map((item) => item.content), ["아까 산 책 반품", "할 일 목록 정리"]);
     });
 
     await t.test("a decided add registers without the todo keyword", async () => {

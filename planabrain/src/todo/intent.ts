@@ -7,19 +7,20 @@ import {
   type TodoItem,
   type TodoMutationOutput
 } from "./store.js";
-import { NOON_OR_MIDNIGHT_PATTERN } from "../schedule/intent.js";
+import { EARLIER_COMMAND, NOON_OR_MIDNIGHT_PATTERN } from "../schedule/intent.js";
 
 const MAX_RULE_TEXT_CHARS = 600;
 const MAX_SPLITS = 10;
+const WORD_CHAR = "[가-힣ㄱ-ㅎㅏ-ㅣA-Za-z0-9]";
 const LEADING_TODO_WORDS = /^(?:(?:오늘|내일)\s+)?(?:(?:해야\s*)?(?:할\s*일|to-?do|투두)(?:\s*(?:리스트|목록))?|체크리스트)(?:\s*(?:에서|중에?|의|에|으로|로)(?=[\s:：]))?(?:\s*[:：])?(?:\s+|(?=[^\s\p{P}]))/iu;
 const TRAILING_TODO_WORDS = /(?:^|\s)(?:(?:해야\s*)?(?:할\s*일|to-?do|투두)(?:\s*(?:리스트|목록))?|체크리스트|체크박스|항목|내용|이름|제목|텍스트|문구)(?:에서|중에?|의|에|을|를|은|는)?$/iu;
-const POLITE = String.raw`(?:해|해요|해줘|해줘요|해주세요|해주세용|해줄래|해줄래요|해라|해주라|해줘라|줘|줘요|주세요|줄래|줄래요|주라|줘라|요|라|주셈|버려|좀)`;
-const FILLER_TOKEN = /^(?:좀|제발|부탁|부탁해|부탁해요|부탁합니다|부탁드려요|부탁드립니다|다|전부|모두|싹|방금|지금|이제|아까|오늘|어제|그냥|아|앗|오|와|우와|헐|음|흠|엥|휴|아싸|ㅋ+|ㅎ+|ㅠ+|ㅜ+|ㅇㅇ|[^\p{L}\p{N}]+)$/u;
+const POLITE = String.raw`(?:해|해요|해줘|해줘요|해주세요|해주세용|해줄래|해줄래요|해라|해주라|해줘라|줘|줘요|주세요|줄래|줄래요|주라|줘라|요|라|주셈|버려|좀|줭|주실래요|주시겠어요)`;
+const FILLER_TOKEN = /^(?:좀|제발|부탁|부탁해|부탁해요|부탁합니다|부탁드려요|부탁드립니다|다|전부|모두|싹|방금|지금|이제|아까|오늘|어제|그냥|아|앗|오|와|우와|헐|음|흠|엥|휴|아싸|ㅋ+|ㅎ+|ㅠ+|ㅜ+|ㄱ+|ㅇㅇ|[^\p{L}\p{N}]+)$/u;
 const DELETE_COMMAND = new RegExp(String.raw`^(?:(?:삭제|지워|지우|제거|없애|빼)${POLITE}?|${POLITE})$`, "u");
 const DELETE_SUFFIX = new RegExp(String.raw`(?:삭제|지워|제거|없애|빼)${POLITE}?$`, "u");
 const DELETE_TRIGGER = /삭제|지워|제거|지우(?:지|고|면|자|세요|라)|없애|빼(?:줘|주세요|주셈|줄래|라|버려|요)/u;
-const COMPLETE_TRIGGER = /완료|끝냈|끝낫|끝냇|끝났|처리했|체크|했어|했습니다|했음|했다|햇어|햇습니다|햇음/u;
-const DONE_ENDING = String.raw`(?:${POLITE}|했어|했어요|했습니다|했다|했음|햇어|햇어요|햇습니다|햇음|함|됐어|됐어요|됐음|됨|됐습니다|되었어|되었습니다|처리|표시|어|어요|어용|어여|습니다|슴다|다|음|당)`;
+const COMPLETE_TRIGGER = /완료|끝냄|끝냈|끝낫|끝냇|끝났|처리했|체크|했어|했습니다|했음|했다|햇어|햇습니다|햇음/u;
+const DONE_ENDING = String.raw`(?:${POLITE}|했당|했어|했어요|했습니다|했다|했음|햇어|햇어요|햇습니다|햇음|함|됐어|됐어요|됐음|됨|됐습니다|되었어|되었습니다|처리|표시|어|어요|어용|어여|습니다|슴다|다|음|당)`;
 const COMPLETE_COMMAND = new RegExp(String.raw`^(?:(?:완료|체크|처리)${DONE_ENDING}?|(?:끝냈|끝냇|끝났|했|햇|마쳤)(?:어|어요|어용|습니다|다|음|당)?|끝|끝냄|끝남|마침|표시${POLITE}?|${POLITE})$`, "u");
 const COMPLETE_SUFFIX = new RegExp(String.raw`(?:완료|체크|처리|끝냈|끝냇|끝났|했|햇|마쳤)${DONE_ENDING}?$`, "u");
 const COMPLETION_TOKEN = new RegExp(String.raw`(?:완료|체크|처리|끝냈|끝냇|끝났|끝냄|끝내|마쳤|마침|했|햇|됐|됨|끝)${DONE_ENDING}?$`, "u");
@@ -28,7 +29,10 @@ const NEGATION = /되돌|풀어|원래대로|미완료|취소|해제|(?:하|우|
 const EXCLUSION = /빼고(?:\s|$)|(?:^|\s)말고(?:\s|$)|제외(?:하고|해)?(?:\s|$)|대신(?:\s|$)/u;
 const COMPOUND = /(?:완료|삭제|제거|추가|등록|수정|변경|체크|처리)(?:하|했|해)?고\s|(?:지우|지웠|바꾸|바꿨|고치|고쳤|끝내|끝냈|없애|없앴)고\s|(?:^|\s)(?:하고|했고|하구)\s/u;
 const DATE_TIME_ONLY = /^(?:(?:오늘|내일|모레|글피|이번\s*주|다음\s*주|다다음\s*주|주말|평일|\d{1,2}\s*월|\d{1,2}\s*일|[월화수목금토일]요일)\s*)*(?:(?:오전|오후|아침|점심|저녁|밤|낮|새벽)\s*)?(?:\d{1,2}\s*시(?:\s*(?:\d{1,2}\s*분|반))?|정오|자정)?$/u;
-const NOT_CONTENT = /^(?:상태|날짜|시간|기한|마감|순서|순위|우선\s*순위)(?:을|를|은|는)?(?:\s|$)|^(?:미|안\s*)?완료(?:\s*(?:상태|처리))?$|^(?:미|안\s*)?완료(?:\s*상태)?\s*에서\s*(?:미|안\s*)?완료(?:\s*상태)?$|^(?:완료됨|체크|done|진행\s*중)$|^(?:다\s*)?끝난\s*걸$|^(?:완료\s*)?안\s*한\s*걸$|^(?:맨\s*)?(?:위|아래|앞|뒤|끝|처음|마지막)$|^(?:첫|두|세|네|다섯)\s*번째$|^\d+\s*(?:번|번째|순위)$|(?:\d+\s*(?:분|시간|일|주)|하루|이틀)\s*(?:뒤|후)$|^(?:(?:이번|다음|담|다다음)\s*)?(?:주말|달)$|^\d{1,2}:\d{2}$|^\d{1,2}\/\d{1,2}$|^\d{1,2}\s*[ap]m$|^\d{4}\s*년|(?:이후|이전)$|^(?:담주|다음\s*주|이번\s*주)\s*[월화수목금토일](?:요일|욜)$/iu;
+const NOT_CONTENT = /^(?:미|안\s*)?완료(?:\s*(?:상태|처리))?$|^(?:미|안\s*)?완료(?:\s*상태)?\s*에서\s*(?:미|안\s*)?완료(?:\s*상태)?$|^(?:완료됨|체크|done|진행\s*중)$|^(?:다\s*)?끝난\s*걸$|^(?:완료\s*)?안\s*한\s*걸$|^(?:맨\s*)?(?:위|아래|앞|뒤|끝|처음|마지막)$|^(?:첫|두|세|네|다섯)\s*번째$|^\d+\s*(?:번|번째|순위)$|(?:\d+\s*(?:분|시간|일|주)|하루|이틀)\s*(?:뒤|후)$|^(?:(?:이번|다음|담|다다음)\s*)?(?:주말|달)$|^\d{1,2}:\d{2}$|^\d{1,2}\/\d{1,2}$|^\d{1,2}\s*[ap]m$|(?:이후|이전)$|^(?:담주|다음\s*주|이번\s*주)\s*[월화수목금토일](?:요일|욜)$/iu;
+const FIELD_PREFIX = /^(?:(?:상태|날짜|시간|기한|마감|순서|순위|우선\s*순위)(?:을|를|은|는|이|가)?(?:\s+|$)|\d{4}\s*년(?:\s+|$|(?=\d)))/u;
+const ADD_POINTER = /(?:^|\s)(?:할\s*일|투두|todo)(?:에|에다|에도|로)(?:\s|$)|^(?:(?:방금|아까)\s*)?(?:이거|그거|저거|이것|그것|저것)(?:\s|$)/iu;
+const REQUEST_QUESTION_TAIL = /\s*(?:줄|주실|주시)\s*수\s*있(?:어요?|나요|니|을까요?|습니까|으세요|으신가요|겠어요?)[?？\sㅋㅎㅠㅜ~!.]*$/u;
 const NOT_ADD_CONTENT = /^(?:다시|그거|이거|저거|그것|이것|저것|그|이|저|하나|뭐|뭔가|(?:방금|아까|위에|아래)\s*(?:거|것|꺼))$/u;
 const UPDATE_VERB = /수정|변경|바꿔|바꾸|고쳐|고치/u;
 const SECOND_ACTION = /추가|등록|(?<!미)완료(?!\s*(?:상태|로|에서|된|됨))/u;
@@ -71,7 +75,8 @@ export async function interpretTodoRequest(
   text: string,
   action?: TodoAction,
 ): Promise<TodoInterpretOutput> {
-  const userText = extractUserText(text);
+  const userText = extractUserText(text).replace(REQUEST_QUESTION_TAIL, "줘");
+  text = text.startsWith("참고 메시지:\n") ? userText : text;
   if (userText.length > MAX_RULE_TEXT_CHARS && action !== "list") {
     return emptyOutput();
   }
@@ -106,7 +111,7 @@ export async function interpretTodoRequest(
     if (choice && "ask" in choice) {
       return ask("update", userId, open, choice.ask);
     }
-    if (choice?.content && (DATE_TIME_ONLY.test(choice.content) || NOT_CONTENT.test(choice.content))) {
+    if (choice?.content && isNotContent(choice.content)) {
       return refuse("update", userId, refusedNotContent(open.indexOf(choice.item) + 1));
     }
     const result = await updateTodo(userId, choice?.item.id ?? "", choice?.content ?? update.splits[0].content);
@@ -134,7 +139,7 @@ export async function interpretTodoRequest(
     }
     const target = completeTarget(userText, text);
     if (endsWithCompletion(userText)) {
-      return mutateChosen("complete", userId, open, text, target, completeTodo);
+      return mutateChosen("complete", userId, open, text, target, completeTodo, isTodoRelated(normalized));
     }
     if (!action || !target.core) {
       return emptyOutput();
@@ -152,13 +157,13 @@ export async function interpretTodoRequest(
 
   const add = !action || action === "add" ? parseAdd(userText) : undefined;
   if (add !== undefined) {
-    if ((isQuestion(add.rest) && !/줄\s*수\s*있어/u.test(add.rest)) || /(?:^|\s)(?:나중에|이따가?|다음에)$/u.test(add.content)) {
+    if (isQuestion(add.rest) || /(?:^|\s)(?:나중에|이따가?|다음에)$/u.test(add.content)) {
       return emptyOutput();
     }
     if (NEGATION.test(add.rest) || EXCLUSION.test(normalized) || COMPOUND.test(normalized)) {
       return refuse("add", userId, NEGATION.test(add.rest) || EXCLUSION.test(normalized) ? REFUSED_NEGATIVE : REFUSED_COMPOUND);
     }
-    if (!add.content || NOT_ADD_CONTENT.test(add.content) || DATE_TIME_ONLY.test(add.content)) {
+    if (!add.content || NOT_ADD_CONTENT.test(add.content) || DATE_TIME_ONLY.test(add.content) || ADD_POINTER.test(add.content)) {
       return refuse("add", userId, REFUSED_ADD_CONTENT);
     }
     const result = await addTodo(userId, add.content);
@@ -178,6 +183,11 @@ export async function interpretTodoRequest(
   return emptyOutput();
 }
 
+function isNotContent(value: string): boolean {
+  const rest = value.replace(FIELD_PREFIX, "");
+  return [value, rest, rest.replace(/\s*(?:까지|부터|전|후|쯤)$/u, "")].some((part) => DATE_TIME_ONLY.test(part) || NOT_CONTENT.test(part));
+}
+
 function blockedReason(text: string): string | undefined {
   return NEGATION.test(text) || EXCLUSION.test(text) ? REFUSED_NEGATIVE : COMPOUND.test(text) ? REFUSED_COMPOUND : undefined;
 }
@@ -185,7 +195,7 @@ function blockedReason(text: string): string | undefined {
 function maskNames(text: string, open: TodoItem[]): string {
   return [...open]
     .sort((a, b) => b.content.length - a.content.length)
-    .reduce((value, item) => value.replace(new RegExp(`(?<![\\p{L}\\p{N}])${nameTokens(item.content).join("\\s*")}`, "giu"), " □ "), text)
+    .reduce((value, item) => value.replace(new RegExp(`(?<!${WORD_CHAR})${nameTokens(item.content).join("\\s*")}`, "giu"), " □ "), text)
     .replace(/\s+/gu, " ");
 }
 
@@ -271,10 +281,14 @@ async function mutateChosen(
   text: string,
   target: Target,
   mutate: (userId: string, query: string) => Promise<TodoMutationOutput>,
+  named = true,
 ): Promise<TodoInterpretOutput> {
   const choice = resolveTarget(open, target.windows, text);
   if (choice && "ask" in choice) {
     return ask(action, userId, open, choice.ask);
+  }
+  if (!choice && !named) {
+    return emptyOutput();
   }
   const result = await mutate(userId, choice?.item.id ?? "");
   return mutationOutput(action, result.ok ? DONE[action] : "확인 불가.\n선생님.", result);
@@ -339,7 +353,7 @@ function resolveUpdate(open: TodoItem[], update: Update, fullText: string): Choi
     const found = mentionPattern(item.content).exec(update.head);
     return found !== null && found.index < split.at && found.index + found[0].length > split.at;
   }));
-  if (!splits.length) {
+  if (!splits.length || splits.some((split, index) => index < splits.length - 1 && update.head.startsWith("에서", split.at))) {
     return "unclear";
   }
   const select = (items: Entry[], value: string): TodoItem[] => selectedItems(items, value, context, fullText);
@@ -432,7 +446,7 @@ function completeTarget(userText: string, fullText: string): Target {
 
 function variants(window: string): string[] {
   const values = [window, window.replace(TRAILING_TODO_WORDS, "").trim()];
-  return [...new Set(values.flatMap((value) => [value, value.replace(/(?:을|를|은|는|이|가|도|에서|좀)$/u, "").trim()]))].filter(Boolean);
+  return [...new Set(values.flatMap((value) => [value, value.replace(/(?:을|를|은|는|이|가|도|만|에서|좀)$/u, "").trim()]))].filter(Boolean);
 }
 
 function indexTodos(open: TodoItem[]): Entry[] {
@@ -465,7 +479,7 @@ function selectedItems(entries: Entry[], value: string, context: string[], fullT
   }
   const chosen = context.length ? exactItems(entries, context[index]) : [entries[index].item];
   const word = normalizeSelectorText(value).replace(/^맨/u, "").replace(/(?:거|것|꺼|항목)$/u, "");
-  const named = entries.filter((entry) => {
+  const named = isAskReply(fullText) ? [] : entries.filter((entry) => {
     const head = entry.item.content.trim().split(/\s+/u)[0] ?? "";
     const number = entry.item.content.trim().match(/^(\d+)(?:번|번째|째)?(?:\s|$)/u)?.[1];
     return (word && entry.key.startsWith(word)) || (/^(?:첫|두|세|네|다섯|여섯|일곱|여덟|아홉|열|마지막|처음|\d+(?:번|번째|째)?)$/u.test(head) && compact(head) === word) || Number(number) === index + 1;
@@ -489,7 +503,7 @@ function partialItems(entries: Entry[], value: string): TodoItem[] {
   if (!key) {
     return [];
   }
-  const wordStart = new RegExp(`(?<![\\p{L}\\p{N}])${value.trim().replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}`, "iu");
+  const wordStart = new RegExp(`(?<!${WORD_CHAR})${value.trim().replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}`, "iu");
   return entries
     .filter((entry) => (key.length >= 2 && entry.key.includes(key)) || wordStart.test(entry.item.content) || entry.mention.test(value))
     .map((entry) => entry.item);
@@ -497,7 +511,7 @@ function partialItems(entries: Entry[], value: string): TodoItem[] {
 
 function mentionPattern(name: string): RegExp {
   const tokens = name.trim().split(/\s+/u).map((token) => token.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"));
-  return new RegExp(`(?<![\\p{L}\\p{N}])${tokens.join("\\s*")}(?=$|[\\s\\p{P}]|을|를|은|는|이|가|도|만|완료|했|함|끝|처리|체크)`, "iu");
+  return new RegExp(`(?<!${WORD_CHAR})${tokens.join("\\s*")}(?=$|[^가-힣ㄱ-ㅎㅏ-ㅣA-Za-z0-9]|을|를|은|는|이|가|도|만|완료|했|함|끝|처리|체크)`, "iu");
 }
 
 function uniqueItems(items: TodoItem[]): TodoItem[] {
@@ -521,7 +535,7 @@ function isUnfinished(text: string): boolean {
 }
 
 function isDeferred(text: string): boolean {
-  return isQuestion(text) || /(?:하|끝나|끝내|마치|되)면(?:\s|$)|하고\s*나서|한\s*(?:다음|뒤|후)|끝난\s*(?:뒤|후|다음)|했대|했다고|했다는|하래|하랬|라고\s*(?:했|하더|해서)|나중에|이따|려고|려다/u.test(text);
+  return isQuestion(text) || /(?:하|끝나|끝내|마치|되)면(?:\s|$)|하고\s*나서|한\s*(?:다음|뒤|후)|끝난\s*(?:뒤|후|다음)|했대|했다고|했다는|하래|하랬|라고\s*(?:했|하더|해서)|나중에|이따|려고\s*(?:했|해|하)|려다/u.test(text) || (/려고/u.test(text) && !EARLIER_COMMAND.test(text));
 }
 
 function extractSingleOpenTodoFromContext(text: string): string | undefined {
