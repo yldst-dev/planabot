@@ -218,6 +218,23 @@ test("a bare call replying to a cancel result does not cancel the reminders it l
   }
 });
 
+test("negations, questions, plans, conditions and reports neither cancel nor add reminders", () => {
+  for (const text of ["도서관 반납 알림 취소하지 마", "도서관 반납 알림 취소할까?", "도서관 반납 알림은 이따가 취소할게", "눈 오면 도서관 반납 알림 취소해줘", "언니가 도서관 반납 알림 취소했대", "도서관 반납 알림 취소 안 해도 돼", "도서관 반납 알림 지우면 안 돼", "도서관 반납 알림 취소하려고", "4시에 알려주지 마", "4시에 세탁소 간다고 알려줬어", "4시에 세탁소 알림 등록할까?", "타이머 10분 맞췄어"]) {
+    for (const action of [undefined, /취소|지우/u.test(text) ? "cancel" : "add"] as const) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
+    }
+  }
+  for (const text of ["도서관 반납 알림 취소해줘", "도서관 반납 알림 취소해줄래?", "도서관 반납 알림 취소해 줄 수 있어?", "도서관 반납 알림 취소해줘. 반납을 미뤄서 취소하려고"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now }).action, "cancel", text);
+  }
+  assert.equal(interpretScheduleRequest("4시에 세탁소 알려줘?", { nowMs: now, action: "add" }).action, "add");
+  assert.equal(interpretScheduleRequest("일정 뭐 있어?", { nowMs: now }).action, "list");
+  const list = "직전 프라나 응답:\n일정 확인.\n선생님.\n예정된 항목입니다.\n\n1. [일정] 2026-10-14 18:00 KST - 화분 물주기";
+  for (const [question, target] of [["1번도 취소해줘", "1번"], ["두 번째는 지워줘", "두 번째"], ["포도 알림 취소해줘", "포도"]]) {
+    assert.equal(interpretScheduleRequest(`${list}\n\n질문:\n${question}`, { nowMs: now }).target, target, question);
+  }
+});
+
 test("rule parsing skips user text far longer than any command", () => {
   const started = performance.now();
   assert.equal(interpretScheduleRequest(`오후 3시 ${"1".repeat(50_000)} 알림`).handled, false);

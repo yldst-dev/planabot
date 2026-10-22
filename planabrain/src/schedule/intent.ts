@@ -11,6 +11,10 @@ const RECURRING_PATTERN = /(?:(?<![가-힣])|(?<=알림|일정|타이머|예약)
 export const NOON_OR_MIDNIGHT_PATTERN = /(?<=^|[^가-힣]|오늘|내일|모레|글피|요일)(?:정오|자정)(?=$|[^가-힣]|[에쯤까부전이가은는을를도만의되넘지직무경께로으엔즈와과랑나후])/gu;
 const COMMON_FRACTIONS = new Set(["1/2", "1/3", "2/3", "1/4", "3/4"]);
 const WEEK_QUALIFIER_PATTERN = /(?:이번|다음|다다음)\s*달|째\s*주|마지막\s*주/u;
+const HELD = /(?:취소|삭제|지우|지워|없애|제거|등록|추가|설정|예약|알려|맞춰)\s*(?:하|해|주|줘)?\s*(?:지\s*(?:마|말|않)|안\s*(?:해|하|돼|되))|(?:취소|삭제|지우|지워|없애|제거|등록|추가|설정|예약)\s*(?:하면|해선|해서는|면)\s*안|할까|(?:었|았|였|줬|했|췄|됐)어[\sㅋㅎㅠㅜ.!~]*$|[?？][\sㅋㅎㅠㅜ~!.]*$/u;
+const HELD_CANCEL = /나중에|이따|려고\s*(?:했|해|하)|려다|했대|했다고|하래|라고\s*했|(?:하|되|오|나|마치)면(?:\s|$)/u;
+const REQUEST_QUESTION = /(?:줄래요?|주실래요|주시겠어요|줘요?|주세요|수\s*있(?:어요?|나요|니|을까요?))\s*[?？][\sㅋㅎㅠㅜ~!.]*$/u;
+export const EARLIER_COMMAND = /(?:줘|주세요|주십시오|해라|주라|주셈)[\s.!~,]/u;
 
 export type ScheduleInterpretOutput = {
   handled: boolean;
@@ -58,7 +62,11 @@ export function interpretScheduleRequest(
     return emptyOutput();
   }
 
+  const held = HELD.test(normalized) && !REQUEST_QUESTION.test(normalized);
   if (decided ? decided === "cancel" : isCancelRequest(normalized)) {
+    if (held || HELD_CANCEL.test(normalized) || (/려고/u.test(normalized) && !EARLIER_COMMAND.test(normalized))) {
+      return emptyOutput();
+    }
     return {
       handled: true,
       action: "cancel",
@@ -71,6 +79,10 @@ export function interpretScheduleRequest(
       handled: true,
       action: "list"
     };
+  }
+
+  if (held) {
+    return emptyOutput();
   }
 
   if (RECURRING_PATTERN.test(normalized) && (parsedTime || decided === "add" || isAddRequest(normalized))) {
@@ -331,7 +343,7 @@ function extractCancelTarget(text: string): string {
     extractUserText(text)
       .replace(/(?:일정|스케줄|타이머|알림|리마인더|리마인드|예약|항목)/gi, " ")
       .replace(/(?:취소|삭제|지워|제거|없애|해줘|해주세요|해|줘)/g, " ")
-  );
+  ).replace(/^(\S+\s*(?:번째|번|째|거|것|꺼))\s*(?:도|은|는|을|를)$/u, "$1");
 }
 
 function distanceFrom(match: RegExpMatchArray, start: number, end: number): number {
