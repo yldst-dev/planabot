@@ -23,11 +23,11 @@ const DEFAULT_SCHEDULE_TITLE: &str = "요청하신 내용";
 
 static SCHEDULE_ID_SEQ: AtomicU64 = AtomicU64::new(1);
 static TITLE_COMMAND_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:(?:프라나야|프라나)\s*)?(?:(?:알려\s*줘|알려\s*주세요|알림|타이머|리마인더|리마인드|예약|등록|추가|생성|설정|맞춰)(?:\s*(?:해줘|해주세요|해|줘))?\s*)+")
+    Regex::new(r"^(?:(?:프라나야|프라나)\s*)?(?:(?:알려\s*줘|알려\s*주세요|알림|타이머|리마인더|리마인드|예약|등록|추가|생성|설정|맞춰)(?:\s*(?:해줘|해주세요|해|줘))?(?:\s+|$))+")
         .expect("title command prefix regex should be valid")
 });
 static TITLE_COMMAND_SUFFIX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\s*(?:(?:알려\s*줘|알려\s*주세요|알림|타이머|리마인더|리마인드|예약|등록|추가|생성|설정|맞춰)(?:\s*(?:해줘|해주세요|해|줘))?|(?:해줘|해주세요|부탁|줘))+$")
+    Regex::new(r"(?:(?:^|\s+)(?:알려\s*줘|알려\s*주세요|알림|타이머|리마인더|리마인드|예약|등록|추가|생성|설정|맞춰)(?:\s*(?:해줘|해주세요|해|줘))?|\s*(?:해줘|해주세요|부탁|줘))+$")
         .expect("title command suffix regex should be valid")
 });
 
@@ -1106,6 +1106,17 @@ mod tests {
             normalize_title("프라나야 알려줘 라면먹을거야"),
             "라면먹을거야"
         );
+        for title in [
+            "추가근무 신청",
+            "등록금 납부",
+            "설정집 주문",
+            "예약금 입금",
+            "알림장 확인",
+            "공유기 환경설정",
+        ] {
+            assert_eq!(normalize_title(title), title);
+        }
+        assert_eq!(normalize_title("알림 등록 율무차 끓이기"), "율무차 끓이기");
     }
 
     #[tokio::test]
