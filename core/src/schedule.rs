@@ -9,7 +9,10 @@ use log::{error, info, warn};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, MessageId, ParseMode, ReplyParameters, ThreadId};
+use teloxide::types::{
+    ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode, ReplyParameters,
+    ThreadId,
+};
 use teloxide::utils::html;
 use tokio::time::{self, Duration};
 
@@ -20,6 +23,7 @@ const MAX_SEND_ATTEMPTS: u32 = 5;
 const RETRY_BASE_MS: i64 = 30_000;
 const SYNTHETIC_OWNER_ID_START: u64 = 1 << 52;
 const DEFAULT_SCHEDULE_TITLE: &str = "요청하신 내용";
+pub(crate) const RESTORE_CALLBACK_PREFIX: &str = "sundo_";
 
 static SCHEDULE_ID_SEQ: AtomicU64 = AtomicU64::new(1);
 static TITLE_COMMAND_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
@@ -237,6 +241,76 @@ impl ScheduleStore {
         Ok(result)
     }
 
+    pub(crate) async fn restore(
+        &self,
+        owner_user_id: u64,
+        chat_id: i64,
+        id: &str,
+    ) -> Result<ScheduleMutation> {
+        let _guard = self.write_lock.lock().await;
+        let now = now_ms();
+        let (result, snapshot) = {
+            let mut items = lock_items(&self.items).clone();
+            let full = items
+                .iter()
+                .filter(|item| {
+                    item.owner_user_id == owner_user_id && item.status == ScheduleStatus::Pending
+                })
+                .count()
+                >= MAX_USER_PENDING_ITEMS
+                || items.iter().filter(|item| is_active(item)).count() >= MAX_SCHEDULE_ITEMS;
+            let error = match items
+                .iter()
+                .find(|item| item.id == id && item.chat_id == chat_id)
+            {
+                None => Some("되돌릴 항목을 찾지 못했습니다."),
+                Some(item) if item.owner_user_id != owner_user_id => {
+                    Some("요청하신 분만 되돌릴 수 있습니다.")
+                }
+                Some(item) if item.status != ScheduleStatus::Canceled => {
+                    Some("이미 되돌렸거나 처리된 항목입니다.")
+                }
+                Some(item) if item.due_at_ms <= now => {
+                    Some("이미 지난 시각이라 되돌릴 수 없습니다.")
+                }
+                Some(_) if full => Some("등록 가능한 항목 수를 초과했습니다."),
+                Some(_) => None,
+            };
+            if let Some(error) = error {
+                return Ok(ScheduleMutation {
+                    ok: false,
+                    item: None,
+                    items: list_pending_for_user(&items, owner_user_id, chat_id),
+                    error: Some(error.to_string()),
+                });
+            }
+            let mut restored = None;
+            for item in items.iter_mut() {
+                if item.id == id {
+                    item.status = ScheduleStatus::Pending;
+                    item.updated_at_ms = now;
+                    item.canceled_at_ms = None;
+                    restored = Some(item.clone());
+                    break;
+                }
+            }
+            sort_items(&mut items);
+            let visible = list_pending_for_user(&items, owner_user_id, chat_id);
+            (
+                ScheduleMutation {
+                    ok: true,
+                    item: restored,
+                    items: visible,
+                    error: None,
+                },
+                items,
+            )
+        };
+
+        self.commit(snapshot).await?;
+        Ok(result)
+    }
+
     async fn claim_due(&self, now: i64) -> Result<Vec<ScheduleItem>> {
         let _guard = self.write_lock.lock().await;
         let (due, snapshot) = {
@@ -427,6 +501,32 @@ pub(crate) fn render_schedule_cancel_result(result: &ScheduleMutation) -> String
             .unwrap_or("작업을 처리하지 못했습니다."),
         render_schedule_list(&result.items)
     )
+}
+
+pub(crate) fn render_schedule_restore_result(result: &ScheduleMutation) -> String {
+    match (result.ok, result.item.as_ref()) {
+        (true, Some(item)) => format!(
+            "복구 완료.\n선생님.\n되살린 항목: [{}] {} - {}\n\n{}",
+            render_kind(&item.kind),
+            format_kst(item.due_at_ms),
+            item.title,
+            render_schedule_list(&result.items)
+        ),
+        _ => format!(
+            "확인 불가.\n선생님.\n{}",
+            result
+                .error
+                .as_deref()
+                .unwrap_or("작업을 처리하지 못했습니다.")
+        ),
+    }
+}
+
+pub(crate) fn restore_keyboard(id: &str) -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+        "되돌리기",
+        format!("{RESTORE_CALLBACK_PREFIX}{id}"),
+    )]])
 }
 
 pub(crate) fn now_ms() -> i64 {
@@ -1117,6 +1217,60 @@ mod tests {
             assert_eq!(normalize_title(title), title);
         }
         assert_eq!(normalize_title("알림 등록 율무차 끓이기"), "율무차 끓이기");
+    }
+
+    #[tokio::test]
+    async fn only_the_owner_restores_a_canceled_reminder_before_it_is_due() {
+        let store = ScheduleStore::with_items(
+            std::env::temp_dir().join(format!("planabot_schedule_restore_{}.json", now_ms())),
+            Vec::new(),
+        );
+        let add = |title: &str, due_at_ms: i64| NewSchedule {
+            owner_user_id: 1,
+            chat_id: ChatId(10),
+            message_thread_id: None,
+            source_message_id: None,
+            kind: ScheduleKind::Schedule,
+            title: title.to_string(),
+            due_at_ms,
+        };
+        let soon = store
+            .add(add("율무차", now_ms() + 300))
+            .await
+            .unwrap()
+            .item
+            .unwrap();
+        let later = store
+            .add(add("보리차", now_ms() + 60_000))
+            .await
+            .unwrap()
+            .item
+            .unwrap();
+        assert!(store.cancel(1, 10, "보리차").await.unwrap().ok);
+        assert!(store.cancel(1, 10, "율무차").await.unwrap().ok);
+
+        let refused = |result: super::ScheduleMutation| result.error.unwrap();
+        assert_eq!(
+            refused(store.restore(2, 10, &later.id).await.unwrap()),
+            "요청하신 분만 되돌릴 수 있습니다."
+        );
+        assert_eq!(
+            refused(store.restore(1, 11, &later.id).await.unwrap()),
+            "되돌릴 항목을 찾지 못했습니다."
+        );
+        let restored = store.restore(1, 10, &later.id).await.unwrap();
+        assert_eq!(restored.item.unwrap().title, "보리차");
+        assert_eq!(store.list_user_pending(1, 10).len(), 1);
+        assert_eq!(
+            refused(store.restore(1, 10, &later.id).await.unwrap()),
+            "이미 되돌렸거나 처리된 항목입니다."
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        assert_eq!(
+            refused(store.restore(1, 10, &soon.id).await.unwrap()),
+            "이미 지난 시각이라 되돌릴 수 없습니다."
+        );
+        let _ = std::fs::remove_file(store.path);
     }
 
     #[tokio::test]

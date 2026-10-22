@@ -8,7 +8,7 @@ use super::super::telegram::{SendOptions, send_reply_with_fallback};
 use crate::planabrain;
 use crate::schedule::{
     NewSchedule, ScheduleKind, ScheduleMutation, render_schedule_add_result,
-    render_schedule_cancel_result, render_schedule_list,
+    render_schedule_cancel_result, render_schedule_list, restore_keyboard,
 };
 
 pub(super) async fn handle_schedule_interpretation<B>(
@@ -50,6 +50,7 @@ where
         return Ok(false);
     }
 
+    let mut options = SendOptions::default();
     let message = match schedule.action.as_str() {
         "list" => {
             let items = state
@@ -58,11 +59,26 @@ where
             render_schedule_list(&items)
         }
         "cancel" => {
-            let target = schedule.target.unwrap_or_default();
-            let result = state
-                .schedule_store
-                .cancel(owner_user_id, msg.chat.id.0, &target)
-                .await?;
+            let result = match schedule.error {
+                Some(error) => ScheduleMutation {
+                    ok: false,
+                    item: None,
+                    items: state
+                        .schedule_store
+                        .list_user_pending(owner_user_id, msg.chat.id.0),
+                    error: Some(error),
+                },
+                None => {
+                    let target = schedule.target.unwrap_or_default();
+                    state
+                        .schedule_store
+                        .cancel(owner_user_id, msg.chat.id.0, &target)
+                        .await?
+                }
+            };
+            if let (true, Some(item)) = (result.ok, result.item.as_ref()) {
+                options.reply_markup = Some(restore_keyboard(&item.id));
+            }
             render_schedule_cancel_result(&result)
         }
         "add" => {
@@ -127,7 +143,7 @@ where
         _ => return Ok(false),
     };
 
-    let sent = send_reply_with_fallback(bot, msg, message, SendOptions::default()).await?;
+    let sent = send_reply_with_fallback(bot, msg, message, options).await?;
     state
         .record_planabrain_reply_for_user(
             &sent,

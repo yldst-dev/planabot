@@ -14,6 +14,7 @@ use super::super::gallery::{
     render_gallery_message, replace_gallery_action_button,
 };
 use super::super::{AppState, HandlerResult};
+use crate::schedule::{RESTORE_CALLBACK_PREFIX, render_schedule_restore_result};
 
 pub(crate) async fn handle_callback<B>(
     bot: B,
@@ -34,6 +35,11 @@ where
 
     if let Some(gallery_id) = data.strip_prefix("fetch_") {
         handle_fetch_callback(&bot, &query, &state, gallery_id).await?;
+        return Ok(());
+    }
+
+    if let Some(id) = data.strip_prefix(RESTORE_CALLBACK_PREFIX) {
+        handle_restore_callback(&bot, &query, &state, id).await?;
         return Ok(());
     }
 
@@ -116,6 +122,49 @@ where
         bot.answer_callback_query(query.id).await?;
     }
 
+    Ok(())
+}
+
+async fn handle_restore_callback<B>(
+    bot: &B,
+    query: &CallbackQuery,
+    state: &AppState,
+    id: &str,
+) -> HandlerResult
+where
+    B: Requester,
+    B::Err: std::error::Error + Send + Sync + 'static,
+{
+    let Some(msg) = query.regular_message() else {
+        let _ = bot
+            .answer_callback_query(query.id.clone())
+            .text("불가.\n선생님.\n메시지를 찾지 못했습니다.")
+            .show_alert(true)
+            .await;
+        return Ok(());
+    };
+    let result = state
+        .schedule_store
+        .restore(query.from.id.0, msg.chat.id.0, id)
+        .await?;
+    if !result.ok {
+        let _ = bot
+            .answer_callback_query(query.id.clone())
+            .text(render_schedule_restore_result(&result))
+            .show_alert(true)
+            .await;
+        return Ok(());
+    }
+    let _ = bot
+        .answer_callback_query(query.id.clone())
+        .text("복구 완료.\n선생님.")
+        .await;
+    if let Err(err) = bot
+        .edit_message_text(msg.chat.id, msg.id, render_schedule_restore_result(&result))
+        .await
+    {
+        warn!("일정 복구 메시지 수정 실패: {}", err);
+    }
     Ok(())
 }
 
