@@ -362,7 +362,7 @@ function extractScheduleTitle(text: string, parsedTime: ParsedTime): string {
 }
 
 function extractCancelTarget(text: string): string {
-  const userText = extractUserText(text);
+  const userText = extractUserText(text).replace(/\s+/gu, " ");
   const head = userText.slice(0, userText.match(CANCEL_COMMAND)?.index ?? 0);
   const body = (/\S/u.test(head) ? head : userText.replace(/취소|삭제|지워|지우|없애|제거/gu, " ")).replace(POLITE_IF, " ").replace(/(?<![가-힣])(?:혹시|꼭|제발|일단)(?![가-힣])/gu, " ");
   return cleanupText(

@@ -397,3 +397,9 @@ test("thanks or reasons after a request do not run it, polite openers do and sta
     assert.equal(kst(result.dueAtMs).slice(11), time, text);
   }
 });
+
+test("a cancel padded with long runs of spaces is read quickly", () => {
+  const started = performance.now();
+  interpretScheduleRequest(`삭제${" ".repeat(290)}ㅇ${" ".repeat(290)}2번 취소해 줘`, { nowMs: now, action: "cancel" });
+  assert.ok(performance.now() - started < 50);
+});
