@@ -8,15 +8,20 @@ use crate::urlchanger::link_utils::{
     convert_x_links, extract_google_share_links, extract_music_links, is_youtube_short_link,
 };
 use crate::urlchanger::music_card::build_music_card;
+use crate::urlchanger::music_metadata::{MusicMetadata, download_cover, fetch_music_metadata};
 use chrono::Utc;
 use log::{error, warn};
+use std::time::Duration;
 use teloxide::dispatching::DpHandlerDescription;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, InputFile, ParseMode};
 use teloxide::utils::html;
+use tokio::time::timeout;
 
 const CAPTION_LIMIT: usize = 1024;
 const MUSIC_CARD_FILE_NAME: &str = "music_card.png";
+const YOUTUBE_THUMBNAIL_FILE_NAME: &str = "youtube.jpg";
+const YOUTUBE_PREVIEW_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_GOOGLE_SHARE_LINKS: usize = 5;
 const MAX_INSTAGRAM_PREVIEWS: usize = 3;
 
@@ -107,15 +112,19 @@ where
     }
 
     let any_tracking = links.iter().any(|link| link.had_tracking);
-    let privileged = is_privileged(&bot, &msg, &state, "음악").await;
     let username = display_name(&msg);
     let plan = if is_youtube_only(&links) {
-        youtube_plan(&username, text, &links, any_tracking)
+        let preview = load_youtube_preview(&links[0]).await;
+        match youtube_plan(&username, text, &links, any_tracking, preview) {
+            Some(plan) => plan,
+            None => return Ok(()),
+        }
     } else {
         let card = build_music_card(&links).await;
         music_plan(&username, text, &links, card)
     };
 
+    let privileged = is_privileged(&bot, &msg, &state, "음악").await;
     deliver_link_plan(&bot, &msg, privileged, "음악", plan).await
 }
 
@@ -154,7 +163,8 @@ fn youtube_plan(
     original_text: &str,
     links: &[MusicLink],
     had_tracking: bool,
-) -> LinkPlan {
+    preview: Option<(MusicMetadata, Vec<u8>)>,
+) -> Option<LinkPlan> {
     let cleaned_text = youtube_cleaned_text(links);
     let reposted = build_cleaned_message_text(original_text, links);
     let message = if reposted.contains('\n') {
@@ -176,11 +186,51 @@ fn youtube_plan(
             "확인 완료.\n선생님.\n유튜브 링크입니다.\n원본 링크 버튼을 제공합니다.".to_string()
         }
     };
+    let caption = |text: &str| -> Option<String> {
+        let (metadata, _) = preview.as_ref()?;
+        let caption = match &metadata.artist {
+            Some(channel) => format!("{text}\n\n{}\n{channel}", metadata.title),
+            None => format!("{text}\n\n{}", metadata.title),
+        };
+        fits_caption(&caption).then_some(caption)
+    };
+    let admin_caption = caption(&message);
+    if admin_caption.is_none() && !expanded && !had_tracking {
+        return None;
+    }
+    let reply_caption = caption(&reply_text);
+    let post = |text: String, caption: Option<String>| match (caption, &preview) {
+        (Some(caption), Some((_, thumbnail))) => LinkReply::photo(
+            InputFile::memory(thumbnail.clone()).file_name(YOUTUBE_THUMBNAIL_FILE_NAME),
+            caption,
+        )
+        .with_text_fallback(text),
+        _ => LinkReply::text(text),
+    };
     let markup = build_links_keyboard(links);
 
-    LinkPlan {
-        admin: vec![LinkReply::text(message).with_markup(markup.clone())],
-        reply: vec![LinkReply::text(reply_text).with_markup(markup)],
+    Some(LinkPlan {
+        admin: vec![post(message, admin_caption).with_markup(markup.clone())],
+        reply: vec![post(reply_text, reply_caption).with_markup(markup)],
+    })
+}
+
+async fn load_youtube_preview(link: &MusicLink) -> Option<(MusicMetadata, Vec<u8>)> {
+    let load = async {
+        let metadata = fetch_music_metadata(link).await?;
+        let thumbnail = download_cover(&metadata.cover_url).await?;
+        anyhow::Ok((metadata, thumbnail))
+    };
+    match timeout(YOUTUBE_PREVIEW_TIMEOUT, load).await {
+        Ok(Ok(preview)) => Some(preview),
+        Ok(Err(e)) => {
+            warn!("유튜브 미리보기 수집 실패({}): {:#}", link.cleaned, e);
+            None
+        }
+        Err(_) => {
+            warn!("유튜브 미리보기 수집 시간 초과: {}", link.cleaned);
+            None
+        }
     }
 }
 
@@ -498,7 +548,11 @@ fn music_links_need_reply(text: &str) -> bool {
         && (!is_youtube_only(&links)
             || links
                 .iter()
-                .any(|link| link.had_tracking || is_youtube_short_link(&link.original)))
+                .any(|link| link.had_tracking || is_youtube_short_link(&link.original))
+            || !(contains_x_link(text)
+                || contains_instagram_link(text)
+                || contains_threads_link(text)
+                || contains_google_share_link(text)))
 }
 
 fn is_youtube_only(links: &[MusicLink]) -> bool {
@@ -644,6 +698,17 @@ mod tests {
         reply.content.text().expect("text reply")
     }
 
+    fn thumbnail() -> Option<(MusicMetadata, Vec<u8>)> {
+        Some((
+            MusicMetadata {
+                title: "영상 제목".into(),
+                artist: Some("채널".into()),
+                cover_url: "https://i.ytimg.com/vi/Vc-ByDGOuQE/maxresdefault.jpg".into(),
+            },
+            vec![0xFF, 0xD8, 0xFF],
+        ))
+    }
+
     #[test]
     fn youtube_plan_texts_depend_on_tracking() {
         let links = extract_music_links("https://www.youtube.com/watch?v=Vc-ByDGOuQE&si=abc");
@@ -652,7 +717,9 @@ mod tests {
             "https://www.youtube.com/watch?v=Vc-ByDGOuQE&si=abc",
             &links,
             true,
-        );
+            None,
+        )
+        .unwrap();
         assert_eq!(
             text_of(&tracked.admin[0]),
             "정리 완료.\n선생님.\nsensei: https://www.youtube.com/watch?v=Vc-ByDGOuQE"
@@ -663,9 +730,42 @@ mod tests {
             "https://www.youtube.com/watch?v=Vc-ByDGOuQE&si=abc",
             &links,
             false,
-        );
-        assert!(text_of(&plain.reply[0]).contains("유튜브 링크입니다."));
+            thumbnail(),
+        )
+        .unwrap();
+        assert!(reposted(&plain.reply[0]).contains("유튜브 링크입니다."));
         assert!(plain.admin[0].markup.is_some());
+    }
+
+    #[test]
+    fn youtube_links_are_posted_as_the_thumbnail_with_title_and_channel() {
+        let text = "이거 봐 https://www.youtube.com/watch?v=Vc-ByDGOuQE";
+        let links = extract_music_links(text);
+        let plan = youtube_plan("sensei", text, &links, false, thumbnail()).unwrap();
+        let message =
+            "정리 완료.\n선생님.\nsensei: 이거 봐 https://www.youtube.com/watch?v=Vc-ByDGOuQE";
+        assert_eq!(
+            reposted(&plan.admin[0]),
+            format!("{message}\n\n영상 제목\n채널")
+        );
+        assert_eq!(plan.admin[0].content.text_fallback(), Some(message));
+        assert!(plan.reply[0].content.text().is_none());
+        assert!(reposted(&plan.reply[0]).ends_with("\n\n영상 제목\n채널"));
+        assert!(plan.admin[0].markup.is_some() && plan.reply[0].markup.is_some());
+
+        assert!(youtube_plan("sensei", text, &links, false, None).is_none());
+        let long = format!(
+            "{} https://www.youtube.com/watch?v=Vc-ByDGOuQE",
+            "가".repeat(CAPTION_LIMIT)
+        );
+        let long_links = extract_music_links(&long);
+        assert!(youtube_plan("sensei", &long, &long_links, false, thumbnail()).is_none());
+
+        let tracked = format!("{long}&si=abc");
+        let tracked_links = extract_music_links(&tracked);
+        let plan = youtube_plan("sensei", &tracked, &tracked_links, true, thumbnail()).unwrap();
+        assert!(!text_of(&plan.admin[0]).contains("si=abc"));
+        assert!(reposted(&plan.reply[0]).ends_with("영상 제목\n채널"));
     }
 
     #[test]
@@ -681,7 +781,7 @@ mod tests {
             ),
         ] {
             let links = extract_music_links(short);
-            let plan = youtube_plan("sensei", short, &links, false);
+            let plan = youtube_plan("sensei", short, &links, false, None).unwrap();
             assert_eq!(
                 text_of(&plan.admin[0]),
                 format!("정리 완료.\n선생님.\nsensei: {full}")
@@ -746,7 +846,8 @@ mod tests {
     #[test]
     fn admin_reposts_keep_the_users_words_and_other_links() {
         let youtube = "이 노래 좋다 https://youtu.be/d7hGpiHLSRI?si=abc";
-        let plan = youtube_plan("sensei", youtube, &extract_music_links(youtube), true);
+        let plan =
+            youtube_plan("sensei", youtube, &extract_music_links(youtube), true, None).unwrap();
         assert!(
             reposted(&plan.admin[0])
                 .contains("이 노래 좋다 https://www.youtube.com/watch?v=d7hGpiHLSRI")
@@ -777,10 +878,17 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_youtube_link_leaves_other_links_to_their_handlers() {
+    fn a_clean_youtube_link_is_handled_unless_another_link_handler_owns_the_message() {
         assert!(!music_links_need_reply(
             "https://www.youtube.com/watch?v=d7hGpiHLSRI https://x.com/user/status/123?s=20"
         ));
+        assert!(!music_links_need_reply(
+            "https://www.youtube.com/watch?v=d7hGpiHLSRI https://www.instagram.com/p/abc/"
+        ));
+        assert!(music_links_need_reply(
+            "이거 봐 https://www.youtube.com/watch?v=d7hGpiHLSRI"
+        ));
+        assert!(!music_links_need_reply("유튜브 얘기"));
         assert!(music_links_need_reply("https://youtu.be/d7hGpiHLSRI"));
         assert!(music_links_need_reply(
             "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT"
