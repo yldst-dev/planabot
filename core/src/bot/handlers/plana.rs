@@ -162,6 +162,7 @@ where
         "" if !image_sources.is_empty() => {
             media::media_label(&msg).unwrap_or_else(|| "(이미지)".to_string())
         }
+        "" => current_turn_text.clone(),
         trimmed => trimmed.to_string(),
     };
     let memory_turn_text = if memory_turn_text.is_empty() {
@@ -169,8 +170,7 @@ where
     } else {
         memory_turn_text
     };
-    let question = build_planabrain_question(&question, &msg, &state);
-    if question.trim().is_empty() {
+    if question.is_empty() {
         let sent = send_reply_with_fallback(
             &bot,
             &msg,
@@ -183,6 +183,7 @@ where
             .await;
         return Ok(());
     }
+    let question = build_planabrain_question(&question, &msg, &state);
 
     let user_id = requester_user_id
         .map(|id| id.to_string())
@@ -807,9 +808,6 @@ pub(super) fn build_planabrain_question(question: &str, msg: &Message, state: &A
     let Some((label, context)) = extract_reply_context(msg, state) else {
         return question.to_string();
     };
-    if question.is_empty() {
-        return format!("{label}:\n{context}");
-    }
     format!("{label}:\n{context}\n\n질문:\n{question}")
 }
 
@@ -902,6 +900,40 @@ mod tests {
                 "등록 완료.\n선생님.\n할 일 내용은 개인 대화로만 보냅니다.\n봇과 개인 대화를 먼저 시작해 주십시오."
             ]
         );
+    }
+
+    #[test]
+    fn reply_context_always_marks_where_the_question_starts() {
+        let msg: teloxide::types::Message = serde_json::from_value(serde_json::json!({
+            "message_id": 2, "date": 0, "text": "프라나야!",
+            "chat": {"id": -100, "title": "g", "type": "supergroup"},
+            "from": {"id": 42, "is_bot": false, "first_name": "A"},
+            "reply_to_message": {
+                "message_id": 1, "date": 0, "text": "할 일 청소 삭제해줘",
+                "chat": {"id": -100, "title": "g", "type": "supergroup"},
+                "from": {"id": 7, "is_bot": false, "first_name": "B"}
+            }
+        }))
+        .unwrap();
+        let state = crate::bot::AppState::new(
+            "bot".into(),
+            teloxide::types::UserId(1),
+            crate::hitomi::GalleryClient::new(),
+            None,
+            None,
+        );
+        for (question, built) in [
+            ("", "참고 메시지:\n할 일 청소 삭제해줘\n\n질문:\n"),
+            (
+                "프라나야!",
+                "참고 메시지:\n할 일 청소 삭제해줘\n\n질문:\n프라나야!",
+            ),
+        ] {
+            assert_eq!(
+                super::build_planabrain_question(question, &msg, &state),
+                built
+            );
+        }
     }
 
     #[test]
