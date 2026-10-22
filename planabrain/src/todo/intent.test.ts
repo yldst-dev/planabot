@@ -328,6 +328,29 @@ test("decided todo actions skip keyword detection", async (t) => {
       assert.deepEqual((await listTodos("pointer")).items.map((item) => item.content), ["아까 산 책 반품", "할 일 목록 정리"]);
     });
 
+    await t.test("adds read 내 할 일에 and 할 일에도, date-only names stay out and a one-item list takes 응 끝냈어", async () => {
+      for (const [text, content] of [["할 일에도 세차 추가해줘", "세차"], ["내 할 일에 세탁기 청소 추가해줘", "세탁기 청소"], ["이번 주 할 일에 서류 스캔 추가해줘", "서류 스캔"], ["우리 할 일에다 장보기 추가해줘", "장보기"], ["할 일에 이거 저거 버리기 추가해줘", "이거 저거 버리기"]]) {
+        assert.equal((await interpretTodoRequest("leads", text)).action, "add", text);
+        assert.equal((await listTodos("leads")).items.at(-1)?.content, content, text);
+      }
+      assert.equal((await interpretTodoRequest("leads", "할 일에 그거 좀 추가해줘")).error, "추가할 내용을 확인하지 못했습니다. 예: 할 일에 우유 사기 추가해줘");
+      await addTodo("dates", "분기 보고서 작성");
+      for (const content of ["2029년까지", "2030년 초", "2028년도", "2028년 말까지", "다음 달 5일", "2028-12-01", "오후 3:30", "11.3", "마감일 금요일", "11월 초", "내년 봄"]) {
+        assert.match((await interpretTodoRequest("dates", `할 일 1번을 ${content}로 바꿔줘`)).error ?? "", /^날짜나 시각, 상태, 순서는/u, content);
+      }
+      for (const content of ["2029년 계획 세우기", "월말 정산", "봄 옷 정리"]) {
+        assert.equal((await interpretTodoRequest("dates", `할 일 1번을 ${content}로 바꿔줘`)).action, "update", content);
+        assert.equal((await listTodos("dates")).items[0]?.content, content);
+      }
+      for (const [index, [items, reply, done]] of ([[["택배 반품 접수"], "응 끝냈어", "택배 반품 접수"], [["우편 발송"], "네 다 끝냈어요", "우편 발송"], [["가", "나", "다", "라"], "네 번째 완료", "라"]] as const).entries()) {
+        const user = `single${index}`;
+        for (const item of items) await addTodo(user, item);
+        const list = await interpretTodoRequest(user, "할 일 보여줘");
+        assert.equal((await interpretTodoRequest(user, `직전 프라나 응답:\n${list.message}\n\n질문:\n${reply}`)).action, "complete", reply);
+        assert.deepEqual((await listTodos(user)).items.filter((item) => item.completed).map((item) => item.content), [done], reply);
+      }
+    });
+
     await t.test("a decided add registers without the todo keyword", async () => {
       const result = await interpretTodoRequest("decided", "우유 사기 추가해줘", "add");
       assert.equal(result.action, "add");
