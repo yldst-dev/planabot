@@ -12,6 +12,7 @@
 - 갤러리 뷰어 HTML을 send.vis.ee로 올려 개인 채팅으로 전달
 - YouTube, Spotify, Apple Music 추적 파라미터 정리
 - Spotify, YouTube Music, Apple Music 링크는 표지·제목·아티스트 카드 이미지와 함께 전달
+- YouTube 영상 링크는 텔레그램 미리보기 대신 썸네일·제목·채널 이름과 함께 전달하고, 짧은 주소와 쇼츠 주소는 일반 영상 주소로 변환. 썸네일을 받지 못한 깨끗한 링크는 그대로 둠
 - X/Twitter → `fxtwitter`, Instagram 릴/게시물 → 채팅 미리보기 전송
 - Threads 포스트 링크 추적 파라미터 정리
 - 구글 공유 링크(share.google)를 실제 주소로 변환
