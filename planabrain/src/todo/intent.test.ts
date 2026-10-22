@@ -78,23 +78,22 @@ test("decided todo actions skip keyword detection", async (t) => {
     await t.test("edits, deletions and completions name their item without the todo words and never touch another item", async () => {
       for (const content of ["할머니께 전화", "우유 사기"]) await addTodo("edit", content);
       assert.equal((await interpretTodoRequest("edit", "할 일 우유 사기를 두유 사기로 바꿔줘")).action, "update");
-      assert.match((await interpretTodoRequest("edit", "할 일 두유 사기 우유로 바꿔줘")).message, /^확인 필요\.\n선생님\.\n새 내용을 확인하지 못했습니다\./u);
+      assert.match((await interpretTodoRequest("edit", "할 일 두유 사기 우유로 바꿔줘")).message, /^확인 필요\.\n선생님\.\n어느 항목을 무엇으로 바꿀지 확인하지 못했습니다\./u);
       assert.deepEqual((await listTodos("edit")).items.map((item) => item.content), ["할머니께 전화", "두유 사기"]);
       for (const content of ["주변 청소", "해변 청소"]) await addTodo("shore", content);
       await interpretTodoRequest("shore", "할 일 해변 청소 삭제해줘");
       assert.deepEqual((await listTodos("shore")).items.map((item) => item.content), ["주변 청소"]);
     });
 
-    await t.test("item names with 할 거 or 해야 했던 still complete while plans stay open", async () => {
+    await t.test("item names with 할 거 still complete while plans and extra words after a name stay open", async () => {
       for (const content of ["주말 할거리 정리", "청소", "운동하기"]) await addTodo("plans", content);
       for (const text of ["운동 할 거라고 했어", "운동 할 거였는데 깜빡했어", "운동은 이따 할 거고 지금은 쉬었어", "운동 할 거니까 완료 처리는 내일 해줘", "운동 할 거 같아 완료는 나중에", "운동 할 거잖아 완료 처리하지 마", "운동 해야 했던 거 깜빡했어", "운동 해야 했던 거 포기했어"]) {
         assert.equal((await interpretTodoRequest("plans", text)).handled, false, text);
       }
       assert.equal((await interpretTodoRequest("plans", "운동 할 거였는데 깜빡했어", "complete")).handled, false);
-      for (const text of ["할 일 주말 할거리 정리 완료", "할 일 청소 해야 했던 거 다 했어"]) {
-        assert.equal((await interpretTodoRequest("plans", text)).action, "complete", text);
-      }
-      assert.deepEqual((await listTodos("plans")).items.filter((item) => !item.completed).map((item) => item.content), ["운동하기"]);
+      assert.equal((await interpretTodoRequest("plans", "할 일 주말 할거리 정리 완료")).action, "complete");
+      assert.equal((await interpretTodoRequest("plans", "할 일 청소 해야 했던 거 다 했어")).message.split("\n")[0], "확인 필요.");
+      assert.deepEqual((await listTodos("plans")).items.filter((item) => !item.completed).map((item) => item.content), ["청소", "운동하기"]);
     });
 
     await t.test("updates without particles never write a cut-off name and adds, inner particles and date-only edits stay safe", async () => {
@@ -111,7 +110,7 @@ test("decided todo actions skip keyword detection", async (t) => {
       await interpretTodoRequest("names", "할 일 1번 버스 타기에서 회의로 바꿔줘");
       assert.deepEqual((await listTodos("names")).items.map((item) => item.content), ["다음 주 보고서", "회의", "2번 출구에서 만나기"]);
       for (const content of ["우유", "우유 사기", "택배를 보내기", "택배 찾기", "주소 확인"]) await addTodo("inner", content);
-      assert.match((await interpretTodoRequest("inner", "할 일 우유 사기 두유 사기로 바꿔줘")).message, /^확인 필요\.\n선생님\.\n새 내용을 확인하지 못했습니다\./u);
+      assert.match((await interpretTodoRequest("inner", "할 일 우유 사기 두유 사기로 바꿔줘")).message, /^확인 필요\.\n선생님\.\n어느 항목을 무엇으로 바꿀지 확인하지 못했습니다\./u);
       await interpretTodoRequest("inner", "할 일 택배를 보내기를 택배 부치기로 바꿔줘");
       assert.equal((await interpretTodoRequest("inner", "할 일에 주소를 회사 주소로 변경 추가해줘")).action, "add");
       for (const text of ["할 일 우유 사기를 내일로 바꿔줘", "할 일 우유 사기를 완료로 바꿔줘", "할 일 우유 사기를 맨 위로 바꿔줘"]) {
@@ -140,7 +139,7 @@ test("decided todo actions skip keyword detection", async (t) => {
     await t.test("partial or shared names are asked back with numbers on both paths while 이번 is never a position", async () => {
       for (const content of ["할머니께 전화", "해변 청소", "주변 청소"]) await addTodo("ask", content);
       const many = "어느 항목인지 하나로 정하지 못했습니다. 번호로 다시 말씀해 주십시오.";
-      for (const [text, action, error] of [["할 일 청소 삭제해줘", undefined, many], ["할 일 할머니 완료", undefined, "이 항목이 맞으면 번호로 다시 말씀해 주십시오."], ["청소 지워줘", "delete", many], ["할 일 청소 산책으로 바꿔줘", undefined, "새 내용을 확인하지 못했습니다. 바꿀 항목은 번호로, 새 내용은 '로' 앞에 넣어 다시 말씀해 주십시오."]] as const) {
+      for (const [text, action, error] of [["할 일 청소 삭제해줘", undefined, many], ["할 일 할머니 완료", undefined, "이 항목이 맞으면 번호로 다시 말씀해 주십시오."], ["청소 지워줘", "delete", many], ["할 일 청소 산책으로 바꿔줘", undefined, "어느 항목을 무엇으로 바꿀지 확인하지 못했습니다. 아래 예처럼 번호 뒤에 '을', 새 내용 뒤에 '로'를 붙여 다시 말씀해 주십시오."]] as const) {
         const result = await interpretTodoRequest("ask", text, action);
         assert.equal(result.error, error, text);
         assert.match(result.message, /^확인 필요\.\n선생님\./u, text);
@@ -191,12 +190,46 @@ test("decided todo actions skip keyword detection", async (t) => {
     await t.test("long commands under the rule limit stay fast with a full list", async () => {
       for (let index = 0; index < 100; index += 1) await addTodo("full", `항목 ${index} 정리하기`);
       const started = performance.now();
-      for (const unit of ["다 ", "가 로 ", "을 ", "완료 ", "할 일 "]) {
+      for (const unit of ["다 ", "가 로 ", "을 ", "완료 ", "할 일 ", "ㅋ", "1월 1일 "]) {
         for (const action of [undefined, "update", "delete", "complete"] as const) {
           await interpretTodoRequest("full", `할 일 ${unit.repeat(150)}`.slice(0, 590), action);
         }
       }
+      await interpretTodoRequest("full", `할 일에 우유 추가해줘${"ㅋ".repeat(60)}?`);
+      await interpretTodoRequest("full", `할 일에 ${"1월 1일 ".repeat(90)}우유 추가해줘`);
+      await interpretTodoRequest("full", `할 일 1번을 ${"1월 1일 ".repeat(90)}우유로 바꿔줘`);
       assert.ok(performance.now() - started < 3_000);
+    });
+
+    await t.test("completions with other words after a name, two items or a reply to a confirmation are asked back or left alone", async () => {
+      for (const content of ["빨래", "우유 사기", "보고서 작성", "빨래 개기"]) await addTodo("loose", content);
+      for (const text of ["할 일 빨래는 못 해서 우유 사기만 했어", "할 일 보고서 작성은 다음에, 빨래는 끝냈어", "할 일 빨래 완료. 우유 사기도 완료", "할 일 빨래 이따 완료해줘", "할 일 빨래 개 완료"]) {
+        assert.equal((await interpretTodoRequest("loose", text)).message.split("\n")[0], "확인 필요.", text);
+      }
+      assert.ok((await listTodos("loose")).items.every((item) => !item.completed));
+      for (const content of ["우유 사기", "빨래"]) await addTodo("confirm", content);
+      const done = await interpretTodoRequest("confirm", "할 일 우유 사기 완료");
+      await interpretTodoRequest("confirm", `직전 프라나 응답:\n${done.message}\n\n질문:\n네, 했어요`);
+      assert.deepEqual((await listTodos("confirm")).items.filter((item) => item.completed).map((item) => item.content), ["우유 사기"]);
+      await addTodo("status", "우유 사기");
+      assert.match((await interpretTodoRequest("status", "할 일 우유 사기를 완료에서 미완료로 바꿔줘")).error ?? "", /^날짜나 시각, 상태, 순서는/u);
+      const asked = await interpretTodoRequest("status", "할 일 우유 사기 두유로 바꿔줘");
+      assert.match(asked.message, /\n예: 할 일 1번을 새 내용으로 바꿔줘\n/u);
+      assert.equal((await interpretTodoRequest("status", `직전 프라나 응답:\n${asked.message}\n\n질문:\n할 일 1번을 새 내용으로 바꿔줘`)).message.split("\n")[0], "확인 필요.");
+      assert.deepEqual((await listTodos("status")).items.map((item) => item.content), ["우유 사기"]);
+    });
+
+    await t.test("words inside item names do not route to reminders or edits and casual command endings still work", async () => {
+      for (const content of ["3시 알림 끄기", "폰 요금제 5G로 변경", "숙제 했는지 확인", "빨래", "청소", "설거지"]) await addTodo("names2", content);
+      for (const text of ["프라나야 할 일 3시 알림 끄기 완료", "할 일 폰 요금제 5G로 변경 완료", "할 일 숙제 했는지 확인 완료", "할 일 빨래 완료~ ㅋㅋ", "할 일 설거지 완료 끝"]) {
+        assert.equal((await interpretTodoRequest("names2", text.replace(/^프라나야 /u, ""))).action, "complete", text);
+      }
+      assert.equal((await interpretTodoRequest("names2", "할 일 청소 지워 주라")).action, "delete");
+      assert.deepEqual((await listTodos("names2")).items.map((item) => [item.content, item.completed]), [["3시 알림 끄기", true], ["폰 요금제 5G로 변경", true], ["숙제 했는지 확인", true], ["빨래", true], ["설거지", true]]);
+      for (const text of ["할 일에 우유 추가해 줘", "할 일에 두유 추가 좀 해줘", "할 일에 빵 추가요", "할 일에 잼 추가해줄래?", "할 일에 쌀 추가해줘 ㅠㅠ", "할 일에 물 추가해줘🙏"]) {
+        assert.equal((await interpretTodoRequest("adds", text)).action, "add", text);
+      }
+      assert.deepEqual((await listTodos("adds")).items.map((item) => item.content), ["우유", "두유", "빵", "잼", "쌀", "물"]);
     });
 
     await t.test("a decided add registers without the todo keyword", async () => {

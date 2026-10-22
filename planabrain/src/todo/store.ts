@@ -135,7 +135,8 @@ async function mutateMatchedTodo(
 }
 
 function missingTodo(items: TodoItem[]): TodoMutationOutput {
-  return { ok: false, items, markdown: formatTodoMarkdown(items), error: "대상 항목을 찾지 못했습니다." };
+  const error = items.some((item) => !item.completed) ? "대상 항목을 찾지 못했습니다. 목록의 번호로 다시 말씀해 주십시오." : "남은 할 일이 없습니다.";
+  return { ok: false, items, markdown: formatTodoMarkdown(items), error };
 }
 
 async function mutateTodos(userId: string, change: (items: TodoItem[]) => TodoMutationOutput): Promise<TodoMutationOutput> {
