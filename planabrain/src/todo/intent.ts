@@ -30,15 +30,18 @@ const COMPOUND = /(?:완료|삭제|제거|추가|등록|수정|변경|체크|처
 const DATE_TIME_ONLY = /^(?:(?:오늘|내일|모레|글피|이번\s*주|다음\s*주|다다음\s*주|주말|평일|\d{1,2}\s*월|\d{1,2}\s*일|[월화수목금토일]요일)\s*)*(?:(?:오전|오후|아침|점심|저녁|밤|낮|새벽)\s*)?(?:\d{1,2}\s*시(?:\s*(?:\d{1,2}\s*분|반))?|정오|자정)?$/u;
 const NOT_CONTENT = /^(?:상태|날짜|시간|기한|마감|순서|순위|우선\s*순위)(?:을|를|은|는)?(?:\s|$)|^(?:미|안\s*)?완료(?:\s*(?:상태|처리))?$|^(?:미|안\s*)?완료(?:\s*상태)?\s*에서\s*(?:미|안\s*)?완료(?:\s*상태)?$|^(?:완료됨|체크|done|진행\s*중)$|^(?:다\s*)?끝난\s*걸$|^(?:완료\s*)?안\s*한\s*걸$|^(?:맨\s*)?(?:위|아래|앞|뒤|끝|처음|마지막)$|^(?:첫|두|세|네|다섯)\s*번째$|^\d+\s*(?:번|번째|순위)$|(?:\d+\s*(?:분|시간|일|주)|하루|이틀)\s*(?:뒤|후)$|^(?:(?:이번|다음|담|다다음)\s*)?(?:주말|달)$|^\d{1,2}:\d{2}$|^\d{1,2}\/\d{1,2}$|^\d{1,2}\s*[ap]m$|^\d{4}\s*년|(?:이후|이전)$|^(?:담주|다음\s*주|이번\s*주)\s*[월화수목금토일](?:요일|욜)$/iu;
 const NOT_ADD_CONTENT = /^(?:다시|그거|이거|저거|그것|이것|저것|그|이|저|하나|뭐|뭔가|(?:방금|아까|위에|아래)\s*(?:거|것|꺼))$/u;
+const UPDATE_VERB = /수정|변경|바꿔|바꾸|고쳐|고치/u;
+const SECOND_ACTION = /추가|등록|(?<!미)완료(?!\s*(?:상태|로|에서|된|됨))/u;
 const UPDATE_QUESTION = /(?:수정|변경|바꿔|바꾸|고쳐|고치)(?:해)?(?:도\s*(?:될까|되나|돼|괜찮)|면\s*(?:어때|어떨까|될까|좋을까)|야\s*(?:하나|할까|돼|될까))/u;
 const ADD_TAIL = String.raw`\s*(?:해|해요|해줘|해줘요|해주세요|해주세용|해줄래|해줄래요|해라|해둬|해놔|하기|할게|할게요|합니다|줘|줘요|주세요|요|ㄱㄱ|해\s+줘|해\s+주세요|해\s+줄래|해\s*줄\s*수\s*있어)?(?:\s*(?:좀|제발|부탁(?:해|해요|합니다|드려요|드립니다)?))*(?:\s*해줘)?[\sㅋㅎㅠㅜ.!~?\p{Extended_Pictographic}\p{Emoji_Modifier}\u{FE0F}\u{200D}]*$`;
 const REFUSED_NEGATIVE = "취소나 제외로 읽히는 말이 있어 그대로 두었습니다. 원하는 작업만 다시 말씀해 주십시오.";
 const REFUSED_COMPOUND = "여러 작업이 함께 담긴 요청이라 그대로 두었습니다. 한 번에 하나씩 말씀해 주십시오.";
-const REFUSED_NOT_CONTENT = "날짜나 시각, 상태, 순서는 할 일 내용으로 바꾸지 않습니다. 완료는 '할 일 1번 완료'처럼 말씀해 주시고, 알림은 일정으로 등록해 주십시오.";
+const refusedNotContent = (number: number): string =>
+  `날짜나 시각, 상태, 순서는 할 일 내용으로 바꾸지 않습니다. 완료는 '할 일 ${number}번 완료'처럼 말씀해 주시고, 알림은 일정으로 등록해 주십시오.`;
 const REFUSED_ADD_CONTENT = "추가할 내용을 확인하지 못했습니다. 예: 할 일에 우유 사기 추가해줘";
 const ASK_HEADER = "확인 필요.\n선생님.";
-const ASK_MANY = "어느 항목인지 하나로 정하지 못했습니다. 번호로 다시 말씀해 주십시오.";
-const ASK_ONE = "이 항목이 맞으면 번호로 다시 말씀해 주십시오.";
+const ASK_MANY = "어느 항목인지 하나로 정하지 못했습니다. 번호와 작업을 함께 다시 말씀해 주십시오.";
+const ASK_ONE = "이 항목이 맞으면 번호와 작업을 함께 다시 말씀해 주십시오.";
 const ASK_CONTENT = "어느 항목을 무엇으로 바꿀지 확인하지 못했습니다. 아래 예처럼 번호 뒤에 '을', 새 내용 뒤에 '로'를 붙여 다시 말씀해 주십시오.";
 const DONE = {
   add: "등록 완료.\n선생님.",
@@ -82,13 +85,14 @@ export async function interpretTodoRequest(
     return emptyOutput();
   }
 
-  const update = (!action || action === "update") && /수정|변경|바꿔|바꾸|고쳐|고치/u.test(masked) ? parseUpdate(userText) : undefined;
+  const update = (!action || action === "update") && UPDATE_VERB.test(masked) ? parseUpdate(userText) : undefined;
   if (update) {
     const scope = update === "unclear" ? masked : update.splits.reduce((value, split) => value.replace(split.content.toLowerCase(), " "), masked);
     if (UPDATE_QUESTION.test(normalized) || isDeferred(scope)) {
       return emptyOutput();
     }
-    const blocked = blockedReason(scope);
+    const after = scope.slice(scope.search(UPDATE_VERB));
+    const blocked = blockedReason(scope) ?? (DELETE_TRIGGER.test(after) || SECOND_ACTION.test(after) ? REFUSED_COMPOUND : undefined);
     if (blocked) {
       return refuse("update", userId, blocked);
     }
@@ -103,7 +107,7 @@ export async function interpretTodoRequest(
       return ask("update", userId, open, choice.ask);
     }
     if (choice?.content && (DATE_TIME_ONLY.test(choice.content) || NOT_CONTENT.test(choice.content))) {
-      return refuse("update", userId, REFUSED_NOT_CONTENT);
+      return refuse("update", userId, refusedNotContent(open.indexOf(choice.item) + 1));
     }
     const result = await updateTodo(userId, choice?.item.id ?? "", choice?.content ?? update.splits[0].content);
     return mutationOutput("update", result.ok ? DONE.update : "확인 불가.\n선생님.", result);
@@ -148,6 +152,9 @@ export async function interpretTodoRequest(
 
   const add = !action || action === "add" ? parseAdd(userText) : undefined;
   if (add !== undefined) {
+    if ((isQuestion(add.rest) && !/줄\s*수\s*있어/u.test(add.rest)) || /(?:^|\s)(?:나중에|이따가?|다음에)$/u.test(add.content)) {
+      return emptyOutput();
+    }
     if (NEGATION.test(add.rest) || EXCLUSION.test(normalized) || COMPOUND.test(normalized)) {
       return refuse("add", userId, NEGATION.test(add.rest) || EXCLUSION.test(normalized) ? REFUSED_NEGATIVE : REFUSED_COMPOUND);
     }
@@ -391,7 +398,7 @@ function targetWindows(text: string, command: RegExp, suffix: RegExp): Target {
   }
   const ends = [...new Set([0, 1, 2, 3].map((strip) => tokens.length - strip).filter((end) => end > tail).concat(tail))];
   const windows: string[] = [];
-  for (let start = 0; start <= lead; start += 1) {
+  for (const start of new Set([0, lead - 2, lead - 1, lead].filter((start) => start >= 0))) {
     for (const end of ends) {
       const slice = tokens.slice(start, end);
       if (!slice.length || slice.every(skippable)) {
@@ -514,7 +521,7 @@ function isUnfinished(text: string): boolean {
 }
 
 function isDeferred(text: string): boolean {
-  return isQuestion(text) || /(?:하|끝나|끝내|마치|되)면(?:\s|$)|하고\s*나서|한\s*(?:다음|뒤|후)|끝난\s*(?:뒤|후|다음)|했대|했다고|했다는|하래|하랬|라고\s*(?:했|하더|해서)|나중에|이따/u.test(text);
+  return isQuestion(text) || /(?:하|끝나|끝내|마치|되)면(?:\s|$)|하고\s*나서|한\s*(?:다음|뒤|후)|끝난\s*(?:뒤|후|다음)|했대|했다고|했다는|하래|하랬|라고\s*(?:했|하더|해서)|나중에|이따|려고|려다/u.test(text);
 }
 
 function extractSingleOpenTodoFromContext(text: string): string | undefined {
