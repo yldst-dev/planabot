@@ -10,7 +10,7 @@ export async function runScheduleInterpretCommand(args: string[]): Promise<void>
   const meridiem = hasBareHour(text)
     ? (await classifyTurn({ message: text, nowMs: Number(process.env.PLANABRAIN_NOW_MS) || undefined }))?.meridiem
     : undefined;
-  const result = interpretScheduleRequest(text, { action: commandAction(text), meridiem });
+  const result = interpretScheduleRequest(text, { action: commandAction(text), meridiem, command: true });
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 

@@ -235,6 +235,41 @@ test("negations, questions, plans, conditions and reports neither cancel nor add
   }
 });
 
+test("only request forms cancel or add, polite questions and commands still run, and 반 is half an hour only on its own", () => {
+  for (const text of ["우유 알림 취소 안 할래", "우유 알림 취소했어요", "우유 알림 취소했던가", "늦어지면 우유 알림 취소해줘", "우유 알림 내일쯤 취소할게", "우유 알림 취소하라던데", "내일 오전 7시 스트레칭 알림 등록 안 할래", "오후 6시에 빨래 알림 맞춰 둘지 고민이야", "오후 9시 일기 알림 등록했었는데", "오후 7시 회의 알림 안 맞춰도 돼"]) {
+    for (const action of [undefined, /취소/u.test(text) ? "cancel" : "add"] as const) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
+    }
+  }
+  for (const text of ["우유 알림 취소해 주시겠습니까?", "우유 알림 취소해 주면 안 될까?", "우유 알림 취소 부탁드려도 될까요?", "우유 알림 취소해줄래??", "우유 알림 좀 지워 줄 수 있겠니?", "우유 알림 취소 ㄱㄱ"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now }).target, "우유", text);
+  }
+  for (const [text, target] of [["톡 삭제 알림 취소해줘", "톡 삭제"], ["독해 연습 알림 취소해줘", "독해 연습"], ["1번 거 취소해줘", "1번 거"]]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now, action: "cancel" }).target, target, text);
+  }
+  for (const [text, title, time] of [
+    ["오후 6시 반려견 산책 알림 등록해줘", "반려견 산책", "18:00"],
+    ["오후 6시 반 회의 알림 등록해줘", "회의", "18:30"],
+    ["오후 6시반에 회의 알림", "회의", "18:30"],
+    ["10분 반찬 데우기 타이머", "반찬 데우기", "14:10"],
+    ["내일 오후 2시 은행 가기 알림 등록해 주세요", "은행 가기", "14:00"],
+    ["오후 4시 화분 물 주기 알림 맞춰 주실래요?", "화분 물 주기", "16:00"],
+    ["오후 5시 우체국 알림 등록 부탁해요", "우체국", "17:00"],
+    ["오후 6시 알림 등록해 주세요", "요청하신 내용", "18:00"],
+    ["내일 오후 3시 등록금 납부 알림", "등록금 납부", "15:00"],
+    ["내일 오후 3시 회의 추가할게", "회의", "15:00"],
+    ["오후 4시에 약 먹으라고 알려 줄래?", "약 먹으라고", "16:00"],
+  ]) {
+    const result = interpretScheduleRequest(text, { nowMs: now, action: "add" });
+    assert.equal(result.title, title, text);
+    assert.equal(kst(result.dueAtMs).slice(11), time, text);
+  }
+  for (const [text, handled] of [["내일 오전 8시 고데기 껐어?", true], ["오후 7시 산책할까 고민하기", true], ["우유 알림 취소하지 마", false]] as const) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now, action: commandAction(text), command: true }).handled, handled, text);
+  }
+  assert.equal(interpretScheduleRequest("내일 오전 8시 고데기 껐어?", { nowMs: now, action: "add", command: true }).title, "고데기 껐어?");
+});
+
 test("rule parsing skips user text far longer than any command", () => {
   const started = performance.now();
   assert.equal(interpretScheduleRequest(`오후 3시 ${"1".repeat(50_000)} 알림`).handled, false);
