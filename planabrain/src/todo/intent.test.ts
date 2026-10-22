@@ -351,6 +351,28 @@ test("decided todo actions skip keyword detection", async (t) => {
       }
     });
 
+    await t.test("replies naming an item that starts with 네 complete it, durations and pointers stay out, and names ending in 이전 stay in", async () => {
+      for (const [index, others] of [["만화 그리기 연습"], ["컷 만화 그리기"], ["우체국 가기"]].entries()) {
+        const user = `cut${index}`;
+        for (const item of ["네 컷 만화 그리기", ...others]) await addTodo(user, item);
+        const list = await interpretTodoRequest(user, "할 일 보여줘");
+        await interpretTodoRequest(user, `직전 프라나 응답:\n${list.message}\n\n질문:\n네 컷 만화 그리기 끝냈어`);
+        assert.deepEqual((await listTodos(user)).items.filter((item) => item.completed).map((item) => item.content), ["네 컷 만화 그리기"], user);
+      }
+      await addTodo("spans", "분기 보고서 작성");
+      for (const content of ["사흘 뒤", "보름 후", "두 달 뒤", "일주일 안에", "주말 전까지", "말일까지", "다음 주 내", "4시 이후"]) {
+        assert.match((await interpretTodoRequest("spans", `할 일 1번을 ${content}로 바꿔줘`)).error ?? "", /^날짜나 시각, 상태, 순서는/u, content);
+      }
+      for (const content of ["사무실 이전", "보름달 사진 찍기"]) {
+        assert.equal((await interpretTodoRequest("spans", `할 일 1번을 ${content}로 바꿔줘`)).action, "update", content);
+        assert.equal((await listTodos("spans")).items[0]?.content, content);
+      }
+      for (const text of ["할 일에 요거 추가해 줘", "할 일에 걔도 추가해 줘", "할 일에 그것들 전부 추가해 줘", "할 일에 금요일까지 추가해 줘", "할 일에 다음 달 말까지 추가해 줘"]) {
+        assert.equal((await interpretTodoRequest("pointers", text)).error, "추가할 내용을 확인하지 못했습니다. 예: 할 일에 우유 사기 추가해줘", text);
+      }
+      assert.deepEqual((await listTodos("pointers")).items, []);
+    });
+
     await t.test("a decided add registers without the todo keyword", async () => {
       const result = await interpretTodoRequest("decided", "우유 사기 추가해줘", "add");
       assert.equal(result.action, "add");

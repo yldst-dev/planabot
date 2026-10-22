@@ -55,7 +55,7 @@ export async function addTodo(userId: string, content: string): Promise<TodoMuta
     const now = Date.now();
     const item: TodoItem = {
       id: createTodoId(), content: normalized, completed: false,
-      createdAt: now, updatedAt: now, expiresAt: now + DAY_MS,
+      createdAt: items.reduce((latest, entry) => Math.max(latest, entry.createdAt + 1), now), updatedAt: now, expiresAt: now + DAY_MS,
     };
     const next = visibleTodos([...items, item], now);
     return { ok: true, item, items: next, markdown: formatTodoMarkdown(next) };

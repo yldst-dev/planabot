@@ -73,6 +73,16 @@ test("todo persistence preserves concurrent updates and damaged data", async (t)
       assert.equal((await deleteTodo("stale", "62177c1dd57b")).ok, false);
       assert.deepEqual((await listTodos("stale")).items.map((item) => [item.content, item.completed]), [["77c", false]]);
     });
+
+    await t.test("items added in the same millisecond keep their order after completion", async () => {
+      const clock = t.mock.method(Date, "now", () => 1_900_000_000_000);
+      for (const content of ["첫째", "둘째", "셋째"]) await addTodo("tied", content);
+      const [first, second] = (await listTodos("tied")).items;
+      await completeTodo("tied", first.id);
+      await completeTodo("tied", second.id);
+      clock.mock.restore();
+      assert.deepEqual((await listTodos("tied")).items.map((item) => item.content), ["셋째", "첫째", "둘째"]);
+    });
   } finally {
     if (previous === undefined) delete process.env.PLANABRAIN_TODO_DIR;
     else process.env.PLANABRAIN_TODO_DIR = previous;

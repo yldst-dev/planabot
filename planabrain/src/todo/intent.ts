@@ -28,11 +28,12 @@ const STEM_ENDING = /(?<!\s)\s*(?:하기|해)$/u;
 const NEGATION = /되돌|풀어|원래대로|미완료|취소|해제|(?:하|우|애|빼|치|꾸)지\s*(?:마|말|않)|안\s*해도|하면\s*안\s*(?:돼|되)|(?:완료|체크|삭제|처리)\s*(?:(?:를|을|가|는)\s*)?(?:취소|해제|(?:안|못)\s*(?:됐|돼|됨|했|함))|(?:완료|체크)\s*표시\s*(?:를|을)?\s*(?:지워|지우|삭제|없애|빼|해제|취소|풀)|아니(?:야|에요|요|다|라|잖|지|고)|아닌데|아님/u;
 const EXCLUSION = /빼고(?:\s|$)|(?:^|\s)말고(?:\s|$)|제외(?:하고|해)?(?:\s|$)|대신(?:\s|$)/u;
 const COMPOUND = /(?:완료|삭제|제거|추가|등록|수정|변경|체크|처리)(?:하|했|해)?고\s|(?:지우|지웠|바꾸|바꿨|고치|고쳤|끝내|끝냈|없애|없앴)고\s|(?:^|\s)(?:하고|했고|하구)\s/u;
-const DATE_TOKEN = String.raw`(?:(?:\d{4}\s*년도?|올해|내년|후년|작년)(?:\s*(?:초|중순|중|말|상반기|하반기|봄|여름|가을|겨울))?|연초|연말|월초|월말|\d{1,2}\s*월(?:\s*(?:초|중순|중|말))?|\d{1,2}\s*일|오늘|내일|모레|글피|(?:이번|다음|담|다다음)\s*(?:주|달)(?:\s*(?:초|중순|중|말))?|주말|평일|[월화수목금토일]요일|오전|오후|아침|점심|저녁|밤|낮|새벽|\d{1,2}\s*시(?:\s*(?:\d{1,2}\s*분|반))?|\d{1,2}:\d{2}|정오|자정|\d{4}\s*[-./]\s*\d{1,2}\s*[-./]\s*\d{1,2}\.?|\d{1,2}\s*[./]\s*\d{1,2}\.?)`;
+const DATE_TOKEN = String.raw`(?:(?:\d{4}\s*년도?|올해|내년|후년|작년)(?:\s*(?:초|중순|중|말|상반기|하반기|봄|여름|가을|겨울))?|연초|연말|월초|월말|\d{1,2}\s*월(?:\s*(?:초|중순|중|말))?|\d{1,3}\s*일|오늘|내일|모레|글피|(?:이번|다음|담|다다음)\s*(?:주|달)(?:\s*(?:초|중순|중|말))?|주말|평일|[월화수목금토일]요일|오전|오후|아침|점심|저녁|밤|낮|새벽|\d{1,2}\s*시(?:\s*반)?|\d{1,2}:\d{2}|정오|자정|(?:\d{1,3}|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*(?:분|시간|주일?|달|개월|년)|하루|이틀|사흘|나흘|닷새|엿새|이레|여드레|아흐레|열흘|보름|일주일|반년|말일|\d{4}\s*[-./]\s*\d{1,2}\s*[-./]\s*\d{1,2}\.?|\d{1,2}\s*[./]\s*\d{1,2}\.?)`;
 const DATE_TIME_ONLY = new RegExp(String.raw`^${DATE_TOKEN}(?:\s*${DATE_TOKEN})*$`, "u");
-const NOT_CONTENT = /^(?:미|안\s*)?완료(?:\s*(?:상태|처리))?$|^(?:미|안\s*)?완료(?:\s*상태)?\s*에서\s*(?:미|안\s*)?완료(?:\s*상태)?$|^(?:완료됨|체크|done|진행\s*중)$|^(?:다\s*)?끝난\s*걸$|^(?:완료\s*)?안\s*한\s*걸$|^(?:맨\s*)?(?:위|아래|앞|뒤|끝|처음|마지막)$|^(?:첫|두|세|네|다섯)\s*번째$|^\d+\s*(?:번|번째|순위)$|(?:\d+\s*(?:분|시간|일|주)|하루|이틀)\s*(?:뒤|후)$|^(?:(?:이번|다음|담|다다음)\s*)?(?:주말|달)$|^\d{1,2}:\d{2}$|^\d{1,2}\/\d{1,2}$|^\d{1,2}\s*[ap]m$|(?:이후|이전)$|^(?:담주|다음\s*주|이번\s*주)\s*[월화수목금토일](?:요일|욜)$/iu;
+const NOT_CONTENT = /^(?:미|안\s*)?완료(?:\s*(?:상태|처리))?$|^(?:미|안\s*)?완료(?:\s*상태)?\s*에서\s*(?:미|안\s*)?완료(?:\s*상태)?$|^(?:완료됨|체크|done|진행\s*중)$|^(?:다\s*)?끝난\s*걸$|^(?:완료\s*)?안\s*한\s*걸$|^(?:맨\s*)?(?:위|아래|앞|뒤|끝|처음|마지막)$|^(?:첫|두|세|네|다섯)\s*번째$|^\d+\s*(?:번|번째|순위)$|(?:\d+\s*(?:분|시간|일|주)|하루|이틀)\s*(?:뒤|후)$|^(?:(?:이번|다음|담|다다음)\s*)?(?:주말|달)$|^\d{1,2}:\d{2}$|^\d{1,2}\/\d{1,2}$|^\d{1,2}\s*[ap]m$|^(?:이후|이전)$|^(?:담주|다음\s*주|이번\s*주)\s*[월화수목금토일](?:요일|욜)$/iu;
 const FIELD_PREFIX = /^(?:(?:상태|날짜|시간|기한|마감일?|순서|순위|우선\s*순위)(?:을|를|은|는|이|가)?(?:\s+|$)|\d{4}\s*년(?:\s+|$|(?=\d)))/u;
-const ADD_POINTER = /(?:^|\s)(?:할\s*일|투두|todo)(?:에|에다|에도|로)(?:\s|$)|^(?:(?:방금|아까)\s*)?(?:이거|그거|저거|이것|그것|저것)(?:\s*(?:도|좀|하나|다|전부))?$/iu;
+const ADD_POINTER = /(?:^|\s)(?:할\s*일|투두|todo)(?:에|에다|에도|로)(?:\s|$)|^(?:(?:방금|아까)\s*)?(?:이거|그거|저거|요거|이것|그것|저것|요것|이걸|그걸|저걸|얘|걔|쟤)(?:들)?(?:\s*(?:도|좀|하나|다|전부|모두|까지|만))*$/iu;
+const DATE_SUFFIX = /(?:\s*(?:까지|부터|이후|이전|전|후|뒤|쯤|안|내|이내|중|안으로|내로|에))+$/u;
 const ADD_LEAD = /^(?:(?:내|제|나의|저의|우리|저희|오늘|내일|모레|주말|이번\s*주|다음\s*주|이번\s*달|다음\s*달)\s*)*(?:해야\s*)?(?:할\s*일|to-?do|투두)(?:\s*(?:리스트|목록))?\s*(?:에다가?|에도|에|으로|로)\s+/iu;
 const REQUEST_QUESTION_TAIL = /\s*(?:줄|주실|주시)\s*수\s*있(?:어요?|나요|니|을까요?|습니까|으세요|으신가요|겠어요?)[?？\sㅋㅎㅠㅜ~!.]*$/u;
 const NOT_ADD_CONTENT = /^(?:다시|그거|이거|저거|그것|이것|저것|그|이|저|하나|뭐|뭔가|(?:방금|아까|위에|아래)\s*(?:거|것|꺼))$/u;
@@ -139,7 +140,7 @@ export async function interpretTodoRequest(
     if (blocked) {
       return refuse("complete", userId, blocked);
     }
-    const target = completeTarget(userText, text);
+    const target = completeTarget(userText, text, open);
     if (endsWithCompletion(userText)) {
       return mutateChosen("complete", userId, open, text, target, completeTodo, isTodoRelated(normalized));
     }
@@ -165,7 +166,7 @@ export async function interpretTodoRequest(
     if (NEGATION.test(add.rest) || EXCLUSION.test(normalized) || COMPOUND.test(normalized)) {
       return refuse("add", userId, NEGATION.test(add.rest) || EXCLUSION.test(normalized) ? REFUSED_NEGATIVE : REFUSED_COMPOUND);
     }
-    if (!add.content || NOT_ADD_CONTENT.test(add.content) || DATE_TIME_ONLY.test(add.content) || ADD_POINTER.test(add.content)) {
+    if (!add.content || NOT_ADD_CONTENT.test(add.content) || isDateOnly(add.content) || ADD_POINTER.test(add.content)) {
       return refuse("add", userId, REFUSED_ADD_CONTENT);
     }
     const result = await addTodo(userId, add.content);
@@ -186,8 +187,11 @@ export async function interpretTodoRequest(
 }
 
 function isNotContent(value: string): boolean {
-  const bare = value.replace(/\s*(?:까지|부터|전|후|쯤)$/u, "");
-  return [value, bare, value.replace(FIELD_PREFIX, ""), bare.replace(FIELD_PREFIX, "")].some((part) => DATE_TIME_ONLY.test(part) || NOT_CONTENT.test(part));
+  return [value, value.replace(FIELD_PREFIX, "")].some((part) => isDateOnly(part) || NOT_CONTENT.test(part) || NOT_CONTENT.test(part.replace(DATE_SUFFIX, "")));
+}
+
+function isDateOnly(value: string): boolean {
+  return DATE_TIME_ONLY.test(value) || DATE_TIME_ONLY.test(value.replace(DATE_SUFFIX, ""));
 }
 
 function blockedReason(text: string): string | undefined {
@@ -437,8 +441,9 @@ function splitTokens(text: string): string[] {
     .map((token) => token.replace(/(?<=[^\s.,!?~…])[.,!?~…]+$/u, ""));
 }
 
-function completeTarget(userText: string, fullText: string): Target {
-  const target = targetWindows(userText.replace(/^(?:네|예|응|그래|넵)(?:[,.!]+\s*|\s+(?![번개째])|\s*$)/u, ""), COMPLETE_COMMAND, COMPLETE_SUFFIX);
+function completeTarget(userText: string, fullText: string, open: TodoItem[]): Target {
+  const named = open.some((item) => compact(userText).startsWith(compact(item.content)));
+  const target = targetWindows(named ? userText : userText.replace(/^(?:네|예|응|그래|넵)(?:[,.!]+\s*|\s+(?![번개째])|\s*$)/u, ""), COMPLETE_COMMAND, COMPLETE_SUFFIX);
   if (target.windows.length) {
     return target;
   }
