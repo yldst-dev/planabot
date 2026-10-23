@@ -161,7 +161,7 @@ export async function interpretTodoRequest(
 
   const add = !action || action === "add" ? parseAdd(userText) : undefined;
   if (add !== undefined) {
-    if (isQuestion(add.rest) || /(?:^|\s)(?:나중에|이따가?|다음에)$/u.test(add.content)) {
+    if (isQuestion(add.rest) || /(?:^|\s)(?:나중에|이따가?|다음에)$/u.test(add.content) || (/^(?:나중에|이따가?|다음에)\s/u.test(add.content) && /할게|할\s*거|해야지|해야겠/u.test(add.rest))) {
       return emptyOutput();
     }
     if (NEGATION.test(add.rest) || EXCLUSION.test(normalized) || COMPOUND.test(normalized)) {
