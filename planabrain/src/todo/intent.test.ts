@@ -382,6 +382,9 @@ test("decided todo actions skip keyword detection", async (t) => {
       assert.equal((await interpretTodoRequest("pointers", "할 일에 오전반 수업 듣기 추가해 줘")).action, "add");
       assert.equal((await interpretTodoRequest("pointers", "할 일에 이따가 책장 정리 추가할게")).handled, false);
       assert.equal((await interpretTodoRequest("pointers", "할 일에 나중에 신발장 정리 추가할 거야")).handled, false);
+      for (const text of ["할 일에 나중엔 공구함 정리 추가할게", "할 일에 담에 공구함 정리 추가할게", "할 일에 좀 이따 공구함 정리 추가할게"]) {
+        assert.equal((await interpretTodoRequest("pointers", text)).handled, false, text);
+      }
       for (const unit of ["3.3", "12.1", "4/4", "1.1."]) {
         const started = performance.now();
         await interpretTodoRequest("pointers", `할 일에 ${unit.repeat(30)}끝 추가해 줘`);
