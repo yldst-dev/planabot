@@ -42,7 +42,7 @@ test("the judged meridiem resolves hours given without 오전 or 오후", () => 
 test("a decided action overrides keyword detection", () => {
   assert.equal(interpretScheduleRequest("3시에 회의 알려줘", { nowMs: now, action: "add" }).action, "add");
   assert.equal(interpretScheduleRequest("내일 3시 일정 등록된 거 있어?", { nowMs: now, action: "list" }).action, "list");
-  assert.equal(interpretScheduleRequest("회의 그거 빼줘", { nowMs: now, action: "cancel" }).target, "회의 그거 빼");
+  assert.equal(interpretScheduleRequest("회의 그거 빼줘", { nowMs: now, action: "cancel" }).target, "회의 그거");
 });
 
 test("timers with list words still register and dates are not read as timers", () => {
@@ -512,4 +512,44 @@ test("good-sounding endings must close the sentence, connective 줘 forms hold, 
   for (const ending of ["주시면 감사합니다", "주셨으면 좋겠네요", "주면 고맙지", "주시고요", "주시길 부탁드려요", "주시라고요"]) {
     assert.equal(interpretScheduleRequest(`내일 오후 3시 적금 확인 알림 등록해 ${ending}`, { nowMs: now }).title, "적금 확인", ending);
   }
+});
+
+test("continued honorific forms must close the clause, quoted hearsay and retractions hold, off words count only as words and trailing courtesies still run", () => {
+  for (const text of [
+    "운동 가방 알림 지워 주실 수 있으면 좋겠다고 동생이 그랬어",
+    "운동 가방 알림 지워 줄 수 있냐고 물어본 거야",
+    "운동 가방 알림 취소해 줄 수 있지만 그냥 둘래",
+    "운동 가방 알림 삭제해 주셔도 무방합니다만 아직은 두세요",
+    "운동 가방 알림 지워 주시면 좋겠지만요, 오늘은 그냥 둘게요",
+    "운동 가방 알림 취소해 주면 좋을까",
+    "운동 가방 알림 지워 주면 고마운데, 일단 그냥 둬",
+    "'운동 가방 알림 지워 줘'라고 단톡에 올렸어",
+    "운동 가방 알림 지워 줘. 아 아니다, 그냥 둬",
+    "2번 알림 지워줘서고마워",
+    "운동 가방 알림 지워 줘가지구 편해",
+    "운동 가방 알림 지워 줘서인지 조용하네",
+  ]) {
+    for (const action of [undefined, "cancel"] as const) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
+    }
+  }
+  assert.equal(interpretScheduleRequest("내일 오후 5시 운동 가방 알림 등록해 줄 수 있냐고 물어본 거야", { nowMs: now }).handled, false);
+  for (const text of ["모레 오후 4시에도 겨울 장갑 꺼내기 알림", "모레 오전 10시 운동 가방 알림 절대 빼먹지 말자", "운동 가방 알림 오늘이었나", "운동 가방 알림 왔어"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now, action: "cancel" }).handled, false, text);
+  }
+  assert.equal(interpretScheduleRequest("내일 오전 9시 운동 가방 알림 빼 줘", { nowMs: now }).handled, false);
+  for (const text of ["운동 가방 알림 꺼 줘", "운동 가방 알림 빼 줘"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now, action: "cancel" }).target, "운동 가방", text);
+  }
+  for (const text of [
+    "운동 가방 알림 취소해 주시면 감사하겠습니다 :D",
+    "운동 가방 알림 지워 주셨으면 해서요",
+    "운동 가방 알림 삭제해 주셨으면 하는데요",
+    "운동 가방 알림 취소 부탁해, 고마워",
+    "운동 가방 알림 지워 주시겠어요 프라나?",
+    "운동 가방 알림 지워 주시면 좋겠어요 꼭",
+  ]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now }).target, "운동 가방", text);
+  }
+  assert.equal(interpretScheduleRequest("1번 알림 지워 줘. 이런 거 자주 부탁해도 될까?", { nowMs: now }).target, "1번");
 });
