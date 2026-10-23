@@ -480,3 +480,36 @@ test("honorific endings run only when the rest is a request, reasons elsewhere d
   }
   assert.equal(interpretScheduleRequest("내일 오후 3시 '배송 취소해 줘' 문자 보내기 알림", { nowMs: now, action: "add" }).title, "'배송 취소해 줘' 문자 보내기");
 });
+
+test("good-sounding endings must close the sentence, connective 줘 forms hold, misread or off commands stay put and common honorifics run", () => {
+  for (const text of [
+    "4번 알림 지워 주시면 좋을 게 없어요",
+    "책장 정리 알림 취소해 주시면 고맙겠지만 오늘은 그냥 두세요",
+    "1번 알림 삭제해 주시면 좋겠다고 아빠가 그랬어요",
+    "2번 알림 지워 주시면 돼요 라고 들었는데 아직이에요",
+    "5번 알림 지워 줘서는 안 돼",
+    "책장 정리 알림 삭제해 줘서도 안 되고",
+    "책장 정리 알림 지워 줘서요",
+    "2번 알림 삭제해 줘선 안 돼요",
+    "책장 정리 알림 취소해 줘갖고 다행이에요",
+    "3번 알림 지워 줘봤자 소용없어",
+    "1번 알림 취소해 줘도 될지 모르겠네",
+    "삼촌 오셨으면 하모니카 연습 알림 지워 주세요",
+  ]) {
+    for (const action of [undefined, "cancel"] as const) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
+    }
+  }
+  for (const text of ["모레 밤 7시에도 책장 정리 알림", "내일 오후 2시에 책장 정리 알림 보내 줘", "책장 정리 알림 언제였지"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now, action: "cancel" }).handled, false, text);
+  }
+  assert.equal(interpretScheduleRequest("'내일 오전 8시 책장 정리 알림 지워 줘'", { nowMs: now, action: "add" }).handled, false);
+  assert.equal(interpretScheduleRequest("내일 오전 11시 반 알림 꺼 줘", { nowMs: now }).handled, false);
+  for (const ending of ["주시기를 바랍니다", "주시기 부탁드립니다", "주셔야 할 것 같아요", "주셔도 될 것 같아요", "주셔야겠습니다", "주셔도 무방합니다", "주실 수 있으면 좋겠어요", "줄 수 있냐", "줄 수 있지?", "주라니까", "주셨으면 합니다", "주시면 고마울 텐데요"]) {
+    assert.equal(interpretScheduleRequest(`책장 정리 알림 취소해 ${ending}`, { nowMs: now }).target, "책장 정리", ending);
+    assert.equal(interpretScheduleRequest(`내일 오후 3시 적금 확인 알림 등록해 ${ending}`, { nowMs: now }).title, "적금 확인", ending);
+  }
+  for (const ending of ["주시면 감사합니다", "주셨으면 좋겠네요", "주면 고맙지", "주시고요", "주시길 부탁드려요", "주시라고요"]) {
+    assert.equal(interpretScheduleRequest(`내일 오후 3시 적금 확인 알림 등록해 ${ending}`, { nowMs: now }).title, "적금 확인", ending);
+  }
+});
