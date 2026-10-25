@@ -646,3 +646,14 @@ test("아니 after a request always holds, and negated off words, mistakes and h
   assert.equal(interpretScheduleRequest("내일 8시에 필라테스 알림 등록해 줘 아니 근데 9시로", { nowMs: now, action: "add" }).handled, false);
   assert.equal(interpretScheduleRequest("필라테스 알림 지워 줘. 했어 아까", { nowMs: now, action: "cancel" }).target, "필라테스");
 });
+
+test("polite off questions run while inflected mistakes and corrections after the command hold", () => {
+  const now = Date.UTC(2026, 9, 26, 1, 0);
+  for (const [text, target] of [["영양제 알림 꺼 주면 안 될까요?", "영양제"], ["5번 꺼 주시면 안 돼요?", "5번"], ["영양제 알림 해제해 주면 안 되나요?", "영양제"]]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now, action: "cancel" }).target, target, text);
+  }
+  for (const text of ["영양제 알림 꺼 주면 안 돼. 그거 필요해", "영양제 알림 끄면 안 돼", "5번 지워 줘 실수했다", "5번 삭제해 줘 이거 아니다", "5번 지워 줘. 그게 아니라 6번"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now, action: "cancel" }).handled, false, text);
+  }
+  assert.equal(interpretScheduleRequest("30분 뒤에 알려 줘 이게 아니라", { nowMs: now, action: "add" }).handled, false);
+});
