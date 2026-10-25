@@ -553,3 +553,37 @@ test("continued honorific forms must close the clause, quoted hearsay and retrac
   }
   assert.equal(interpretScheduleRequest("1번 알림 지워 줘. 이런 거 자주 부탁해도 될까?", { nowMs: now }).target, "1번");
 });
+
+test("retractions, hearsay and hesitation right after the command hold while the same words in titles or reasons and wider polite endings still run", () => {
+  const now = Date.UTC(2026, 9, 23, 1, 0);
+  for (const text of [
+    "우산 챙기기 알림 지워 줘 아니 그냥 둬요",
+    "우산 챙기기 알림 취소해 줘 아니 됐어요",
+    "우산 챙기기 알림 삭제해 주세요. 아닙니다",
+    "2번 알림 지워 줘 아니 4번",
+    "엄마가 우산 챙기기 알림 지워 줘 그러던데",
+    "형이 우산 챙기기 알림 삭제해 주시면 좋겠대요",
+    "`우산 챙기기 알림 지워 줘`라고 보냈어",
+    "『우산 챙기기 알림 지워 줘』 이게 메모에 적혀 있었어",
+    "1번 알림 지워 줘 근데 그렇게 해도 될지 모르겠네",
+  ]) {
+    for (const action of [undefined, "cancel"] as const) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
+    }
+  }
+  for (const text of ["내일 오후 3시에 우산 챙기기 알림 등록해 줘 아 아니다", "내일 오후 3시에 우산 챙기기 알림 등록해 주라더라", "내일 오후 3시에 우산 챙기기 알림 등록해 줘야 하나"]) {
+    for (const action of [undefined, "add"] as const) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
+    }
+  }
+  for (const ending of ["부탁 드립니다", "부탁드리겠습니다", "부탁이야", "부탁요", "부탁해용", "부탁할게", "하고 싶은데요", "하고 싶네요"]) {
+    const text = `우산 챙기기 알림 취소 ${ending}`.replace("취소 하고", "취소하고");
+    assert.equal(interpretScheduleRequest(text, { nowMs: now }).target, "우산 챙기기", text);
+  }
+  for (const text of ["우산 챙기기 알림 지워 주실 수 있나요 혹시", "우산 챙기기 알림 지워 주시면 좋을 텐데", "우산 챙기기 알림 취소해 주세요, 미리 감사합니다"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now }).target, "우산 챙기기", text);
+  }
+  assert.equal(interpretScheduleRequest("아니야 연습 알림 지워 줘", { nowMs: now, action: "cancel" }).target, "아니야 연습");
+  assert.equal(interpretScheduleRequest("2번 알림 지워 줘, 그건 이제 내 일 아니야", { nowMs: now }).target, "2번");
+  assert.equal(interpretScheduleRequest("내일 저녁 8시 알림 세탁기 빨래 빼", { nowMs: now }).title, "세탁기 빨래 빼");
+});
