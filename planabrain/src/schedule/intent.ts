@@ -38,10 +38,11 @@ const TIME_PARTICLE = /^(?:\s?(?:에는|에도|쯤에|즈음에?|경에|까지�
 const ADD_COMMAND = new RegExp(String.raw`(?:등록|추가|설정|예약|알려|맞춰|맞추|깨워|생성)${REQUEST_TAIL}`, "u");
 const OFF_COMMAND = new RegExp(String.raw`(?:꺼|끄|해제|멈춰|중지|빼|치워|없던\s*일로\s*해)${REQUEST_TAIL}`, "u");
 const QUESTION_WORD = /언제|뭐(?:였|야|지|더라)|무엇|몇\s*(?:시|번|개)|무슨|어디|어떻게|였지|였나|였더라|이었지|이었나|이었더라|인가|일까|맞지|맞나|던가/u;
-const AFTER_REQUEST_HOLD = /^[\s,.!~…]*(?:(?:아\s*)?(?:아니(?:다|야|에요|요|지)?|아냐|아닙니다|됐어요?|됐다|됐습니다|그냥\s*(?:둬|두|놔|둘)|냅둬|놔\s*둬|말고)(?![가-힣])|그러(?:던데|더라|더라고|던가|대|네|셨)|그랬(?:어|대|다|는데)|하더라|하던데|하대|한대|하고\s*(?:보냈|했|올렸|말했|그랬)|이?라고|래요?(?![가-힣])|대요?(?![가-힣])|라던|라더|더라|던데|야\s*(?:하나|되나|할까|될까|하려나|되려나|할지|될지))|(?<!부탁)(?:해|줘)도\s*될(?:지|까)(?!요\s*[?？])|될지\s*모르|되려나/u;
-const AFTER_RETRACT = /^(?:[\s,.!~…?？ㅋㅎㅠㅜ^;:)(\p{Extended_Pictographic}\u{FE0F}]|(?:음+|흠+|앗|아|어|헐|에이|잠깐(?:만요?)?|근데|그런데|혹시|진짜|정말)(?![가-힣]))*(?:아니(?:다|야|에요|요)?|아냐|아닙니다|됐어요?|됐다|됐습니다|그냥\s*(?:둬|두세요|놔둬)|냅둬|놔\s*둬)(?![가-힣])|^\s*도\s*(?:될(?:지|까)|되나|되려나|괜찮을)|^[\s,.!~…]*(?:그러시(?:던데|더라)|하시(?:더라|던데)|하셨(?:어|대))|^[\s,.!~…?？]*(?:했(?:는데|다가?|더니|어)|하고)(?![가-힣])/u;
+const AFTER_REQUEST_HOLD = /^[\s,.!~…]*(?:(?:아\s*)?(?:아니(?:다|야|에요|요|지)(?![가-힣])|아니(?![가-힣])(?!(?=[\s,.!~…]*(?:진짜|정말|근데|그런데|왜|그게|요즘|벌써|너무|매번|자꾸|오늘|이게|비가))(?![^.!?？]*(?:그냥\s*(?:둬|두|둘|놔)|됐어|됐다|말자|마(?![가-힣])|아니다|아냐|아니야)))|아냐|아닙니다|됐어요?|됐다|됐습니다|그냥\s*(?:둬|두|놔|둘)|냅둬|놔\s*둬|말고)(?![가-힣])|그러(?:던데|더라|더라고|던가|대|네|셨)|그랬(?:어|대|다|는데)|하더라|하던데|하대|한대|하고\s*(?:보냈|했|올렸|말했|그랬)|이?라고|래요?(?![가-힣])|대요?(?![가-힣])|라던|라더|더라|던데|야\s*(?:하나|되나|할까|될까|하려나|되려나|할지|될지))|(?<!부탁)(?:해|줘)도\s*될(?:지|까)(?!요\s*[?？])|될지\s*모르|되려나/u;
+const AFTER_RETRACT = /^(?:[\s,.!~…?？ㅋㅎㅠㅜ^;:)(\p{Extended_Pictographic}\u{FE0F}]|(?:음+|흠+|앗|아|어|헐|에이|잠깐(?:만요?)?|근데|그런데|혹시|진짜|정말|미안|죄송(?:해요|합니다)?|맞다)(?![가-힣]))*(?:(?:아니(?:다|야|에요|요|지)|아냐|아닙니다|됐어요?|됐다|됐습니다|그냥\s*(?:둬|두세요|놔둬|두자|두셔도|놔두자|말자)|냅둬|놔\s*둬|말자)(?![가-힣])|아니(?![가-힣])(?!(?=[\s,.!~…]*(?:진짜|정말|근데|그런데|왜|그게|요즘|벌써|너무|매번|자꾸|오늘|이게|비가))(?![^.!?？]*(?:그냥\s*(?:둬|두|둘|놔)|됐어|됐다|말자|마(?![가-힣])|아니다|아냐|아니야))))|^\s*도\s*(?:될(?:지|까)|되나|되려나|괜찮을)|^[\s,.!~…]*(?:그러시(?:던데|더라)|하시(?:더라|던데)|하셨(?:어|대|다|는데))|^\s*(?:했(?:는데|다가?|더니|어)|하고)(?![가-힣])|^[\s,.!~…?？]*(?:했(?:다가|더니)(?![가-힣])|(?:했(?:는데|다|어)|하고)[\s.!~…?？ㅋㅎㅠㅜ]*$)/u;
 const QUOTED = /'[^'’]*['’]|"[^"”]*["”]|‘[^’']*[’']|“[^”"]*[”"]|「[^」]*」|『[^』]*』|`[^`]*`/gu;
 const OFF_ASK = /(?:꺼|끄|해제|멈춰|중지|빼|치워)\s*(?:좀\s*)?(?:해\s*)?(?:줘|줄래|주세요|주라|주실래요|주시겠어요|줄\s*수|둬|놔)/u;
+const OFF_LOOSE = /(?:꺼|끄|해제|멈춰|중지|빼|치워)\s*(?:좀\s*)?(?:해\s*)?(?:주|줘|줭|줄|둬|놔|부탁)/u;
 const COMMAND_HELD = "취소하라는 말로 읽지 못했습니다.\n\"2번 취소\"처럼 다시 말씀해 주십시오.";
 export const EARLIER_COMMAND = /(?:줘|주세요|주십시오|해라|주라|주셈)[\s.!~,]/u;
 
@@ -98,7 +99,7 @@ export function interpretScheduleRequest(
   const cancelMatch = scope.match(CANCEL_COMMAND) ?? scope.match(OFF_COMMAND);
   const cancelAfter = cancelMatch ? scope.slice((cancelMatch.index ?? 0) + cancelMatch[0].length) : "";
   if (decided ? decided === "cancel" && !(options.command && unrequestedCancel && parsedTime) : isCancelRequest(normalized)) {
-    if (held || unrequestedCancel || AFTER_REQUEST_HOLD.test(cancelAfter) || AFTER_RETRACT.test(cancelAfter) || isConditional(normalized) || (ADD_COMMAND.test(normalized) && !CANCEL_COMMAND.test(normalized)) || (decided === "cancel" && !CANCEL_WORD.test(normalized) && !OFF_ASK.test(normalized) && (parsedTime !== undefined || QUESTION_WORD.test(normalized))) || HELD_CANCEL.test(normalized) || (/려고/u.test(normalized) && !EARLIER_COMMAND.test(normalized))) {
+    if (held || unrequestedCancel || AFTER_REQUEST_HOLD.test(cancelAfter) || AFTER_RETRACT.test(cancelAfter) || isConditional(normalized) || (ADD_COMMAND.test(normalized) && !CANCEL_COMMAND.test(normalized)) || (decided === "cancel" && !CANCEL_WORD.test(normalized) && !(OFF_COMMAND.test(normalized) && OFF_LOOSE.test(normalized)) && (parsedTime !== undefined || QUESTION_WORD.test(normalized))) || HELD_CANCEL.test(normalized) || (/려고/u.test(normalized) && !EARLIER_COMMAND.test(normalized))) {
       return options.command ? { handled: true, action: "cancel", error: COMMAND_HELD } : emptyOutput();
     }
     return {

@@ -608,3 +608,22 @@ test("fillers before a retraction, 줘도 될까, quoted past commands and honor
     assert.equal(interpretScheduleRequest(text, { nowMs: now }).target, "화분 물주기", text);
   }
 });
+
+test("reasons, conjunctions and a filler 아니 after a finished request still run while softer retractions and apologies hold", () => {
+  const now = Date.UTC(2026, 9, 26, 1, 0);
+  for (const [text, target] of [
+    ["물고기 밥 알림 지워 줘. 했어 아까", "물고기 밥"],
+    ["2번 알림 지워 줘. 하고 6번도", "2번"],
+    ["물고기 밥 알림 취소해 줄래? 아니 진짜 너무 많아서", "물고기 밥"],
+    ["물고기 밥 알림 지워 줘 ㅋㅋ 아니 오늘 쉬는 날이래", "물고기 밥"],
+    ["모레 8시 알림 꺼 주십시오", "모레 8시"],
+    ["모레 8시 알림 해제 부탁해요", "모레 8시"],
+  ]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now, action: "cancel" }).target, target, text);
+  }
+  for (const text of ["5번 알림 취소해 줘. 근데 그냥 두자", "5번 알림 지워 줘. 아 그냥 두셔도 돼요", "5번 알림 지워 줘. 아 미안 아냐", "5번 지워 줘. 음 아니지 7번", "물고기 밥 알림 지워 줘. 아 그냥 말자"]) {
+    for (const action of [undefined, "cancel"] as const) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
+    }
+  }
+});
