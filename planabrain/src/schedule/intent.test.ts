@@ -609,13 +609,11 @@ test("fillers before a retraction, 줘도 될까, quoted past commands and honor
   }
 });
 
-test("reasons, conjunctions and a filler 아니 after a finished request still run while softer retractions and apologies hold", () => {
+test("reasons and conjunctions after a finished request still run while softer retractions and apologies hold", () => {
   const now = Date.UTC(2026, 9, 26, 1, 0);
   for (const [text, target] of [
     ["물고기 밥 알림 지워 줘. 했어 아까", "물고기 밥"],
     ["2번 알림 지워 줘. 하고 6번도", "2번"],
-    ["물고기 밥 알림 취소해 줄래? 아니 진짜 너무 많아서", "물고기 밥"],
-    ["물고기 밥 알림 지워 줘 ㅋㅋ 아니 오늘 쉬는 날이래", "물고기 밥"],
     ["모레 8시 알림 꺼 주십시오", "모레 8시"],
     ["모레 8시 알림 해제 부탁해요", "모레 8시"],
   ]) {
@@ -626,4 +624,25 @@ test("reasons, conjunctions and a filler 아니 after a finished request still r
       assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
     }
   }
+});
+
+test("아니 after a request always holds, and negated off words, mistakes and honorific hearsay hold too", () => {
+  const now = Date.UTC(2026, 9, 26, 1, 0);
+  for (const text of [
+    "필라테스 알림 지워 줘. 아니 오늘은. 그냥 둬",
+    "필라테스 알림 취소해 줘 아니 근데 생각해 보니 필요해",
+    "필라테스 알림 지워 줘 아니 오늘 말고 내일 거",
+    "필라테스 알림 지워 줘 아니 진짜 그대로 두자",
+    "필라테스 알림 취소해 줄래? 아니 요즘 너무 바빠서",
+    "필라테스 알림 꺼 주지 마",
+    "필라테스 알림 꺼 줄 필요 없어",
+    "필라테스 알림 지워 줘 미안 잘못 보냄",
+    "필라테스 알림 지워 줘 하시네",
+  ]) {
+    for (const action of [undefined, "cancel"] as const) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
+    }
+  }
+  assert.equal(interpretScheduleRequest("내일 8시에 필라테스 알림 등록해 줘 아니 근데 9시로", { nowMs: now, action: "add" }).handled, false);
+  assert.equal(interpretScheduleRequest("필라테스 알림 지워 줘. 했어 아까", { nowMs: now, action: "cancel" }).target, "필라테스");
 });
