@@ -587,3 +587,24 @@ test("retractions, hearsay and hesitation right after the command hold while the
   assert.equal(interpretScheduleRequest("2번 알림 지워 줘, 그건 이제 내 일 아니야", { nowMs: now }).target, "2번");
   assert.equal(interpretScheduleRequest("내일 저녁 8시 알림 세탁기 빨래 빼", { nowMs: now }).title, "세탁기 빨래 빼");
 });
+
+test("fillers before a retraction, 줘도 될까, quoted past commands and honorific hearsay hold while plain trailing words still run", () => {
+  const now = Date.UTC(2026, 9, 25, 1, 0);
+  for (const text of [
+    "화분 물주기 알림 지워 줘 음 아니다",
+    "화분 물주기 알림 취소해줘 ㅋㅋ 아니야",
+    "화분 물주기 알림 삭제해 줘... 근데 됐다",
+    "화분 물주기 알림 지워 줘도 될까 모르겠다",
+    "화분 물주기 알림 지워줘 했는데 그대로네",
+    "화분 물주기 알림 취소해 줘 그러시던데",
+    "화분 물주기 알림 지워 주면 좋댔어",
+  ]) {
+    for (const action of [undefined, "cancel"] as const) {
+      assert.equal(interpretScheduleRequest(text, { nowMs: now, action }).handled, false, `${text} ${action}`);
+    }
+  }
+  assert.equal(interpretScheduleRequest("내일 저녁 9시 알림 화분 치워", { nowMs: now, action: "cancel" }).handled, false);
+  for (const text of ["화분 물주기 알림 지워 줘 ㅋㅋ", "화분 물주기 알림 지워 줘 근데 오늘 중으로"]) {
+    assert.equal(interpretScheduleRequest(text, { nowMs: now }).target, "화분 물주기", text);
+  }
+});
