@@ -30,7 +30,6 @@ export type AnswerTurnParams = {
   conversationId?: string;
   images?: InputImage[];
   imageNotice?: string;
-  linkSourceText?: string;
   memoryContext?: string;
   recentTurns?: RecentTurnInput[];
   continuousChat?: boolean;

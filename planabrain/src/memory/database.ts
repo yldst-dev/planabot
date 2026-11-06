@@ -271,7 +271,10 @@ export function normalizeWireMessages(input: unknown): WireMessage[] | undefined
     if (typeof raw !== "object" || raw === null) continue;
     const item = raw as Record<string, unknown>;
     const role = item.role === "assistant" ? "assistant" : item.role === "user" ? "user" : null;
-    if (role && typeof item.content === "string") messages.push({ role, content: item.content });
+    if (role && typeof item.content === "string") {
+      const readLinks = Array.isArray(item.readLinks) ? item.readLinks.filter((link): link is string => typeof link === "string") : [];
+      messages.push({ role, content: item.content, ...(readLinks.length > 0 ? { readLinks } : {}) });
+    }
   }
   return messages.length > 0 ? messages : undefined;
 }

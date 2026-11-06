@@ -4,6 +4,7 @@ import { bigrams } from "../memory/recall.js";
 export const MAX_FALLBACK_CITATIONS = 3;
 
 const MIN_SHARED_BIGRAMS = 3;
+const MIN_KOREAN_RATIO = 0.5;
 
 export const SOURCE_SELECTION_LINE = /^(.*?)(?<!\s)\s*출처\s*번호\s*[:：]\s*(.*\S|\s)\s*$/u;
 
@@ -45,6 +46,21 @@ export function applySourceSelection(
     };
   }
   return { content: cleaned, citations: relevantCitations(cleaned, citations), selection: "unmarked" };
+}
+
+export function selectReadPageCitations(
+  selection: "none" | "picked" | "unmarked",
+  answer: string,
+  citations: WebCitation[],
+): WebCitation[] {
+  if (selection === "none") return [];
+  return citations.filter((citation) => !isMostlyKorean(citation.evidence ?? "") || relevantCitations(answer, [citation]).length > 0);
+}
+
+function isMostlyKorean(text: string): boolean {
+  const letters = text.match(/\p{L}/gu)?.length ?? 0;
+  const hangul = text.match(/[가-힣]/gu)?.length ?? 0;
+  return letters > 0 && hangul / letters >= MIN_KOREAN_RATIO;
 }
 
 function relevantCitations(answer: string, citations: WebCitation[]): WebCitation[] {

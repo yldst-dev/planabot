@@ -1,21 +1,22 @@
-import { type AnswerTurnParams, type TurnAnswer, type PreparedSearch } from "./types.js";
-import { normalizeCurrentTurnText, isCurrentInformationRequest, isExplicitSearchRequest, isSearchFollowUp, resolveSearchQuery, isSimpleSocialTurn, describeImagesForSearch, canFollowUpSearch, isStatementTurn, extractReplyContext, extractCurrentTime, isClockQuestion, SEARCH_FOLLOW_UP_MAX_CHARS } from "./queryPolicy.js";
+import { type AnswerTurnParams, type RecentTurnInput, type TurnAnswer, type PreparedSearch } from "./types.js";
+import { normalizeCurrentTurnText, isCurrentInformationRequest, isExplicitSearchRequest, isSearchFollowUp, resolveSearchQuery, isSimpleSocialTurn, describeImagesForSearch, canFollowUpSearch, isStatementTurn, extractReplyContext, extractCurrentTime, extractQuotedMessage, isClockQuestion, SEARCH_FOLLOW_UP_MAX_CHARS } from "./queryPolicy.js";
 import { normalizeQuestionForMemory, buildCurrentTurnReference, buildMemoryContextMessage, buildTurnMessages } from "./promptContext.js";
 import { buildLongRangeWeatherReply } from "./weatherPolicy.js";
 import { looksUserInitiatedIntimacy, invokeChatWithIntimacyRecovery } from "./intimacyMode.js";
-import { usesPreSearchContext, performPreSearch, type ChatInvocationMetadata, type ChatMessage, type InputImage, mergeWebCitations } from "../integrations/chat.js";
+import { usesPreSearchContext, performPreSearch, type ChatInvocationMetadata, type ChatMessage, mergeWebCitations } from "../integrations/chat.js";
 import { finalizeAnswerForDelivery } from "./deliveryRewrite.js";
-import { buildLinkContext } from "./linkContext.js";
+import { WEB_FETCH_DISABLED_NOTICE, buildReadableLinksContext, collectReadableLinks, createWebFetchRunner, isDirectLinkShown, readableTurnText } from "./linkContext.js";
+import { canFetchUrls } from "../integrations/webFetch.js";
 import { imageTokenEstimate } from "./contextBudget.js";
 import { MAX_TURN_IMAGES } from "./imageLinks.js";
 import { buildReplay, buildChatSystemPrompt } from "./replay.js";
-import { applySourceSelection } from "./sourceSelection.js";
+import { applySourceSelection, selectReadPageCitations } from "./sourceSelection.js";
 import { checkExecution } from "../runtime/execution.js";
 
 export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> {
   const currentTurnText =
     normalizeCurrentTurnText(
-      params.currentTurnText ?? params.linkSourceText ?? params.question,
+      params.currentTurnText ?? params.question,
     ) ||
     normalizeQuestionForMemory(params.question);
   const longRangeWeatherReply = buildLongRangeWeatherReply(
@@ -70,12 +71,7 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
     params.settings.deliveryRewriteEnabled && !intimacyActive;
   const simpleSocialTurn = socialTurn;
 
-  const [search, linkContext] = await Promise.all([
-    searchTask,
-    buildLinkContext(params.settings, currentTurnText, {
-      maxPreviewImages: MAX_TURN_IMAGES - (params.images?.length ?? 0),
-    }),
-  ]);
+  const search = await searchTask;
   const preparedAt = Date.now();
   const referenceContext = buildCurrentTurnReference(
     params.question,
@@ -84,6 +80,15 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   const memoryContext = simpleSocialTurn ? null : buildMemoryContextMessage(params.memoryContext);
 
   const preSearch = search.context;
+  const readableLinks = collectReadableLinks({
+    currentTurnText: normalizeCurrentTurnText(params.currentTurnText ?? params.question),
+    replyText: extractQuotedMessage(params.question),
+    searchUrls: socialTurn || intimacyActive ? [] : (preSearch?.citations ?? []).map((citation) => citation.url),
+    history: socialTurn || intimacyActive ? [] : [...recentTurns].reverse().sort(userTurnsFirst).map((turn) => readableTurnText(turn, params.userId)),
+  });
+  const webFetch = readableLinks.length > 0 && canFetchUrls(params.settings)
+    ? createWebFetchRunner(params.settings, readableLinks, { maxPreviewImages: MAX_TURN_IMAGES - (params.images?.length ?? 0) })
+    : undefined;
   const systemContent = buildChatSystemPrompt(params.settings, {
     searchEnabled: searchEnabled && !(wantsPreSearch && !preSearch),
     intimacyActive,
@@ -96,15 +101,16 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
     settings: params.settings,
     maxContinuations: deliveryEnabled && !searchEnabled ? 0 : 1,
     intimacyActive,
+    webFetch: webFetch?.run,
     messages: buildTurnMessages({
       systemContent,
       history: replay.messages,
       memoryContext,
       referenceContext,
-      linkContext: linkContext?.content ?? null,
+      linkContext: webFetch ? buildReadableLinksContext(readableLinks) : isDirectLinkShown(readableLinks) ? WEB_FETCH_DISABLED_NOTICE : null,
       searchContext: preSearch?.context ?? null,
       currentTurnText,
-      images: turnImages(params.images, linkContext?.images),
+      images: params.images,
       imageNotice: params.imageNotice,
       imageTokens: imageTokenEstimate(params.settings.codexImageDetail),
     }),
@@ -123,7 +129,7 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   checkExecution();
   const citations = mergeWebCitations(
     selected.citations,
-    linkContext?.citations ?? [],
+    selectReadPageCitations(selected.selection, selected.content, webFetch?.citations() ?? []),
   );
   const answer = await finalizeAnswerForDelivery({
     question: currentTurnText,
@@ -136,18 +142,19 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
     })),
   });
   logTurnTiming(startedAt, preparedAt, answeredAt, Date.now());
+  const readLinks = webFetch?.readUrls() ?? [];
 
   return {
     answer,
-    transcript: continuous
-      ? { wireMessages: [{ role: "user", content: currentTurnText }, { role: "assistant", content: answer }], epoch }
-      : undefined,
+    transcript: {
+      wireMessages: [{ role: "user", content: currentTurnText }, { role: "assistant", content: answer, ...(readLinks.length > 0 ? { readLinks } : {}) }],
+      epoch,
+    },
   };
 }
 
-function turnImages(attached: InputImage[] | undefined, previews: InputImage[] | undefined): InputImage[] | undefined {
-  const images = [...(attached ?? []), ...(previews ?? [])];
-  return images.length ? images : undefined;
+function userTurnsFirst(a: RecentTurnInput, b: RecentTurnInput): number {
+  return Number(a.role === "assistant") - Number(b.role === "assistant");
 }
 
 function logSearchReason(reason: {

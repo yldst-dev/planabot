@@ -17,6 +17,19 @@ export function codexStream(text: string, options: { incomplete?: boolean; usage
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
+export function codexToolCalls(calls: Array<{ id: string; url: string; }>): Response {
+  const events = [
+    { type: "response.created", response: { output: [] } },
+    ...calls.map((call) => ({
+      type: "response.output_item.done",
+      item: { type: "function_call", call_id: call.id, name: "web_fetch", arguments: JSON.stringify({ url: call.url }) },
+    })),
+    { type: "response.completed", response: { model: "gpt-6-astra", output: [] } },
+  ];
+  const body = events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
 export function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 }
@@ -44,6 +57,6 @@ export function installFetch(
 }
 
 export function codexInputText(request: CapturedRequest): string {
-  const input = Array.isArray(request.body.input) ? request.body.input as Array<{ content: unknown; }> : [];
-  return [String(request.body.instructions ?? ""), ...input.map((item) => typeof item.content === "string" ? item.content : JSON.stringify(item.content))].join("\n");
+  const input = Array.isArray(request.body.input) ? request.body.input as Array<{ content?: unknown; output?: unknown; }> : [];
+  return [String(request.body.instructions ?? ""), ...input.map((item) => typeof item.output === "string" ? item.output : typeof item.content === "string" ? item.content : JSON.stringify(item.content ?? item))].join("\n");
 }

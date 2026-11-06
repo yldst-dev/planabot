@@ -181,11 +181,20 @@ export function isExplicitSearchRequest(currentTurnText: string): boolean {
 
 const REPLY_CONTEXT_LABEL = /^(?:참고 메시지|직전 프라나 응답[^\n]*):\n/mu;
 
-export function extractReplyContext(question: string): string | undefined {
+function sliceReplyContext(question: string): { label: string; text: string; } | undefined {
   const label = REPLY_CONTEXT_LABEL.exec(question);
   const start = label ? label.index + label[0].length : -1;
   const end = start < 0 ? -1 : question.indexOf("\n\n질문:\n", start);
-  return end < 0 ? undefined : question.slice(start, end).replace(/\s+/gu, " ").trim().slice(0, 300) || undefined;
+  return label && end >= 0 ? { label: label[0], text: question.slice(start, end) } : undefined;
+}
+
+export function extractReplyContext(question: string): string | undefined {
+  return sliceReplyContext(question)?.text.replace(/\s+/gu, " ").trim().slice(0, 300) || undefined;
+}
+
+export function extractQuotedMessage(question: string): string | undefined {
+  const context = sliceReplyContext(question);
+  return context?.label.startsWith("참고 메시지") ? context.text : undefined;
 }
 
 export function extractCurrentTime(question: string): string | undefined {

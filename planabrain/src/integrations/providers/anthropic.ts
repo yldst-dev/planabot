@@ -1,4 +1,4 @@
-import { type ChatInvocationResult, type ChatMessage } from "../contracts.js";
+import { WEB_FETCH_TOOL, type ChatInvocationResult, type ChatMessage, type ToolCall, type ToolMode } from "../contracts.js";
 import { fetchWithTimeout, ProviderApiError } from "../providerError.js";
 import { readUsage, recordProviderResponse } from "../responseMetadata.js";
 import { withRateLimitRetry } from "../retry.js";
@@ -12,16 +12,15 @@ const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_TOKENS = 32000;
 const DEFAULT_SYSTEM = "You are a helpful assistant. Follow the conversation's language.";
 
-type ContentBlock = Record<string, unknown>;
-
 export async function invokeAnthropicChat(
   settings: Settings,
   messages: ChatMessage[],
+  toolMode?: ToolMode,
 ): Promise<ChatInvocationResult> {
   if (!settings.anthropicApiKey) {
     throw new Error("ANTHROPIC_API_KEY is required when using anthropic");
   }
-  const payload = buildAnthropicPayload(settings, messages);
+  const payload = buildAnthropicPayload(settings, messages, toolMode);
   return withRateLimitRetry(async () => {
     const response = await fetchWithTimeout(ANTHROPIC_MESSAGES_URL, {
       method: "POST",
@@ -36,34 +35,49 @@ export async function invokeAnthropicChat(
     if (!response.ok) {
       throw buildProviderApiError("anthropic", body, response);
     }
-    return readAnthropicMessage(body);
+    return readAnthropicMessage(body, toolMode === "auto");
   });
 }
 
-export function buildAnthropicPayload(settings: Settings, messages: ChatMessage[]): Record<string, unknown> {
+export function buildAnthropicPayload(settings: Settings, messages: ChatMessage[], toolMode?: ToolMode): Record<string, unknown> {
   const system = messages
     .filter((message) => message.role === "system" || message.role === "developer")
     .map((message) => message.content.trim())
     .filter(Boolean)
     .join("\n\n");
-  const turns = messages
-    .filter((message) => message.role !== "system" && message.role !== "developer")
-    .map((message) => ({
-      role: message.role === "assistant" ? "assistant" : "user",
-      content: toContentBlocks(message),
-    }))
-    .filter((turn) => turn.content.length > 0);
+  const turns: Array<{ role: "user" | "assistant"; content: unknown[]; toolResults?: boolean; }> = [];
+  for (const message of messages.filter((item) => item.role !== "system" && item.role !== "developer")) {
+    const previous = turns.at(-1);
+    if (message.toolCallId && previous?.role === "user" && previous.toolResults) {
+      previous.content.push(...toContentBlocks(message));
+      continue;
+    }
+    const content = toContentBlocks(message);
+    if (content.length > 0) {
+      turns.push({ role: message.role === "assistant" ? "assistant" : "user", content, ...(message.toolCallId ? { toolResults: true } : {}) });
+    }
+  }
   const effort = resolveReasoningEffort(settings.chatThinkingMode);
   return {
     model: settings.chatModel,
     max_tokens: MAX_TOKENS,
     system: [{ type: "text", text: system || DEFAULT_SYSTEM, cache_control: { type: "ephemeral" } }],
-    messages: turns,
+    messages: turns.map(({ role, content }) => ({ role, content })),
+    ...(toolMode ? {
+      tools: [{ name: WEB_FETCH_TOOL.name, description: WEB_FETCH_TOOL.description, input_schema: WEB_FETCH_TOOL.parameters }],
+      tool_choice: { type: toolMode },
+    } : {}),
     ...(effort ? { output_config: { effort } } : {}),
   };
 }
 
-function toContentBlocks(message: ChatMessage): ContentBlock[] {
+function toContentBlocks(message: ChatMessage): unknown[] {
+  if (message.toolCallId) {
+    return [{ type: "tool_result", tool_use_id: message.toolCallId, content: message.content }];
+  }
+  if (message.providerContent) {
+    return message.providerContent;
+  }
   const images = message.role === "assistant" ? [] : message.images ?? [];
   return [
     ...images.map((image) => ({
@@ -74,7 +88,7 @@ function toContentBlocks(message: ChatMessage): ContentBlock[] {
   ];
 }
 
-export function readAnthropicMessage(body: unknown): ChatInvocationResult {
+export function readAnthropicMessage(body: unknown, acceptToolCalls = false): ChatInvocationResult {
   const message = asRecord(body);
   readUsage(message);
   recordProviderResponse(message, "anthropic");
@@ -85,12 +99,22 @@ export function readAnthropicMessage(body: unknown): ChatInvocationResult {
     .join("")
     .trim();
   const stopReason = typeof message?.stop_reason === "string" ? message.stop_reason : undefined;
+  const toolCalls: ToolCall[] = acceptToolCalls ? blocks.map(asRecord).flatMap(readToolUse) : [];
+  if (toolCalls.length > 0) {
+    return { content, finishReason: stopReason, toolCalls, providerContent: blocks };
+  }
   if (!content) {
     throw stopReason === "refusal"
       ? emptyResponse("anthropic refusal: content blocked", false)
       : emptyResponse("anthropic 응답에 본문이 없습니다.", true);
   }
   return { content, finishReason: stopReason };
+}
+
+function readToolUse(block: Record<string, unknown> | null): ToolCall[] {
+  return block?.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string"
+    ? [{ id: block.id, name: block.name, arguments: JSON.stringify(block.input ?? {}) }]
+    : [];
 }
 
 function emptyResponse(message: string, retryable: boolean): ProviderApiError {
