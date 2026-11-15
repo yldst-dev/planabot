@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { addTodo, completeTodo, deleteTodo, listTodos, updateTodo } from "./store.js";
+import { addTodo, completeTodo, deleteTodo, listTodos, resolveTodoDir, updateTodo } from "./store.js";
 import { readTodos, saveTodos } from "./persistence.js";
 
 test("todo persistence preserves concurrent updates and damaged data", async (t) => {
@@ -86,6 +86,56 @@ test("todo persistence preserves concurrent updates and damaged data", async (t)
   } finally {
     if (previous === undefined) delete process.env.PLANABRAIN_TODO_DIR;
     else process.env.PLANABRAIN_TODO_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the todo folder stays where every supported environment already put it", async () => {
+  const keys = ["PLANABRAIN_TODO_DIR", "PLANABRAIN_INDEX_PATH", "PLANABRAIN_DATA_DIR"] as const;
+  const saved = keys.map((key) => process.env[key]);
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "planabot-data-"));
+  const repoRoot = path.resolve(process.cwd(), "..");
+  const cases: Array<[Partial<Record<(typeof keys)[number], string>>, string]> = [
+    [{}, path.join(repoRoot, ".planabrain/todos")],
+    [{ PLANABRAIN_DATA_DIR: "/app" }, "/app/.planabrain/todos"],
+    [{ PLANABRAIN_DATA_DIR: dataDir }, path.join(dataDir, ".planabrain/todos")],
+    [{ PLANABRAIN_DATA_DIR: "state" }, path.resolve(process.cwd(), "state/.planabrain/todos")],
+    [{ PLANABRAIN_DATA_DIR: "   " }, path.join(repoRoot, ".planabrain/todos")],
+    [{ PLANABRAIN_DATA_DIR: "/app", PLANABRAIN_INDEX_PATH: ".planabrain/index.json" }, "/app/.planabrain/todos"],
+    [{ PLANABRAIN_DATA_DIR: "/app", PLANABRAIN_INDEX_PATH: "/srv/rag/index.json" }, "/srv/rag/todos"],
+    [{ PLANABRAIN_DATA_DIR: "/app", PLANABRAIN_INDEX_PATH: "custom/index.json" }, "/app/custom/todos"],
+    [{ PLANABRAIN_DATA_DIR: "/app", PLANABRAIN_INDEX_PATH: "" }, "/todos"],
+    [{ PLANABRAIN_DATA_DIR: "/app", PLANABRAIN_INDEX_PATH: "   " }, "/todos"],
+    [{ PLANABRAIN_DATA_DIR: "/app", PLANABRAIN_TODO_DIR: "  " }, "/app/.planabrain/todos"],
+    [{ PLANABRAIN_DATA_DIR: "/app", PLANABRAIN_TODO_DIR: "todos-here", PLANABRAIN_INDEX_PATH: "/srv/rag/index.json" }, "/app/todos-here"],
+  ];
+  try {
+    for (const [env, expected] of cases) {
+      for (const key of keys) delete process.env[key];
+      Object.assign(process.env, env);
+      assert.equal(resolveTodoDir(), expected, JSON.stringify(env));
+    }
+    for (const key of keys) delete process.env[key];
+    process.env.PLANABRAIN_DATA_DIR = dataDir;
+    await addTodo("pinned", "where");
+    assert.deepEqual(await readdir(path.join(dataDir, ".planabrain/todos")), ["pinned.json.revisions"]);
+  } finally {
+    keys.forEach((key, index) => {
+      if (saved[index] === undefined) delete process.env[key];
+      else process.env[key] = saved[index];
+    });
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("a writer holding an old revision still loses after many later saves", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "planabot-todo-stale-"));
+  try {
+    const file = path.join(dir, "stale.json");
+    for (let revision = 0; revision < 60; revision += 1) assert.equal(await saveTodos(file, revision, []), true);
+    for (const stale of [0, 5, 30]) assert.equal(await saveTodos(file, stale, []), false, `revision ${stale}`);
+    assert.equal((await readTodos(file)).revision, 60);
+  } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });

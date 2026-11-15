@@ -1,3 +1,4 @@
+import { readIntSetting } from "../config/env.js";
 import { loadSettings, type Settings } from "../config/settings.js";
 import { evaluateWithCodex } from "./codexJudge.js";
 import { evaluateSystemOne, type DecisionEvaluator, type SystemOneConfig } from "./systemOne.js";
@@ -21,7 +22,7 @@ export function loadDecisionConfig(env: NodeJS.ProcessEnv = process.env): System
     apiKey,
     baseUrl: (env.PLANABRAIN_DECISION_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(/\/+$/u, ""),
     model: env.PLANABRAIN_DECISION_MODEL?.trim() || DEFAULT_MODEL,
-    timeoutMs: readTimeout(env.PLANABRAIN_DECISION_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 10_000),
+    timeoutMs: readIntSetting(env.PLANABRAIN_DECISION_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 200, 10_000),
   };
 }
 
@@ -48,7 +49,7 @@ export function loadDecisionEvaluator(
   if (!ready) {
     return undefined;
   }
-  return codexEvaluator(settings, readTimeout(env.PLANABRAIN_DECISION_CODEX_TIMEOUT_MS, DEFAULT_CODEX_TIMEOUT_MS, 30_000));
+  return codexEvaluator(settings, readIntSetting(env.PLANABRAIN_DECISION_CODEX_TIMEOUT_MS, DEFAULT_CODEX_TIMEOUT_MS, 200, 30_000));
 }
 
 export function jevEvaluator(config: SystemOneConfig): DecisionEvaluator {
@@ -61,9 +62,4 @@ export function codexEvaluator(settings: Settings, timeoutMs = DEFAULT_CODEX_TIM
 
 function readProvider(env: NodeJS.ProcessEnv): string {
   return env.PLANABRAIN_DECISION_PROVIDER?.trim().toLowerCase() ?? "";
-}
-
-function readTimeout(raw: string | undefined, fallback: number, max: number): number {
-  const value = Number(raw);
-  return Number.isInteger(value) && value >= 200 && value <= max ? value : fallback;
 }

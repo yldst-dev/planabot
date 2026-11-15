@@ -3,6 +3,7 @@ import type { Settings } from "../../config/settings.js";
 import type { RecentTurnInput } from "../../chat/webSearchAnswer.js";
 import { runAsk, type AskInput } from "../../application/turnService.js";
 import { parseTurnSignals } from "../../decision/turnSignals.js";
+import { readEnvOrFile } from "../envFile.js";
 export { runAsk, type AskInput } from "../../application/turnService.js";
 
 export async function runAskCommand(args: string[], settings: Settings): Promise<void> {
@@ -22,7 +23,6 @@ export async function runAskCommand(args: string[], settings: Settings): Promise
     throw new Error("Usage: planabrain ask <question>");
   }
 
-  const imageFile = process.env.PLANABRAIN_IMAGE_FILE?.trim();
   const images = readImageFiles(process.env.PLANABRAIN_IMAGE_FILES);
   const result = await runAsk(
     {
@@ -31,19 +31,22 @@ export async function runAskCommand(args: string[], settings: Settings): Promise
       requestId: process.env.PLANABRAIN_REQUEST_ID,
       chatScope: process.env.PLANABRAIN_CHAT_SCOPE,
       conversationId: process.env.PLANABRAIN_CONVERSATION_ID,
-      currentTurnText: process.env.PLANABRAIN_CURRENT_TURN_TEXT,
-      memoryContext: process.env.PLANABRAIN_MEMORY_CONTEXT,
-      image: imageFile
-        ? { path: imageFile, mimeType: process.env.PLANABRAIN_IMAGE_MIME_TYPE?.trim() }
-        : undefined,
+      ...(await readTurnEnv()),
       images,
       imageNotice: process.env.PLANABRAIN_IMAGE_NOTICE?.trim() || undefined,
       recentTurns: await readRecentTurnsFile(process.env.PLANABRAIN_RECENT_TURNS_FILE),
-      signals: readSignals(process.env.PLANABRAIN_TURN_SIGNALS),
     },
     settings,
   );
   process.stdout.write(`${process.env.PLANABRAIN_OUTPUT_JSON === "1" ? JSON.stringify(result) : result.answer}\n`);
+}
+
+export async function readTurnEnv(): Promise<Pick<AskInput, "currentTurnText" | "memoryContext" | "signals">> {
+  return {
+    currentTurnText: await readEnvOrFile("PLANABRAIN_CURRENT_TURN_TEXT"),
+    memoryContext: await readEnvOrFile("PLANABRAIN_MEMORY_CONTEXT"),
+    signals: readSignals(await readEnvOrFile("PLANABRAIN_TURN_SIGNALS")),
+  };
 }
 
 function readImageFiles(raw: string | undefined): AskInput["images"] {

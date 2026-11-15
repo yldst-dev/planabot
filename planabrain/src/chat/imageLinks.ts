@@ -1,6 +1,6 @@
 import type { Settings } from "../config/settings.js";
 import type { InputImage } from "../integrations/chat.js";
-import { extractUrls, fetchWebImage } from "../integrations/webFetch.js";
+import { NonRetryableWebFetchError, extractUrls, fetchWebImage } from "../integrations/webFetch.js";
 import { checkExecution } from "../runtime/execution.js";
 
 export const MAX_TURN_IMAGES = 4;
@@ -70,6 +70,6 @@ export async function loadLinkedImage(settings: Settings, url: string): Promise<
     checkExecution();
     const reason = error instanceof Error ? error.message : String(error);
     console.error(`[planabrain] 이미지 링크 가져오기 실패: ${reason}`);
-    return { failure: /크기가 제한을 초과/u.test(reason) ? "too_large" : "failed" };
+    return { failure: error instanceof NonRetryableWebFetchError && error.kind === "too_large" ? "too_large" : "failed" };
   }
 }

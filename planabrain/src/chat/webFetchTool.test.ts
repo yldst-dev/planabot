@@ -14,7 +14,8 @@ import { FAKE_PUBLIC_HOST, installFakeHttps } from "../testing/fakeHttps.js";
 import { codexInputText, codexStream, codexToolCalls, installFetch, jsonResponse, type CapturedRequest } from "../testing/codex.js";
 import { testSettings } from "../testing/settings.js";
 import { messageTokens } from "./contextBudget.js";
-import { extractImageUrls } from "./imageLinks.js";
+import { fetchWebImage, fetchWebPage } from "../integrations/webFetch.js";
+import { extractImageUrls, loadLinkedImage } from "./imageLinks.js";
 import { collectReadableLinks, createWebFetchRunner, readableTurnText } from "./linkContext.js";
 import { selectReadPageCitations } from "./sourceSelection.js";
 
@@ -264,6 +265,51 @@ test("a page that never reached the model is not cited or remembered", async () 
   round.discard?.();
   assert.deepEqual(runner.citations(), []);
   assert.deepEqual(runner.readUrls(), []);
+});
+
+test("a discarded page can be read again with its characters returned to the budget", async () => {
+  const links = [{ url: "https://site.example/a", source: "현재 메시지" }];
+  const runner = createWebFetchRunner({ ...settings(), webFetchMaxTotalChars: 50 }, links, { fetch: page(links[0].url, "가".repeat(50)) });
+  (await runner.run([call(links[0].url)])).discard?.();
+  const again = await runner.run([call(links[0].url)]);
+  assert.doesNotMatch(again.outputs[0].output, /이미 읽은 링크/u);
+  assert.match(again.outputs[0].output, /"status":"fetched"/u);
+  assert.match(again.outputs[0].output, new RegExp(`"content":"${"가".repeat(50)}"`, "u"));
+  assert.deepEqual(runner.readUrls(), [links[0].url]);
+});
+
+test("file links and oversized responses keep their exact messages and outcomes", async () => {
+  const pdf = `https://${FAKE_PUBLIC_HOST}/doc.pdf`;
+  const big = `https://${FAKE_PUBLIC_HOST}/big.png`;
+  const web = installFakeHttps({
+    [pdf]: { body: "%PDF-1.7", contentType: "application/pdf" },
+    [big]: { body: Buffer.alloc(10 * 1024 * 1024 + 1), contentType: "image/png" },
+  });
+  try {
+    await assert.rejects(fetchWebPage(settings(), pdf), (error: Error) => error.message === "지원하지 않는 웹페이지 형식입니다.");
+    await assert.rejects(fetchWebImage(settings(), big, 1024), (error: Error) => error.message === "웹페이지 응답 크기가 제한을 초과했습니다.");
+    assert.deepEqual(await loadLinkedImage(settings(), big), { failure: "too_large" });
+    assert.deepEqual(await loadLinkedImage(settings(), pdf), { failure: "failed" });
+    const round = await createWebFetchRunner(settings(), [{ url: pdf, source: "현재 메시지" }]).run([call(pdf)]);
+    assert.match(round.outputs[0].output, /"status":"unavailable","reason":"웹페이지가 아닌 파일 링크라 본문을 읽지 않았습니다\."/u);
+  } finally {
+    web.restore();
+  }
+});
+
+test("an ip address link is fetched without sending the address as the tls server name", async () => {
+  const url = `https://${FAKE_PUBLIC_HOST}/post/2`;
+  const v6 = "https://[2606:4700::1]/post/3";
+  const html = "<html><head><title>t</title></head><body><p>본문입니다.</p></body></html>";
+  const web = installFakeHttps({ [url]: html, [v6]: html });
+  try {
+    await fetchWebPage(settings(), url);
+    await fetchWebPage(settings(), v6);
+    assert.deepEqual(web.hits, [url, v6]);
+    assert.deepEqual(web.servernames, [undefined, undefined]);
+  } finally {
+    web.restore();
+  }
 });
 
 test("urls that differ only by fragment count as one read", async () => {

@@ -59,6 +59,10 @@ export function loadSettings(): Settings {
     throw new Error("CODEX_GATEWAY_API_KEY is required");
   }
   const ollamaApiKeys = resolveOllamaApiKeys();
+  const ollamaWebSearchEnabled = parseBooleanEnv("PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH", false);
+  const webFetchEnabled = parseBooleanEnv("PLANABRAIN_WEB_FETCH_ENABLED", true);
+  const deliveryRewriteEnabled = parseBooleanEnv("PLANABRAIN_DELIVERY_REWRITE_ENABLED", true);
+  const searchActive = ollamaWebSearchEnabled && ollamaApiKeys.length > 0;
   const personaProfile = resolvePersonaProfile();
   return {
     aiProvider,
@@ -72,20 +76,20 @@ export function loadSettings(): Settings {
     codexImageDetail: parseImageDetailEnv("PLANABRAIN_CODEX_IMAGE_DETAIL"),
     ollamaApiKeys,
     ollamaSearchHost: ollamaApiKeys.length > 0 ? resolveOllamaSearchHost() : undefined,
-    ollamaWebSearchEnabled: parseBooleanEnv("PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH", false),
-    ollamaWebSearchMaxResults: Math.min(10, parseRequiredPositiveIntEnv("PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS", 5)),
-    webFetchEnabled: parseBooleanEnv("PLANABRAIN_WEB_FETCH_ENABLED", true),
-    webFetchTimeoutMs: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_TIMEOUT_MS", 10000, 1000, 30000),
-    webFetchMaxBytes: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_MAX_BYTES", 1000000, 1024, 5000000),
-    webFetchMaxChars: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_MAX_CHARS", 12000, 500, 50000),
-    webFetchMaxTotalChars: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_MAX_TOTAL_CHARS", 18000, 500, 100000),
+    ollamaWebSearchEnabled,
+    ollamaWebSearchMaxResults: Math.min(10, parseRequiredPositiveIntEnv("PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS", 5, searchActive)),
+    webFetchEnabled,
+    webFetchTimeoutMs: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_TIMEOUT_MS", 10000, 1000, 30000, webFetchEnabled),
+    webFetchMaxBytes: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_MAX_BYTES", 1000000, 1024, 5000000, webFetchEnabled),
+    webFetchMaxChars: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_MAX_CHARS", 12000, 500, 50000, webFetchEnabled),
+    webFetchMaxTotalChars: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_MAX_TOTAL_CHARS", 18000, 500, 100000, webFetchEnabled),
     chatModel: anthropic
       ? readOptionalEnv("PLANABRAIN_ANTHROPIC_MODEL") ?? DEFAULT_ANTHROPIC_MODEL
       : readOptionalEnv("PLANABRAIN_CODEX_MODEL") ?? DEFAULT_CODEX_MODEL,
-    deliveryMaxOutputTokens: parseOptionalPositiveIntEnv("PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS", 1024),
-    deliveryRewriteEnabled: parseBooleanEnv("PLANABRAIN_DELIVERY_REWRITE_ENABLED", true),
+    deliveryMaxOutputTokens: parseOptionalPositiveIntEnv("PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS", 1024, deliveryRewriteEnabled),
+    deliveryRewriteEnabled,
     chatThinkingMode: parseThinkingModeEnv("PLANABRAIN_CHAT_THINKING_MODE"),
-    systemPrompt: process.env.PLANABRAIN_SYSTEM_PROMPT ?? resolveDefaultSystemPrompt(personaProfile),
+    systemPrompt: readOptionalEnv("PLANABRAIN_SYSTEM_PROMPT") ?? resolveDefaultSystemPrompt(personaProfile),
     personaProfile,
     intimacyEnabled: parseBooleanEnv("PLANABRAIN_INTIMACY_ENABLED", true),
     continuousChat: parseBooleanEnv("PLANABRAIN_CONTINUOUS_CHAT", false),
@@ -157,8 +161,8 @@ function resolveOllamaApiKeys(): string[] {
   return [...new Set([...splitEnvList(process.env.OLLAMA_API_KEYS), ...splitEnvList(process.env.OLLAMA_API_KEY)])];
 }
 
-function parseOptionalPositiveIntEnv(key: string, defaultValue: number): number | undefined {
-  const raw = process.env[key];
+function parseOptionalPositiveIntEnv(key: string, defaultValue: number, enabled: boolean): number | undefined {
+  const raw = enabled ? process.env[key] : undefined;
   if (raw == null) {
     return defaultValue;
   }
@@ -168,13 +172,13 @@ function parseOptionalPositiveIntEnv(key: string, defaultValue: number): number 
   }
   const value = Number.parseInt(trimmed, 10);
   if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${key} must be a positive integer (or 0 to disable)`);
+    throw new Error(`${key} must be a positive integer (0, false or empty use the default ${defaultValue})`);
   }
   return value;
 }
 
-function parseRequiredPositiveIntEnv(key: string, defaultValue: number): number {
-  const trimmed = process.env[key]?.trim();
+function parseRequiredPositiveIntEnv(key: string, defaultValue: number, enabled: boolean): number {
+  const trimmed = enabled ? process.env[key]?.trim() : undefined;
   if (!trimmed) {
     return defaultValue;
   }
@@ -185,8 +189,8 @@ function parseRequiredPositiveIntEnv(key: string, defaultValue: number): number 
   return value;
 }
 
-function parseBoundedPositiveIntEnv(key: string, defaultValue: number, minValue: number, maxValue: number): number {
-  const value = parseRequiredPositiveIntEnv(key, defaultValue);
+function parseBoundedPositiveIntEnv(key: string, defaultValue: number, minValue: number, maxValue: number, enabled: boolean): number {
+  const value = parseRequiredPositiveIntEnv(key, defaultValue, enabled);
   if (value < minValue || value > maxValue) {
     throw new Error(`${key} must be between ${minValue} and ${maxValue}`);
   }

@@ -549,15 +549,15 @@ function isConditional(text: string): boolean {
   );
 }
 
-function isListRequest(text: string): boolean {
+export function isListRequest(text: string): boolean {
   return hasAny(text, ["뭐", "무엇", "목록", "보여", "알려", "확인", "남았", "있어", "있나요"]);
 }
 
-function hasAny(text: string, words: string[]): boolean {
+export function hasAny(text: string, words: string[]): boolean {
   return words.some((word) => text.includes(word));
 }
 
-function extractUserText(text: string): string {
+export function extractUserText(text: string): string {
   const marker = "사용자 질문:";
   const idx = text.lastIndexOf(marker);
   const value = idx >= 0 ? text.slice(idx + marker.length) : text;
@@ -575,7 +575,7 @@ function cleanupText(text: string): string {
     .slice(0, 500);
 }
 
-function normalizeIntentText(text: string): string {
+export function normalizeIntentText(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 

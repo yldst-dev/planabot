@@ -229,6 +229,9 @@ function appearsBefore(line: string, first: RegExp, second: RegExp): boolean {
   return match !== null && second.test(line.slice(match.index + match[0].length));
 }
 
+export const TIME_SENSITIVE_PATTERN =
+  /(날씨|기온|강수|습도|미세먼지|대기질|환율|시세|주가|코인|암호화폐|금리|뉴스|속보|물가|가격|재고|운행|항공편|교통|경기\s*(?:결과|일정)|스코어|순위|통계|선거\s*결과)/u;
+
 export function isCurrentInformationRequest(currentTurnText: string): boolean {
   const text = normalizeCurrentTurnText(currentTurnText);
   if (!text) {
@@ -237,11 +240,7 @@ export function isCurrentInformationRequest(currentTurnText: string): boolean {
   if (!INFORMATION_REQUEST_FORM_PATTERN.test(text)) {
     return false;
   }
-  if (
-    /(날씨|기온|강수|습도|미세먼지|대기질|환율|시세|주가|코인|암호화폐|금리|뉴스|속보|물가|가격|재고|운행|항공편|교통|경기\s*(?:결과|일정)|스코어|순위|통계|선거\s*결과)/u.test(
-      text,
-    )
-  ) {
+  if (TIME_SENSITIVE_PATTERN.test(text)) {
     return true;
   }
   return text

@@ -123,6 +123,20 @@ test("exhausted retry budgets return the original upstream failure without anoth
   assert.equal(calls, 1);
 });
 
+test("a rate limit that outlasts the retries keeps the upstream error as its cause", async () => {
+  const { withRateLimitRetry, ProviderRateLimitError, RATE_LIMIT_MESSAGE } = await import("../integrations/retry.js");
+  const { ProviderApiError, toStructuredError } = await import("../integrations/providerError.js");
+  const original = new ProviderApiError({ kind: "rate_limited", provider: "codex", status: 429, apiMessage: "slow down" });
+  original.retryAfterMs = 0;
+  await assert.rejects(withRateLimitRetry(async () => { throw original; }), (error) => {
+    assert.ok(error instanceof ProviderRateLimitError);
+    assert.equal(error.cause, original);
+    assert.equal(error.message, RATE_LIMIT_MESSAGE);
+    assert.deepEqual(toStructuredError(error), { kind: "rate_limited", provider: "codex", status: 429, message: "slow down", retryable: true });
+    return true;
+  });
+});
+
 test("delivery rewriting rejects changed numbers and lost negation", async () => {
   const { preservesLiteralFacts } = await import("./deliveryRewrite.js");
   assert.equal(preservesLiteralFacts("519MB 업로드는 완료되지 않았습니다.", "519MB 업로드 완료."), false);

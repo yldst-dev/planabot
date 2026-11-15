@@ -67,7 +67,16 @@ export type WebImageResult = {
   body: Buffer;
 };
 
-class NonRetryableWebFetchError extends Error { }
+export type WebFetchErrorKind = "unsupported_type" | "too_large";
+
+export class NonRetryableWebFetchError extends Error {
+  readonly kind?: WebFetchErrorKind;
+
+  constructor(message: string, kind?: WebFetchErrorKind) {
+    super(message);
+    this.kind = kind;
+  }
+}
 
 export function extractUrls(text: string, maxUrls = 3): string[] {
   if (!Number.isSafeInteger(maxUrls) || maxUrls <= 0) {
@@ -193,7 +202,7 @@ async function fetchPublicResource(
 
     const contentType = normalizeContentType(response.headers["content-type"]);
     if (!kind.allowedTypes.has(contentType)) {
-      throw new Error("지원하지 않는 웹페이지 형식입니다.");
+      throw new NonRetryableWebFetchError("지원하지 않는 웹페이지 형식입니다.", "unsupported_type");
     }
     return { finalUrl: currentUrl, response, contentType };
   }
@@ -390,7 +399,7 @@ function requestPinnedPage(params: {
       port: params.url.port || (params.url.protocol === "https:" ? 443 : 80),
       method: "GET",
       path: `${params.url.pathname}${params.url.search}`,
-      servername: params.url.hostname,
+      servername: isIP(normalizeHostname(params.url.hostname)) > 0 ? undefined : params.url.hostname,
       rejectUnauthorized: true,
       agent: false,
       headers: {
@@ -415,7 +424,7 @@ function requestPinnedPage(params: {
       }
       const contentType = normalizeContentType(response.headers["content-type"]);
       if (!allowedTypes.has(contentType)) {
-        rejectOnce(new NonRetryableWebFetchError("지원하지 않는 웹페이지 형식입니다."));
+        rejectOnce(new NonRetryableWebFetchError("지원하지 않는 웹페이지 형식입니다.", "unsupported_type"));
         response.destroy();
         return;
       }
@@ -436,7 +445,7 @@ function requestPinnedPage(params: {
         return;
       }
       if (contentLength > maxBytes) {
-        rejectOnce(new NonRetryableWebFetchError("웹페이지 응답 크기가 제한을 초과했습니다."));
+        rejectOnce(new NonRetryableWebFetchError("웹페이지 응답 크기가 제한을 초과했습니다.", "too_large"));
         response.destroy();
         return;
       }
@@ -450,7 +459,7 @@ function requestPinnedPage(params: {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         totalBytes += buffer.length;
         if (totalBytes > maxBytes) {
-          rejectOnce(new NonRetryableWebFetchError("웹페이지 응답 크기가 제한을 초과했습니다."));
+          rejectOnce(new NonRetryableWebFetchError("웹페이지 응답 크기가 제한을 초과했습니다.", "too_large"));
           response.destroy();
           return;
         }

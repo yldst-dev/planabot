@@ -7,7 +7,7 @@ import {
   type TodoItem,
   type TodoMutationOutput
 } from "./store.js";
-import { EARLIER_COMMAND, NOON_OR_MIDNIGHT_PATTERN } from "../schedule/intent.js";
+import { EARLIER_COMMAND, NOON_OR_MIDNIGHT_PATTERN, extractUserText, hasAny, isListRequest, normalizeIntentText } from "../schedule/intent.js";
 
 const MAX_RULE_TEXT_CHARS = 600;
 const MAX_SPLITS = 10;
@@ -642,15 +642,6 @@ function stripTodoCommandTail(text: string): string {
   return value;
 }
 
-function extractUserText(text: string): string {
-  const marker = "사용자 질문:";
-  const idx = text.lastIndexOf(marker);
-  const value = idx >= 0 ? text.slice(idx + marker.length) : text;
-  const questionMarker = "질문:";
-  const questionIdx = value.lastIndexOf(questionMarker);
-  return (questionIdx >= 0 ? value.slice(questionIdx + questionMarker.length) : value).trim();
-}
-
 function isTodoRelated(text: string): boolean {
   return /할\s*일|to-?do|투두|체크리스트/u.test(text);
 }
@@ -662,18 +653,6 @@ function isTodoContextText(text: string): boolean {
     "- [ ]",
     "- [x]"
   ]);
-}
-
-function isListRequest(text: string): boolean {
-  return hasAny(text, ["뭐", "무엇", "목록", "보여", "알려", "확인", "남았", "있어", "있나요"]);
-}
-
-function hasAny(text: string, words: string[]): boolean {
-  return words.some((word) => text.includes(word));
-}
-
-function normalizeIntentText(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function emptyOutput(): TodoInterpretOutput {

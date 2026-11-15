@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.5"
+    "node": ">=22.13"
   },
   "scripts": {
     "dev": "tsx src/cli/index.ts",
-    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json",
     "test": "node --import tsx --test $(find src -name '*.test.ts' | sort)",
     "start": "node dist/cli/index.js",
     "eval:prana": "node --import tsx src/evaluation/prana.ts",
@@ -22,8 +22,5 @@
     "@types/node": "^22.10.2",
     "tsx": "^4.23.1",
     "typescript": "^5.7.2"
-  },
-  "overrides": {
-    "uuid": "^14.0.0"
   }
 }

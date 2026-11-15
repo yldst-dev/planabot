@@ -25,7 +25,7 @@ export function buildSearchQuery(text: string): string {
   return stripped.length >= 2 ? stripped : normalized;
 }
 
-export async function runPreSearch(
+export async function performPreSearch(
   settings: Settings,
   query: string,
 ): Promise<PreSearchContext | null> {
@@ -83,11 +83,4 @@ export function buildPreSearchContext(query: string, citations: WebCitation[]): 
     }
   });
   return lines.join("\n");
-}
-
-export async function performPreSearch(
-  settings: Settings,
-  query: string,
-): Promise<PreSearchContext | null> {
-  return runPreSearch(settings, query);
 }

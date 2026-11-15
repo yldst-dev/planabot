@@ -1,6 +1,6 @@
 import { type Settings } from "../config/settings.js";
 import { type InputImage, type ToolCall, type WebCitation, type WebFetchRunner, isSecretParam, mergeWebCitations } from "../integrations/chat.js";
-import { extractUrls, fetchWebPage } from "../integrations/webFetch.js";
+import { NonRetryableWebFetchError, extractUrls, fetchWebPage } from "../integrations/webFetch.js";
 import { consumeTool } from "../runtime/execution.js";
 import { isImageUrl, loadLinkedImage, youtubeThumbnail } from "./imageLinks.js";
 import { type RecentTurnInput } from "./types.js";
@@ -8,7 +8,6 @@ import { type RecentTurnInput } from "./types.js";
 const MAX_READABLE_LINKS = 10;
 const MAX_PREVIEW_IMAGES = 2;
 const URL_WITH_PARTICLE = /(https?:\/\/[^\s<>]+?)(?:으로는|으로도|으로|에서는|에서도|에서|에게|에는|에도|까지는|까지도|까지만|까지|부터는|부터|이라는|이라고|이나|이랑|라는|라고|로는|로도|을|를|이|가|은|는|의|에|도|로|와|과|만|랑)(?=[.,;:!?)\]}'"`]*(?:\s|$))/giu;
-const UNSUPPORTED_PAGE_MESSAGE = "지원하지 않는 웹페이지 형식입니다.";
 
 export type ReadableLink = { url: string; source: string; };
 
@@ -68,26 +67,30 @@ export function createWebFetchRunner(
   let remainingChars = settings.webFetchMaxTotalChars;
   let remainingImages = Math.min(MAX_PREVIEW_IMAGES, options.maxPreviewImages ?? MAX_PREVIEW_IMAGES);
 
-  const readCall = async (call: ToolCall): Promise<FetchedLink> => {
+  const readCall = async (call: ToolCall, roundRead: string[]): Promise<FetchedLink> => {
     const url = parseToolCallUrl(call);
     if (!url) return unavailable("", "주소를 읽지 못했습니다.");
     if (!isListedLink(links, url)) return unavailable("", "대화에 나온 링크만 읽을 수 있습니다.");
     if (read.has(url)) return unavailable(url, "이미 읽은 링크입니다. 앞선 결과를 쓰십시오.");
     if (remainingChars <= 0 || !consumeTool()) return unavailable(url, "이번 답변에서 읽을 수 있는 분량을 모두 썼습니다.");
     read.add(url);
+    roundRead.push(url);
     return readLink(settings, url);
   };
 
   const run: WebFetchRunner = async (calls) => {
-    const fetched = await Promise.all(calls.map(readCall));
+    const roundRead: string[] = [];
+    const fetched = await Promise.all(calls.map((call) => readCall(call, roundRead)));
     const images = await attachPreviewImages(settings, fetched, remainingImages);
     remainingImages -= images.length;
     const roundPages: typeof pages = [];
+    let roundChars = 0;
     let pending = fetched.filter((link) => link.document.status === "fetched").length;
     const outputs = fetched.map((link, index) => {
       const document = link.document;
       if (document.status === "fetched" && typeof document.content === "string") {
         document.content = truncateContextText(document.content, Math.max(1, Math.floor(remainingChars / pending)));
+        roundChars += (document.content as string).length;
         remainingChars -= (document.content as string).length;
         pending -= 1;
         roundPages.push({ url: String(document.source_url), citations: toCitation(document) });
@@ -96,7 +99,16 @@ export function createWebFetchRunner(
       return { callId: calls[index].id, output: renderWebFetchOutput(document) };
     });
     pages = [...pages, ...roundPages];
-    return { outputs, images, discard: () => { pages = pages.filter((page) => !roundPages.includes(page)); } };
+    let discarded = false;
+    const discard = (): void => {
+      if (discarded) return;
+      discarded = true;
+      pages = pages.filter((page) => !roundPages.includes(page));
+      for (const url of roundRead) read.delete(url);
+      remainingChars += roundChars;
+      remainingImages += images.length;
+    };
+    return { outputs, images, discard };
   };
   return {
     run,
@@ -192,7 +204,7 @@ async function fetchLink(settings: Settings, url: string): Promise<FetchedLink> 
       imageUrl: page.imageUrl,
     };
   } catch (error) {
-    if (error instanceof Error && error.message === UNSUPPORTED_PAGE_MESSAGE) {
+    if (error instanceof NonRetryableWebFetchError && error.kind === "unsupported_type") {
       return {
         document: {
           source_url: redactSensitiveUrl(url),

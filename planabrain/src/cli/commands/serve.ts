@@ -14,6 +14,8 @@ import type { RecentTurnInput } from "../../chat/webSearchAnswer.js";
 import { runAsk, type AskInput } from "../../application/turnService.js";
 import { prepareTurn, parseTurnPrepareInput } from "../../application/prepareTurn.js";
 import { parseTurnSignals } from "../../decision/turnSignals.js";
+import { listTodos } from "../../todo/store.js";
+import { interpretScheduleCommand } from "./schedule.js";
 import type { CommandContext } from "../registry.js";
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -181,6 +183,16 @@ async function handleRequest(
         writeJson(response, 200, { userId, removed: resetUserMemory(userId) });
         return;
       }
+      case "/v1/schedule-interpret": {
+        const input = validatedParse(parseScheduleInterpretInput, raw);
+        writeJson(response, 200, await interpretScheduleCommand(input.text, input.nowMs));
+        return;
+      }
+      case "/v1/todo-list": {
+        const userId = validatedParse((body) => readRequiredString(parseObject(body).userId, "userId"), raw);
+        writeJson(response, 200, await listTodos(userId));
+        return;
+      }
       default:
         writeJson(response, 404, { error: { kind: "unknown", message: "지원하지 않는 경로입니다" } });
     }
@@ -244,6 +256,14 @@ function parseRecentTurns(value: unknown): RecentTurnInput[] | undefined {
     });
   }
   return turns;
+}
+
+export function parseScheduleInterpretInput(raw: string): { text: string; nowMs: number; } {
+  const record = parseObject(raw);
+  const text = typeof record.text === "string" ? record.text.trim() : "";
+  if (!text) throw new Error("요청에 text가 필요합니다");
+  if (typeof record.nowMs !== "number" || !Number.isFinite(record.nowMs) || record.nowMs <= 0) throw new Error("요청에 nowMs가 필요합니다");
+  return { text, nowMs: record.nowMs };
 }
 
 export function parseMemoryScopeInput(raw: string): { userId: string; chatId: string; memoryId?: number; } {

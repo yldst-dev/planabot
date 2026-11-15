@@ -1,10 +1,14 @@
 import { readFile } from "node:fs/promises";
-import { estimateTokenCount, type TokenEstimationOptions } from "tokenx";
+import { estimateTokenCount } from "tokenx";
 
-type ModelProfile = {
-  name: string;
-  options: TokenEstimationOptions;
-};
+const DEFAULT_CHARS_PER_TOKEN = 4;
+
+const PROFILE_LABELS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
+  ["openai", ["gpt", "openai", "o1", "o3", "o4"]],
+  ["anthropic", ["claude", "anthropic"]],
+  ["gemini", ["gemini", "google"]],
+  ["open", ["llama", "mistral", "mixtral", "deepseek", "qwen", "phi", "grok"]],
+];
 
 export async function runTokensCommand(args: string[]): Promise<void> {
   const explicitModel = args[0]?.trim() ?? "";
@@ -27,9 +31,8 @@ export async function runTokensCommand(args: string[]): Promise<void> {
     throw new Error("Usage: planabrain tokens <model> <text>");
   }
 
-  const profile = resolveModelProfile(model);
   const multiplier = resolveSafetyMultiplier();
-  const rawTokens = estimateTokenCount(text, profile.options);
+  const rawTokens = estimateTokenCount(text, { defaultCharsPerToken: DEFAULT_CHARS_PER_TOKEN });
   const adjustedTokens = Math.max(1, Math.ceil(rawTokens * multiplier));
 
   process.stdout.write(
@@ -38,8 +41,8 @@ export async function runTokensCommand(args: string[]): Promise<void> {
       rawTokens,
       estimator: "tokenx",
       model,
-      profile: profile.name,
-      defaultCharsPerToken: profile.options.defaultCharsPerToken,
+      profile: resolveProfileLabel(model),
+      defaultCharsPerToken: DEFAULT_CHARS_PER_TOKEN,
       multiplier,
     })}\n`,
   );
@@ -64,55 +67,9 @@ function stripModelPrefix(model: string): string {
   return model.trim().replace(/^models\//, "");
 }
 
-function resolveModelProfile(model: string): ModelProfile {
+function resolveProfileLabel(model: string): string {
   const value = model.toLowerCase();
-
-  if (
-    value.includes("gpt") ||
-    value.includes("openai") ||
-    value.includes("o1") ||
-    value.includes("o3") ||
-    value.includes("o4")
-  ) {
-    return {
-      name: "openai",
-      options: { defaultCharsPerToken: 4 },
-    };
-  }
-
-  if (value.includes("claude") || value.includes("anthropic")) {
-    return {
-      name: "anthropic",
-      options: { defaultCharsPerToken: 4 },
-    };
-  }
-
-  if (value.includes("gemini") || value.includes("google")) {
-    return {
-      name: "gemini",
-      options: { defaultCharsPerToken: 4 },
-    };
-  }
-
-  if (
-    value.includes("llama") ||
-    value.includes("mistral") ||
-    value.includes("mixtral") ||
-    value.includes("deepseek") ||
-    value.includes("qwen") ||
-    value.includes("phi") ||
-    value.includes("grok")
-  ) {
-    return {
-      name: "open",
-      options: { defaultCharsPerToken: 4 },
-    };
-  }
-
-  return {
-    name: "generic",
-    options: { defaultCharsPerToken: 4 },
-  };
+  return PROFILE_LABELS.find(([, needles]) => needles.some((needle) => value.includes(needle)))?.[0] ?? "generic";
 }
 
 function resolveSafetyMultiplier(): number {

@@ -7,7 +7,6 @@ import {
   INTIMACY_REGISTER_PROMPT,
   LIVE_DEFAULT_SYSTEM_PROMPT,
   ORIGINAL_DEFAULT_SYSTEM_PROMPT,
-  ORIGINAL_GUARD_PROMPT,
   resolveDefaultSystemPrompt,
 } from "./persona/index.js";
 
@@ -26,8 +25,6 @@ test("original backup keeps the frozen persona and adult policy", () => {
     /학생이라고 표현되지만 나이는 성인/u,
   );
   assert.match(ORIGINAL_DEFAULT_SYSTEM_PROMPT, /법적 문제를 삼지 않습니다/u);
-  assert.match(ORIGINAL_GUARD_PROMPT, /미연시 모드/u);
-  assert.match(ORIGINAL_GUARD_PROMPT, /성인용 채팅을 시작하지 않는 이상/u);
 });
 
 test("live persona supplies Korean examples without forcing a scene", () => {

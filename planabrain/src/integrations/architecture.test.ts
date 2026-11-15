@@ -29,7 +29,7 @@ test("continuation retains pre-search evidence", async () => {
     return codexStream(calls === 1 ? "첫 문장." : "추가 문장.", { incomplete: calls === 1 });
   });
   try {
-    await invokeChatWithMetadata({ settings: testSettings(), messages: [{ role: "user", content: "오늘 뉴스" }], preSearchQuery: "오늘 뉴스" });
+    await answerTurn({ question: "오늘 뉴스를 검색해줘", settings: testSettings({ searchQueryRewriteEnabled: false }) });
     const chats = mock.codexRequests();
     assert.equal(chats.length, 2);
     assert.ok(chats.every((request) => codexInputText(request).includes("검증 자료")));

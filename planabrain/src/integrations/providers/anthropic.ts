@@ -1,6 +1,7 @@
 import { WEB_FETCH_TOOL, type ChatInvocationResult, type ChatMessage, type ToolCall, type ToolMode } from "../contracts.js";
 import { fetchWithTimeout, ProviderApiError } from "../providerError.js";
 import { readUsage, recordProviderResponse } from "../responseMetadata.js";
+import { consumeCall } from "../../runtime/execution.js";
 import { withRateLimitRetry } from "../retry.js";
 import { buildProviderApiError, readJsonOrText } from "../transport/httpError.js";
 import { asRecord, stringifyWellFormed } from "../value.js";
@@ -22,6 +23,7 @@ export async function invokeAnthropicChat(
   }
   const payload = buildAnthropicPayload(settings, messages, toolMode);
   return withRateLimitRetry(async () => {
+    consumeCall();
     const response = await fetchWithTimeout(ANTHROPIC_MESSAGES_URL, {
       method: "POST",
       headers: {

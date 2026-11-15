@@ -5,14 +5,12 @@ import { answerTurn } from "../chat/webSearchAnswer.js";
 import { buildSystemPrompt } from "../config/systemPrompt.js";
 import type { Settings } from "../config/settings.js";
 import { testSettings } from "../testing/settings.js";
-import { codexStream, installFetch, jsonResponse } from "../testing/codex.js";
+import { codexInputText, codexStream, installFetch, jsonResponse } from "../testing/codex.js";
 import { buildSearchQuery, invokeChatWithMetadata, performPreSearch } from "./chat.js";
 
 function createSettings(overrides: Partial<Settings> = {}): Settings {
   return testSettings({ continuousChat: false, searchQueryRewriteEnabled: false, ...overrides });
 }
-
-type InputItem = { role: string; content: string; };
 
 function installGateway(options: { searchFails?: boolean; } = {}): ReturnType<typeof installFetch> {
   return installFetch((request) => {
@@ -45,58 +43,7 @@ test("system prompt uses the search-context rules when search is enabled", () =>
   assert.match(buildSystemPrompt(createSettings()), /웹 검색 도구를 사용할 수 없습니다/u);
 });
 
-test("pre-search injects results before the last user message and records citations", async () => {
-  const mock = installGateway();
-  try {
-    const result = await invokeChatWithMetadata({
-      settings: createSettings(),
-      preSearchQuery: "대전의 날씨",
-      messages: [
-        { role: "system", content: "시스템" },
-        { role: "user", content: "대전의 날씨를 알아봐줘" },
-      ],
-    });
-
-    assert.equal(mock.requests.length, 2);
-    const [search, chat] = mock.requests;
-    assert.ok(search?.url.endsWith("/api/web_search"));
-    assert.equal(search?.body.query, "대전의 날씨");
-    assert.equal(search?.body.max_results, 3);
-    assert.equal(chat?.body.instructions, "시스템");
-    const input = chat?.body.input as InputItem[];
-    assert.equal(input.length, 2);
-    assert.match(input[0]!.content, /\[웹 검색 결과\]/u);
-    assert.match(input[0]!.content, /https:\/\/weather\.example\/daejeon/u);
-    assert.equal(input[1]!.content, "대전의 날씨를 알아봐줘");
-    assert.equal(result.searchUsed, true);
-    assert.equal(result.citations[0]?.url, "https://weather.example/daejeon");
-  } finally {
-    mock.restore();
-  }
-});
-
-test("pre-search failure falls back to a plain chat request", async () => {
-  const mock = installGateway({ searchFails: true });
-  const originalError = console.error;
-  console.error = () => {};
-  try {
-    const result = await invokeChatWithMetadata({
-      settings: createSettings(),
-      preSearchQuery: "대전의 날씨",
-      messages: [{ role: "user", content: "대전의 날씨를 알아봐줘" }],
-    });
-    assert.equal(mock.requests.length, 3);
-    assert.equal(mock.requests.filter((request) => request.url.endsWith("/api/web_search")).length, 2);
-    assert.equal((mock.requests[2]?.body.input as InputItem[]).length, 1);
-    assert.equal(result.searchUsed, false);
-    assert.equal(result.citations.length, 0);
-  } finally {
-    console.error = originalError;
-    mock.restore();
-  }
-});
-
-test("pre-search is skipped without a query", async () => {
+test("a plain chat invocation makes no search request", async () => {
   const mock = installGateway();
   try {
     await invokeChatWithMetadata({ settings: createSettings(), messages: [{ role: "user", content: "안녕" }] });
@@ -120,6 +67,9 @@ test("weather questions answer with verified sources through the gateway", async
     assert.match(answer, /출처: \[대전 날씨\]\(https:\/\/weather\.example\/daejeon\)/u);
     assert.equal(mock.requests[0]?.body.query, "대전의 날씨");
     assert.match(String(mock.requests[1]?.body.instructions), /\[웹 검색 결과\]/u);
+    const input = codexInputText(mock.codexRequests()[0]!);
+    assert.ok(input.indexOf("https://weather.example/daejeon") >= 0);
+    assert.ok(input.indexOf("https://weather.example/daejeon") < input.lastIndexOf("대전의 날씨를 알아봐줘"));
   } finally {
     mock.restore();
   }
@@ -380,3 +330,20 @@ test("a long whitespace-heavy message is not a clock question and is checked qui
   assert.ok(Date.now() - startedAt < 200);
 });
 
+
+test("search requests and their retries do not spend the model call budget", async () => {
+  const { runExecution } = await import("../runtime/execution.js");
+  const mock = installFetch((request) => request.url.includes("/api/web_search")
+    ? jsonResponse({ error: "busy" }, 503)
+    : codexStream("검색 없이 답합니다."));
+  try {
+    const answer = await runExecution("search-budget", async () => {
+      assert.equal(await performPreSearch(createSettings(), "대전 날씨"), null);
+      return invokeChatWithMetadata({ settings: createSettings(), messages: [{ role: "user", content: "대전 날씨" }] });
+    }, { maxCalls: 1 });
+    assert.equal(answer.content, "검색 없이 답합니다.");
+    assert.equal(mock.requests.filter((request) => request.url.includes("/api/web_search")).length, 2);
+  } finally {
+    mock.restore();
+  }
+});

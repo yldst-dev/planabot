@@ -1,4 +1,6 @@
-import { abortScopeSignal, currentExecution, consumeCall, ExecutionLimitError } from "../runtime/execution.js";
+import { readIntSetting } from "../config/env.js";
+import { abortScopeSignal, checkExecution, currentExecution, ExecutionLimitError } from "../runtime/execution.js";
+import { asRecord } from "./value.js";
 
 export type ProviderErrorKind =
   | "credit_exhausted"
@@ -73,8 +75,9 @@ export class ProviderApiError extends Error {
     retryable?: boolean;
     message?: string;
     upstreamProvider?: string;
+    cause?: unknown;
   }) {
-    super(params.message ?? params.apiMessage ?? params.kind);
+    super(params.message ?? params.apiMessage ?? params.kind, params.cause === undefined ? undefined : { cause: params.cause });
     this.name = "ProviderApiError";
     this.kind = params.kind;
     this.provider = params.provider ?? null;
@@ -83,13 +86,6 @@ export class ProviderApiError extends Error {
     this.retryable = params.retryable ?? isRetryable(params.kind);
     this.upstreamProvider = params.upstreamProvider;
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  return value as Record<string, unknown>;
 }
 
 function errorMessage(error: unknown): string {
@@ -230,24 +226,12 @@ export function formatStructuredErrorLine(
   return `PLANABRAIN_ERROR_JSON:${JSON.stringify(structured)}`;
 }
 
-function readHttpTimeoutMs(): number {
-  const raw = process.env.PLANABRAIN_HTTP_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "") {
-    return DEFAULT_HTTP_TIMEOUT_MS;
-  }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
-    return DEFAULT_HTTP_TIMEOUT_MS;
-  }
-  return parsed;
-}
-
 export async function fetchWithTimeout(
   url: string | URL,
   init?: RequestInit,
 ): Promise<Response> {
-  consumeCall();
-  const timeoutMs = readHttpTimeoutMs();
+  checkExecution();
+  const timeoutMs = readIntSetting(process.env.PLANABRAIN_HTTP_TIMEOUT_MS, DEFAULT_HTTP_TIMEOUT_MS, 0);
   const signals = [init?.signal, currentExecution()?.signal, abortScopeSignal(), timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined]
     .filter((signal): signal is AbortSignal => Boolean(signal));
   const signal = signals.length > 0 ? AbortSignal.any(signals) : undefined;

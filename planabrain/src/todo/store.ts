@@ -224,15 +224,15 @@ function todoFilePath(userId: string): string {
   return path.join(resolveTodoDir(), `${safeUserId(userId)}.json`);
 }
 
-function resolveTodoDir(): string {
+export function resolveTodoDir(): string {
   const explicit = process.env.PLANABRAIN_TODO_DIR?.trim();
   if (explicit) {
     return resolveDataPath(explicit);
   }
-  const indexPath = resolveDataPath(
-    process.env.PLANABRAIN_INDEX_PATH ?? ".planabrain/index.json",
-  );
-  return path.join(path.dirname(indexPath), "todos");
+  const legacyIndexPath = process.env.PLANABRAIN_INDEX_PATH;
+  return legacyIndexPath === undefined
+    ? resolveDataPath(".planabrain/todos")
+    : path.join(path.dirname(resolveDataPath(legacyIndexPath)), "todos");
 }
 
 function safeUserId(userId: string): string {

@@ -13,12 +13,16 @@ export const RATE_LIMIT_MESSAGE = [
 ].join("\n");
 
 export class ProviderRateLimitError extends ProviderApiError {
-  constructor(message: string) {
+  constructor(message: string, cause?: unknown) {
+    const original = cause === undefined ? undefined : toStructuredError(cause);
     super({
       kind: "rate_limited",
+      provider: original?.provider,
       status: 429,
       retryable: true,
       message,
+      apiMessage: original?.message,
+      cause,
     });
     this.name = "ProviderRateLimitError";
   }
@@ -38,7 +42,7 @@ export async function withRateLimitRetry<T>(fn: () => Promise<T>): Promise<T> {
         throw error;
       }
       if (attempt >= RATE_LIMIT_MAX_RETRIES) {
-        if (status === 429) throw new ProviderRateLimitError(RATE_LIMIT_MESSAGE);
+        if (status === 429) throw new ProviderRateLimitError(RATE_LIMIT_MESSAGE, error);
         throw error;
       }
       const retryAfterMs = (error as { retryAfterMs?: number; }).retryAfterMs;

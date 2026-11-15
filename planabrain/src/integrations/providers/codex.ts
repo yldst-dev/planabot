@@ -1,6 +1,7 @@
 import { WEB_FETCH_TOOL, type ChatInvocationResult, type ChatMessage, type ToolCall, type ToolMode } from "../contracts.js";
 import { fetchWithTimeout, ProviderApiError } from "../providerError.js";
 import { readUsage, recordProviderResponse } from "../responseMetadata.js";
+import { consumeCall } from "../../runtime/execution.js";
 import { withRateLimitRetry } from "../retry.js";
 import { buildProviderApiError, readJsonOrText } from "../transport/httpError.js";
 import { asRecord, stringifyWellFormed } from "../value.js";
@@ -26,6 +27,7 @@ export async function invokeCodexChat(
   }
   const payload = buildCodexPayload(settings, messages, toolMode);
   return withRateLimitRetry(async () => {
+    consumeCall();
     const response = await fetchWithTimeout(`${settings.codexBaseUrl}/responses`, {
       method: "POST",
       headers: {

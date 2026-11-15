@@ -1,6 +1,5 @@
 import { type ChatMessage, type ChatInvocationParams, type ChatInvocationMetadata, type ChatInvocationResult, type ToolMode, type WebCitation, type WireMessage } from "./contracts.js";
 import { MAX_CONTEXT_TOKENS, contextTokens, fitContextMessages, imageTokenEstimate } from "../chat/contextBudget.js";
-import { runPreSearch } from "./search.js";
 import { sanitizeAssistantOutput } from "../chat/sanitizeOutput.js";
 import { normalizeContinuationArtifacts, mergeContinuationContent, shouldContinueChat } from "./continuation.js";
 import { invokeAnthropicChat } from "./providers/anthropic.js";
@@ -13,21 +12,6 @@ const MAX_WEB_FETCH_CALLS = 8;
 const WEB_FETCH_IMAGE_NOTE = "방금 읽은 링크의 미리보기 이미지입니다. 질문과 관련 있거나 본문이 부족할 때만 참고하고, 그렇지 않으면 언급하지 않습니다.";
 const WEB_FETCH_TOO_LONG = "대화와 참고 자료가 이미 길어 이 페이지를 읽지 못했습니다. 읽지 못했다고 밝히고 내용을 추측하지 마십시오.";
 
-export function insertBeforeLastUserMessage(
-  messages: ChatMessage[],
-  message: ChatMessage,
-): ChatMessage[] {
-  const lastUserIndex = messages.map((item) => item.role).lastIndexOf("user");
-  if (lastUserIndex < 0) {
-    return [...messages, message];
-  }
-  return [
-    ...messages.slice(0, lastUserIndex),
-    message,
-    ...messages.slice(lastUserIndex),
-  ];
-}
-
 export async function invokeChat(params: ChatInvocationParams): Promise<string> {
   const output = await invokeChatWithMetadata(params);
   return output.content;
@@ -37,24 +21,11 @@ export async function invokeChatWithMetadata(
   params: ChatInvocationParams,
 ): Promise<ChatInvocationMetadata> {
   const imageTokens = imageTokenEstimate(params.settings.codexImageDetail);
-  let workingMessages = params.preSearchQuery ? fitContextMessages(params.messages, false, imageTokens) : params.messages;
+  let workingMessages = fitContextMessages(params.messages, false, imageTokens);
   let combined = "";
   let citations: WebCitation[] = [];
   let searchUsed = false;
   const maxContinuations = Math.min(2, Math.max(0, params.maxContinuations ?? 2));
-  const preSearch = params.preSearchQuery
-    ? await runPreSearch(params.settings, params.preSearchQuery)
-    : null;
-  if (preSearch) {
-    workingMessages = insertBeforeLastUserMessage(workingMessages, {
-      role: "user",
-      content: preSearch.context,
-      contextKind: "evidence",
-    });
-    citations = preSearch.citations;
-    searchUsed = true;
-  }
-  workingMessages = fitContextMessages(workingMessages, false, imageTokens);
   let continuationMessages = [...workingMessages];
   const wireInput = workingMessages.slice(Math.max(0, workingMessages.map((message) => message.role).lastIndexOf("user")));
   const finish = (finishReason: string | undefined): ChatInvocationMetadata => {

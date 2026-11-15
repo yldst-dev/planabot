@@ -1,4 +1,5 @@
 import { resolveAuxSettings } from "../chat/auxSettings.js";
+import { TIME_SENSITIVE_PATTERN } from "../chat/queryPolicy.js";
 import { loadSettings, type Settings } from "../config/settings.js";
 import { loadDecisionEvaluator } from "../decision/config.js";
 import { invokeChat } from "../integrations/chat.js";
@@ -86,7 +87,7 @@ export function resetAllMemory(): boolean {
 
 export async function rememberExchange(
   input: ExchangeInput,
-  options: { settings?: Settings; background: boolean; },
+  options: { settings?: Settings; background: boolean; deferWriter?: boolean; },
 ): Promise<ExchangeResult> {
   const userText = input.userText.trim();
   const assistantText = input.assistantText.trim();
@@ -118,9 +119,10 @@ export async function rememberExchange(
   if (!recorded || !config.writerEnabled) {
     return { recorded, writer: "skipped" };
   }
-  const job = (): Promise<void> => runExecution("memory-write", () =>
-    serial(`memory-writer:${input.userId}`, () => writeLongTermMemory(input.userId, input.chatId, userText, assistantText, turnStartedAt, config, options.settings)),
-  );
+  if (options.deferWriter) {
+    return { recorded, writer: "queued" };
+  }
+  const job = (): Promise<void> => writeExchangeMemory({ ...input, userText, assistantText, turnStartedAt }, options.settings, config);
   if (!options.background) {
     await job();
     return { recorded, writer: "done" };
@@ -130,6 +132,13 @@ export async function rememberExchange(
     console.error(`[planabrain] 기억 작성 실패: ${reason}`);
   });
   return { recorded, writer: "queued" };
+}
+
+export function writeExchangeMemory(input: ExchangeInput, settings?: Settings, config: MemoryConfig = loadMemoryConfig()): Promise<void> {
+  const turnStartedAt = Math.min(input.turnStartedAt ?? Date.now(), Date.now());
+  return runExecution("memory-write", () =>
+    serial(`memory-writer:${input.userId}`, () => writeLongTermMemory(input.userId, input.chatId, input.userText.trim(), input.assistantText.trim(), turnStartedAt, config, settings)),
+  );
 }
 
 async function writeLongTermMemory(
@@ -169,9 +178,6 @@ async function writeLongTermMemory(
   });
   console.error(`[planabrain] 기억 갱신 ${applied}건 (${operations.map((operation) => operation.op).join(",")})`);
 }
-
-const TIME_SENSITIVE_PATTERN =
-  /(날씨|기온|강수|습도|미세먼지|대기질|환율|시세|주가|코인|암호화폐|금리|뉴스|속보|물가|가격|재고|운행|항공편|교통|경기\s*(?:결과|일정)|스코어|순위|통계|선거\s*결과)/u;
 
 export function sanitizeAssistantTurn(userText: string, assistantText: string): string {
   const lines = assistantText.split(/\r?\n/u);

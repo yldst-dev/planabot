@@ -1,17 +1,20 @@
 import { readFile } from "node:fs/promises";
 
 import { classifyTurn, hasBareHour } from "../../decision/turnSignals.js";
-import { interpretScheduleRequest, type ScheduleAction } from "../../schedule/intent.js";
+import { interpretScheduleRequest, type ScheduleAction, type ScheduleInterpretOutput } from "../../schedule/intent.js";
 
 const LIST_ONLY_PATTERN = /^(?:\s*(?:목록|리스트|전체|확인|보여\s*줘|보여|뭐\s*있어|뭐\s*있지|남은\s*거|일정|알림|타이머|좀))+\s*[?.!]*$/u;
 
 export async function runScheduleInterpretCommand(args: string[]): Promise<void> {
   const text = await resolveText(args, "Usage: planabrain schedule-interpret <text>");
+  process.stdout.write(`${JSON.stringify(await interpretScheduleCommand(text))}\n`);
+}
+
+export async function interpretScheduleCommand(text: string, nowMs?: number): Promise<ScheduleInterpretOutput> {
   const meridiem = hasBareHour(text)
-    ? (await classifyTurn({ message: text, nowMs: Number(process.env.PLANABRAIN_NOW_MS) || undefined }))?.meridiem
+    ? (await classifyTurn({ message: text, nowMs: nowMs ?? (Number(process.env.PLANABRAIN_NOW_MS) || undefined) }))?.meridiem
     : undefined;
-  const result = interpretScheduleRequest(text, { action: commandAction(text), meridiem, command: true });
-  process.stdout.write(`${JSON.stringify(result)}\n`);
+  return interpretScheduleRequest(text, { nowMs, action: commandAction(text), meridiem, command: true });
 }
 
 export function commandAction(text: string): ScheduleAction {

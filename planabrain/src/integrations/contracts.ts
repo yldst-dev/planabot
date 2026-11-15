@@ -63,7 +63,6 @@ export type WebFetchRunner = (calls: ToolCall[]) => Promise<WebFetchRound>;
 export type ChatInvocationParams = {
   settings: Settings;
   messages: ChatMessage[];
-  preSearchQuery?: string;
   maxContinuations?: number;
   webFetch?: WebFetchRunner;
 };

@@ -1,3 +1,5 @@
+import type { WireMessage } from "../integrations/contracts.js";
+
 export const MEMORY_KINDS = ["profile", "request", "preference", "fact", "plan", "relationship", "room"] as const;
 
 export type MemoryKind = (typeof MEMORY_KINDS)[number];
@@ -23,10 +25,7 @@ export type MemoryRecord = {
   lastRecalledAt: number | null;
 };
 
-export type WireMessage = {
-  role: "user" | "assistant";
-  content: string;
-};
+export type { WireMessage };
 
 export type ConversationTurn = {
   role: "user" | "assistant";

@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { testSettings } from "../testing/settings.js";
 import { codexStream } from "../testing/codex.js";
-import { buildMemoryContext, closeMemoryDatabases, forgetMemory, listMemories, listRecentTurns, recallMemories, rememberExchange, resetUserMemory, sanitizeAssistantTurn } from "./service.js";
+import { buildMemoryContext, closeMemoryDatabases, forgetMemory, listMemories, listRecentTurns, recallMemories, rememberExchange, resetUserMemory, sanitizeAssistantTurn, writeExchangeMemory } from "./service.js";
 
 test("an exchange from a turn that started before a reset is not stored", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "planabot-memory-fence-"));
@@ -105,6 +105,30 @@ test("an exchange is stored, distilled into memories and recalled in later turns
       assert.equal(resetUserMemory("u1"), true);
       assert.deepEqual(listMemories("u1", "chat_u1"), []);
     });
+  } finally {
+    globalThis.fetch = original;
+    closeMemoryDatabases();
+    if (previous.db === undefined) delete process.env.PLANABRAIN_MEMORY_DB_PATH; else process.env.PLANABRAIN_MEMORY_DB_PATH = previous.db;
+    if (previous.decision !== undefined) process.env.PLANABRAIN_DECISION_PROVIDER = previous.decision;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a deferred writer started after a reset stores nothing for the earlier turn", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "planabot-memory-deferred-"));
+  const previous = { db: process.env.PLANABRAIN_MEMORY_DB_PATH, decision: process.env.PLANABRAIN_DECISION_PROVIDER };
+  process.env.PLANABRAIN_MEMORY_DB_PATH = path.join(dir, "memory.sqlite");
+  delete process.env.PLANABRAIN_DECISION_PROVIDER;
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => codexStream("{\"operations\":[{\"op\":\"add\",\"kind\":\"fact\",\"content\":\"사용자는 초기화 전에 고양이 이야기를 했다\",\"importance\":0.7}]}");
+  try {
+    const settings = testSettings({ ollamaWebSearchEnabled: false });
+    const input = { userId: "deferred", chatId: "chat_d", conversationId: "chat_d", userText: "우리 고양이 이름은 나비야", assistantText: "확인했습니다.", turnStartedAt: Date.now() };
+    assert.deepEqual(await rememberExchange(input, { settings, background: false, deferWriter: true }), { recorded: true, writer: "queued" });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    resetUserMemory("deferred");
+    await writeExchangeMemory(input, settings);
+    assert.deepEqual(listMemories("deferred", "chat_d"), []);
   } finally {
     globalThis.fetch = original;
     closeMemoryDatabases();

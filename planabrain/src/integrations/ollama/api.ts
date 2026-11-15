@@ -4,6 +4,8 @@ import {
   fetchWithTimeout,
   isRetryable,
 } from "../providerError.js";
+import { readJsonOrText } from "../transport/httpError.js";
+import { asRecord } from "../value.js";
 
 export async function invokeOllamaApi(params: {
   providerName: string;
@@ -107,18 +109,6 @@ function shouldFallbackToNextApiKey(error: OllamaApiError): boolean {
   );
 }
 
-async function readJsonOrText(response: Response): Promise<unknown> {
-  const raw = await response.text();
-  if (!raw.trim()) {
-    return null;
-  }
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return raw;
-  }
-}
-
 function buildApiErrorMessage(
   providerName: string,
   body: unknown,
@@ -150,11 +140,4 @@ function extractApiErrorText(body: unknown): string {
     return body.trim();
   }
   return "";
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  return value as Record<string, unknown>;
 }

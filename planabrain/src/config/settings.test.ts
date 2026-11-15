@@ -127,3 +127,53 @@ test("system prompt env override still wins over persona profile", () => {
   const settings = withEnv({ ...CODEX_ENV, PLANABRAIN_PERSONA_PROFILE: "original", PLANABRAIN_SYSTEM_PROMPT: "커스텀 페르소나" }, loadSettings);
   assert.equal(settings.systemPrompt, "커스텀 페르소나");
 });
+
+test("a blank system prompt env falls back to the persona default", () => {
+  const live = withEnv(CODEX_ENV, loadSettings);
+  for (const blank of ["", "   \n"]) {
+    const settings = withEnv({ ...CODEX_ENV, PLANABRAIN_SYSTEM_PROMPT: blank }, loadSettings);
+    assert.equal(settings.systemPrompt, live.systemPrompt);
+  }
+});
+
+const BAD_NUMBERS = ["0", "abc", "-5", "99999999999"];
+
+test("bad numeric limits do not stop settings from loading while their feature is off", () => {
+  const fetchKeys = ["PLANABRAIN_WEB_FETCH_TIMEOUT_MS", "PLANABRAIN_WEB_FETCH_MAX_BYTES", "PLANABRAIN_WEB_FETCH_MAX_CHARS", "PLANABRAIN_WEB_FETCH_MAX_TOTAL_CHARS"];
+  for (const value of BAD_NUMBERS) {
+    const settings = withEnv({
+      ...CODEX_ENV,
+      PLANABRAIN_WEB_FETCH_ENABLED: "0",
+      PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH: "0",
+      PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS: value,
+      PLANABRAIN_DELIVERY_REWRITE_ENABLED: "0",
+      PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS: value,
+      ...Object.fromEntries(fetchKeys.map((key) => [key, value])),
+    }, loadSettings);
+    assert.deepEqual(
+      [settings.webFetchTimeoutMs, settings.webFetchMaxBytes, settings.webFetchMaxChars, settings.webFetchMaxTotalChars, settings.ollamaWebSearchMaxResults],
+      [10000, 1000000, 12000, 18000, 5],
+      value,
+    );
+  }
+  const noKey = withEnv({ ...CODEX_ENV, PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH: "1", PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS: "abc" }, loadSettings);
+  assert.equal(noKey.ollamaWebSearchMaxResults, 5);
+  assert.equal(withEnv({ ...CODEX_ENV, PLANABRAIN_DELIVERY_REWRITE_ENABLED: "0", PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS: "abc" }, loadSettings).deliveryMaxOutputTokens, 1024);
+});
+
+test("bad numeric limits still fail loudly while their feature is on", () => {
+  const search = { PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH: "1", OLLAMA_API_KEY: "k" };
+  for (const value of BAD_NUMBERS) {
+    for (const key of ["PLANABRAIN_WEB_FETCH_TIMEOUT_MS", "PLANABRAIN_WEB_FETCH_MAX_BYTES", "PLANABRAIN_WEB_FETCH_MAX_CHARS", "PLANABRAIN_WEB_FETCH_MAX_TOTAL_CHARS"]) {
+      assert.throws(() => withEnv({ ...CODEX_ENV, [key]: value }, loadSettings), new RegExp(key), `${key}=${value}`);
+    }
+  }
+  for (const value of ["0", "abc", "-5"]) {
+    assert.throws(() => withEnv({ ...CODEX_ENV, ...search, PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS: value }, loadSettings), /PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS/, value);
+  }
+  for (const value of ["abc", "-5"]) {
+    assert.throws(() => withEnv({ ...CODEX_ENV, PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS: value }, loadSettings), /PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS/, value);
+  }
+  assert.equal(withEnv({ ...CODEX_ENV, ...search, PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS: "20" }, loadSettings).ollamaWebSearchMaxResults, 10);
+  assert.equal(withEnv({ ...CODEX_ENV, PLANABRAIN_WEB_FETCH_MAX_CHARS: "20000" }, loadSettings).webFetchMaxChars, 20000);
+});

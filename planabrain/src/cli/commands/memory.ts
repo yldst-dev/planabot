@@ -2,36 +2,42 @@ import { readFile } from "node:fs/promises";
 
 import type { Settings } from "../../config/settings.js";
 import { normalizeWireMessages } from "../../memory/database.js";
-import { forgetMemory, listMemories, rememberExchange, resetAllMemory, resetUserMemory } from "../../memory/service.js";
+import { forgetMemory, listMemories, rememberExchange, resetAllMemory, resetUserMemory, writeExchangeMemory } from "../../memory/service.js";
+import { readEnvOrFile } from "../envFile.js";
 
-const EXCHANGE_USAGE = "Usage: planabrain memory-exchange <userId> <chatId> <userText> <assistantText>";
+const EXCHANGE_USAGE = "Usage: planabrain memory-exchange [--step=record|write] <userId> <chatScope> <userText> <assistantText>";
 
 export async function runMemoryExchangeCommand(args: string[], settings: Settings): Promise<void> {
-  const [userId, chatId, userTextArg, assistantTextArg, ...rest] = args;
+  const step = args[0]?.startsWith("--step=") ? args[0].slice("--step=".length) : undefined;
+  ensure(step === undefined || step === "record" || step === "write", EXCHANGE_USAGE);
+  const [userId, chatId, userTextArg, assistantTextArg, ...rest] = step === undefined ? args : args.slice(1);
   ensure(Boolean(userId && chatId) && rest.length === 0, EXCHANGE_USAGE);
   const userText = await resolveExchangeText(userTextArg, "PLANABRAIN_LOCAL_MEMORY_USER_TEXT_FILE");
   const assistantText = await resolveExchangeText(assistantTextArg, "PLANABRAIN_LOCAL_MEMORY_ASSISTANT_TEXT_FILE");
-  const transcript = readTranscript(process.env.PLANABRAIN_TRANSCRIPT_JSON);
+  const transcript = readTranscript(await readEnvOrFile("PLANABRAIN_TRANSCRIPT_JSON"));
   const turnStartedAt = Number(process.env.PLANABRAIN_TURN_STARTED_AT);
-  const result = await rememberExchange(
-    {
-      userId: String(userId),
-      chatId: String(chatId),
-      requestId: process.env.PLANABRAIN_REQUEST_ID?.trim() || undefined,
-      conversationId: process.env.PLANABRAIN_CONVERSATION_ID?.trim() || undefined,
-      userText,
-      assistantText,
-      ...transcript,
-      ...(Number.isFinite(turnStartedAt) && turnStartedAt > 0 ? { turnStartedAt } : {}),
-    },
-    { settings, background: false },
-  );
+  const input = {
+    userId: String(userId),
+    chatId: String(chatId),
+    requestId: process.env.PLANABRAIN_REQUEST_ID?.trim() || undefined,
+    conversationId: process.env.PLANABRAIN_CONVERSATION_ID?.trim() || undefined,
+    userText,
+    assistantText,
+    ...transcript,
+    ...(Number.isFinite(turnStartedAt) && turnStartedAt > 0 ? { turnStartedAt } : {}),
+  };
+  if (step === "write") {
+    await writeExchangeMemory(input, settings);
+    process.stdout.write(`${JSON.stringify({ ok: true, result: { writer: "done" } })}\n`);
+    return;
+  }
+  const result = await rememberExchange(input, { settings, background: false, deferWriter: step === "record" });
   process.stdout.write(`${JSON.stringify({ ok: true, result })}\n`);
 }
 
 export async function runMemoryListCommand(args: string[]): Promise<void> {
   const [userId, chatId] = args;
-  ensure(Boolean(userId && chatId), "Usage: planabrain memory-list <userId> <chatId>");
+  ensure(Boolean(userId && chatId), "Usage: planabrain memory-list <userId> <chatScope>");
   const memories = listMemories(String(userId), String(chatId)).map(({ id, kind, content }) => ({ id, kind, content }));
   process.stdout.write(`${JSON.stringify({ memories })}\n`);
 }
@@ -39,7 +45,7 @@ export async function runMemoryListCommand(args: string[]): Promise<void> {
 export async function runMemoryForgetCommand(args: string[]): Promise<void> {
   const [userId, chatId, rawId] = args;
   const id = Number.parseInt(String(rawId ?? ""), 10);
-  ensure(Boolean(userId && chatId) && Number.isSafeInteger(id) && id > 0, "Usage: planabrain memory-forget <userId> <chatId> <memoryId>");
+  ensure(Boolean(userId && chatId) && Number.isSafeInteger(id) && id > 0, "Usage: planabrain memory-forget <userId> <chatScope> <memoryId>");
   process.stdout.write(`${JSON.stringify({ removed: forgetMemory(String(userId), String(chatId), id) })}\n`);
 }
 
