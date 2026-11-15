@@ -139,6 +139,7 @@ export function AppSidebar({ onSearch }: { onSearch: () => void }) {
                         <SidebarMenuBadge className="gap-1.5">
                           {dirty || pending ? (
                             <span
+                              role="img"
                               className={cn("size-1.5 rounded-full", dirty ? "bg-primary" : "bg-warning")}
                               aria-label={dirty ? "저장하지 않은 변경" : "재시작 대기"}
                             />

@@ -30,7 +30,7 @@ export function App() {
   if (!session.data) {
     return (
       <div className="grid min-h-svh place-items-center p-4">
-        <LoadError onRetry={() => session.refetch()} retrying={session.isFetching} />
+        <LoadError error={session.error} onRetry={() => session.refetch()} retrying={session.isFetching} />
       </div>
     )
   }

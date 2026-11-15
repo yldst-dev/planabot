@@ -57,7 +57,7 @@ function ImportForm({ groups, fields, onDone }: { groups: Group[]; fields: Setti
     importEnv.mutate([...selected], {
       onSuccess: (data) => {
         toast.success("가져오기 완료.", { description: `${data.imported.length}개 값을 대시보드에 저장했습니다.` })
-        const skipped = data.skipped ?? []
+        const skipped = data.skipped
         if (skipped.length > 0) {
           toast.warning(`${skipped.length}개는 가져오지 않았습니다.`, {
             description: skipped.map((item) => `${item.key}: ${item.message}`).join(" · "),

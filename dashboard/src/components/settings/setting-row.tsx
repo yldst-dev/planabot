@@ -25,7 +25,7 @@ export function SettingRow({
   const invalid = useChanges((state) => (state.invalid?.key === field.key ? state.invalid.message : null))
   const dirty = isDirty(changes, field.key)
   const restoring = dirty && changes[field.key] === null
-  const ignored = field.ignored ?? (field.env_only && field.source === "dashboard")
+  const ignored = field.ignored
   const id = `field-${field.key}`
 
   return (

@@ -35,6 +35,7 @@ export function OverviewPage() {
     return (
       <div className="mx-auto flex w-full max-w-350 flex-col px-4 py-5 md:px-8">
         <LoadError
+          error={settings.error ?? overview.error}
           onRetry={() => {
             void overview.refetch()
             void settings.refetch()

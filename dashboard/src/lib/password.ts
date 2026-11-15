@@ -31,4 +31,4 @@ export function passwordStrength(password: string) {
 
 export const STRENGTH_LABELS = ["너무 짧음", "약함", "보통", "좋음", "강함"]
 
-export const RESET_COMMAND = "docker exec planabot planabot dashboard-reset-password"
+export const RESET_COMMAND = "docker exec -u planabot planabot planabot dashboard-reset-password"

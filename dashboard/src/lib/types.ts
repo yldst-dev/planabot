@@ -25,7 +25,7 @@ export interface Field {
   pending: boolean
   custom: boolean
   env_only: boolean
-  ignored?: boolean
+  ignored: boolean
 }
 
 export interface SettingsResponse {
@@ -64,6 +64,6 @@ export type Changes = Record<string, string | null>
 
 export interface ImportResult {
   imported: string[]
-  skipped?: { key: string; message: string }[]
+  skipped: { key: string; message: string }[]
   settings: SettingsResponse
 }

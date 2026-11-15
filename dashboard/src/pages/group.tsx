@@ -36,7 +36,7 @@ export function GroupPage() {
   if (!settings.data) {
     return (
       <div className="mx-auto flex w-full max-w-350 flex-col px-4 py-5 md:px-8">
-        <LoadError onRetry={() => settings.refetch()} retrying={settings.isFetching} />
+        <LoadError error={settings.error} onRetry={() => settings.refetch()} retrying={settings.isFetching} />
       </div>
     )
   }
