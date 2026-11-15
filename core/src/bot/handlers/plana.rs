@@ -1,10 +1,9 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
 use chrono::{Datelike, FixedOffset, Timelike, Weekday};
 use log::{error, warn};
-use once_cell::sync::Lazy;
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, Message, ReactionType};
 use teloxide::utils::html;
@@ -22,7 +21,7 @@ use super::schedule::*;
 use crate::planabrain;
 use crate::time::kst_now;
 
-pub(super) const PLANABRAIN_RESPONSE_TIMEOUT: Duration = Duration::from_secs(180);
+pub(super) const RESPONSE_TIMEOUT: Duration = Duration::from_secs(180);
 
 const MEDIA_GROUP_SETTLE: Duration = Duration::from_millis(1500);
 
@@ -30,9 +29,9 @@ const TURN_QUEUE_WAIT: Duration = Duration::from_secs(2);
 
 pub(super) const ADMIN_NOTICE_MIN_INTERVAL: Duration = Duration::from_secs(600);
 
-pub(super) static ADMIN_NOTICE_LAST_SENT: Lazy<
+pub(super) static ADMIN_NOTICE_LAST_SENT: LazyLock<
     Mutex<HashMap<planabrain::PlanabrainErrorKind, Instant>>,
-> = Lazy::new(|| Mutex::new(HashMap::new()));
+> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub(crate) async fn handle_plana_message<B>(bot: B, msg: Message, state: AppState) -> HandlerResult
 where
@@ -197,7 +196,7 @@ where
 
     let conversation_lock =
         state.planabrain_conversation_lock(&format!("{}_{}", msg.chat.id.0, conversation_scope_id));
-    let _conversation_guard = lock_in_arrival_order(conversation_lock, queued).await;
+    let conversation_guard = lock_in_arrival_order(conversation_lock, queued).await;
     let Some(planabrain_permit) = state.try_acquire_planabrain_permit() else {
         let sent = deliver_planabrain_answer(
             &bot,
@@ -320,7 +319,7 @@ where
     );
     tokio::pin!(ask_fut);
     let remaining = Duration::from_millis((deadline_ms - crate::schedule::now_ms()).max(1) as u64);
-    let timeout = time::sleep(remaining.min(PLANABRAIN_RESPONSE_TIMEOUT));
+    let timeout = time::sleep(remaining.min(RESPONSE_TIMEOUT));
     tokio::pin!(timeout);
 
     let answer = tokio::select! {
@@ -370,7 +369,7 @@ where
                 .await;
             drop(planabrain_permit);
             if !memory_turn_text.is_empty() {
-                if let Err(err) = planabrain::remember_planabrain_exchange(
+                let memory_write = planabrain::remember_planabrain_exchange(
                     &memory_turn_text,
                     &answer,
                     &user_id,
@@ -380,9 +379,16 @@ where
                     &request_id,
                     turn_started_at,
                 )
-                .await
-                {
-                    warn!("로컬 장기 메모리 교환 저장 실패: {}", err);
+                .await;
+                drop(conversation_guard);
+                match memory_write {
+                    Ok(Some(memory_write)) => {
+                        if let Err(err) = memory_write.run().await {
+                            warn!("로컬 장기 메모리 작성 실패: {}", err);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(err) => warn!("로컬 장기 메모리 교환 저장 실패: {}", err),
                 }
             }
         }

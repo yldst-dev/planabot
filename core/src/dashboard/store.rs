@@ -1,15 +1,14 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, OnceLock};
 
-use anyhow::{Result, bail};
-use log::{info, warn};
-use once_cell::sync::Lazy;
+use anyhow::{Context, Result, bail};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use super::catalog;
-use crate::persist::{read_json_or_default, write_json_atomic};
+use crate::persist::{read_json_strict, write_json_atomic};
 
 const MAX_VALUE_BYTES: usize = 32 * 1024;
 const ALLOWED_PREFIXES: &[&str] = &[
@@ -25,7 +24,33 @@ const BLOCKED_KEYS: &[&str] = &[
     "PLANABOT_DASHBOARD_ENABLED",
     "PLANABOT_DASHBOARD_STATE_PATH",
     "PLANABOT_DASHBOARD_DIR",
+    "PLANABOT_DASHBOARD_ALLOWED_HOSTS",
     "PLANABRAIN_SERVER_TOKEN",
+    "PLANABRAIN_REQUEST_ID",
+    "PLANABRAIN_TURN_STARTED_AT",
+    "PLANABRAIN_TRANSCRIPT_JSON",
+    "PLANABRAIN_TRANSCRIPT_JSON_FILE",
+    "PLANABRAIN_NOW_MS",
+    "PLANABRAIN_SCHEDULE_TEXT_FILE",
+    "PLANABRAIN_USER_ID",
+    "PLANABRAIN_CHAT_SCOPE",
+    "PLANABRAIN_CONVERSATION_ID",
+    "PLANABRAIN_DEADLINE_MS",
+    "PLANABRAIN_OUTPUT_JSON",
+    "PLANABRAIN_CURRENT_TURN_TEXT",
+    "PLANABRAIN_CURRENT_TURN_TEXT_FILE",
+    "PLANABRAIN_MEMORY_CONTEXT",
+    "PLANABRAIN_MEMORY_CONTEXT_FILE",
+    "PLANABRAIN_TURN_SIGNALS",
+    "PLANABRAIN_TURN_SIGNALS_FILE",
+    "PLANABRAIN_IMAGE_FILE",
+    "PLANABRAIN_IMAGE_FILES",
+    "PLANABRAIN_IMAGE_NOTICE",
+    "PLANABRAIN_RECENT_TURNS_FILE",
+    "PLANABRAIN_QUESTION_FILE",
+    "PLANABRAIN_LOCAL_MEMORY_USER_TEXT_FILE",
+    "PLANABRAIN_LOCAL_MEMORY_ASSISTANT_TEXT_FILE",
+    "PLANABOT_TOKEN_TEXT_FILE",
 ];
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
@@ -48,13 +73,22 @@ impl std::fmt::Display for EntryError {
 
 impl std::error::Error for EntryError {}
 
+#[derive(Debug)]
+pub(crate) struct Unreadable;
+
+impl std::fmt::Display for Unreadable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("설정 파일을 읽을 수 없습니다. 파일을 고치거나 지운 뒤 다시 시도하십시오.")
+    }
+}
+
 struct Startup {
     baseline: BTreeMap<String, Option<String>>,
     applied: BTreeMap<String, String>,
 }
 
 static STARTUP: OnceLock<Startup> = OnceLock::new();
-static WRITE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 pub(crate) fn state_path() -> PathBuf {
     let raw = std::env::var("PLANABOT_DASHBOARD_STATE_PATH")
@@ -73,7 +107,7 @@ pub(crate) fn state_path() -> PathBuf {
 
 pub(crate) fn apply_startup_overrides() {
     let path = state_path();
-    let file: OverrideFile = read_json_or_default(&path);
+    let file = startup_file(&path);
     let mut baseline = BTreeMap::new();
     let mut applied = BTreeMap::new();
     for (key, value) in file.values {
@@ -91,6 +125,13 @@ pub(crate) fn apply_startup_overrides() {
         info!("대시보드 설정 {}개 적용: {}", applied.len(), path.display());
     }
     let _ = STARTUP.set(Startup { baseline, applied });
+}
+
+fn startup_file(path: &Path) -> OverrideFile {
+    load_at(path).unwrap_or_else(|err| {
+        error!("대시보드 설정 파일을 읽지 못해 env 값으로 시작합니다: {err:#}");
+        OverrideFile::default()
+    })
 }
 
 pub(crate) fn baseline_value(key: &str) -> Option<String> {
@@ -114,8 +155,14 @@ pub(crate) fn applied_keys() -> impl Iterator<Item = &'static str> {
         .flat_map(|startup| startup.applied.keys().map(String::as_str))
 }
 
-pub(crate) fn load() -> OverrideFile {
-    read_json_or_default(&state_path())
+pub(crate) fn load() -> Result<OverrideFile> {
+    load_at(&state_path())
+}
+
+fn load_at(path: &Path) -> Result<OverrideFile> {
+    read_json_strict(path)
+        .with_context(|| path.display().to_string())
+        .context(Unreadable)
 }
 
 pub(crate) fn pending_keys(file: &OverrideFile) -> Vec<String> {
@@ -143,8 +190,12 @@ pub(crate) fn pending_keys(file: &OverrideFile) -> Vec<String> {
 }
 
 pub(crate) async fn update(changes: BTreeMap<String, Option<String>>) -> Result<OverrideFile> {
+    update_at(&state_path(), changes).await
+}
+
+async fn update_at(path: &Path, changes: BTreeMap<String, Option<String>>) -> Result<OverrideFile> {
     let _guard = WRITE_LOCK.lock().await;
-    let mut file = load();
+    let mut file = load_at(path)?;
     check_changes(&file, &changes)?;
     for (key, value) in changes {
         match value {
@@ -156,9 +207,7 @@ pub(crate) async fn update(changes: BTreeMap<String, Option<String>>) -> Result<
             }
         }
     }
-    let path = state_path();
-    write_json_atomic(&path, &file).await?;
-    super::auth::restrict_permissions(&path);
+    write_json_atomic(path, &file).await?;
     Ok(file)
 }
 
@@ -250,7 +299,8 @@ fn validate_entry(key: &str, value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        OverrideFile, check_change, check_changes, pending_keys, validate_entry, validate_key,
+        OverrideFile, Unreadable, catalog, check_change, check_changes, is_ignored, load_at,
+        pending_keys, startup_file, update_at, validate_entry, validate_key,
     };
     use std::collections::BTreeMap;
 
@@ -301,6 +351,83 @@ mod tests {
         assert_eq!(pending_keys(&file), ["PLANABOT_PENDING_PROBE"]);
     }
 
+    fn set_or_removed_keys(source: &str) -> Vec<&str> {
+        [".env(", ".env_remove("]
+            .iter()
+            .flat_map(|call| source.split(call).skip(1))
+            .filter_map(|rest| rest.trim_start().strip_prefix('"'))
+            .filter_map(|rest| rest.split('"').next())
+            .collect()
+    }
+
+    #[test]
+    fn every_per_request_variable_the_core_sets_is_blocked() {
+        let sources = [
+            include_str!("../planabrain/mod.rs"),
+            include_str!("../planabrain/server.rs"),
+            include_str!("../token.rs"),
+        ];
+        let keys: Vec<&str> = sources
+            .into_iter()
+            .flat_map(set_or_removed_keys)
+            .filter(|key| *key != "PLANABRAIN_DATA_DIR")
+            .collect();
+        assert!(keys.len() >= 20, "{}", keys.len());
+        for key in keys {
+            assert!(validate_key(key).is_err(), "{key}");
+            assert!(check_change(key, Some("1")).is_err(), "{key}");
+        }
+    }
+
+    #[test]
+    fn real_planabrain_settings_stay_savable() {
+        for key in [
+            "PLANABRAIN_DATA_DIR",
+            "PLANABRAIN_HTTP_TIMEOUT_MS",
+            "PLANABRAIN_CODEX_MODEL",
+            "PLANABRAIN_ALLOWED_CHAT_IDS",
+            "PLANABRAIN_MEMORY_DB_PATH",
+            "PLANABRAIN_SERVER_PORT",
+            "PLANABOT_LOCAL_MEMORY_TOKEN_BUDGET",
+        ] {
+            assert!(validate_key(key).is_ok(), "{key}");
+        }
+        for field in catalog::FIELDS.iter().filter(|field| !field.env_only) {
+            assert!(validate_key(field.key).is_ok(), "{}", field.key);
+        }
+    }
+
+    #[tokio::test]
+    async fn stored_internal_keys_are_ignored_and_can_still_be_removed() {
+        let mut file = OverrideFile::default();
+        file.values
+            .insert("PLANABRAIN_NOW_MS".to_string(), "1".to_string());
+        file.values.insert(
+            "PLANABRAIN_QUESTION_FILE".to_string(),
+            "/etc/hosts".to_string(),
+        );
+        assert!(is_ignored("PLANABRAIN_NOW_MS", "1"));
+        assert!(is_ignored("PLANABRAIN_QUESTION_FILE", "/etc/hosts"));
+        assert!(pending_keys(&file).is_empty());
+
+        let path = temp_file("internal_keys");
+        std::fs::write(
+            &path,
+            r#"{"values": {"PLANABRAIN_NOW_MS": "1", "PLANABRAIN_CODEX_MODEL": "kept"}}"#,
+        )
+        .unwrap();
+        update_at(&path, change("PLANABRAIN_NOW_MS", Some("2")))
+            .await
+            .expect_err("save must be refused");
+        let saved = update_at(&path, change("PLANABRAIN_NOW_MS", None))
+            .await
+            .expect("stored internal key is removable");
+        assert_eq!(
+            saved.values,
+            BTreeMap::from([("PLANABRAIN_CODEX_MODEL".to_string(), "kept".to_string())])
+        );
+    }
+
     #[test]
     fn accepts_catalog_and_prefixed_keys() {
         assert!(validate_key("PLANABRAIN_NEW_FLAG").is_ok());
@@ -319,6 +446,7 @@ mod tests {
         assert!(validate_key("1PLANABOT").is_err());
         assert!(validate_key("PLANABOT_DASHBOARD_ENABLED").is_err());
         assert!(validate_key("PLANABOT_DASHBOARD_DIR").is_err());
+        assert!(validate_key("PLANABOT_DASHBOARD_ALLOWED_HOSTS").is_err());
         assert!(validate_key("PLANABRAIN_SERVER_TOKEN").is_err());
         assert!(validate_key("LD_PRELOAD").is_err());
         assert!(validate_key("PATH").is_err());
@@ -355,5 +483,49 @@ mod tests {
     fn parses_file_without_values_field() {
         let file: OverrideFile = serde_json::from_str("{}").unwrap();
         assert!(file.values.is_empty());
+    }
+
+    fn temp_file(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("planabot_store_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("dashboard.json")
+    }
+
+    fn change(key: &str, value: Option<&str>) -> BTreeMap<String, Option<String>> {
+        BTreeMap::from([(key.to_string(), value.map(str::to_string))])
+    }
+
+    #[tokio::test]
+    async fn corrupt_file_refuses_saves_and_is_never_overwritten() {
+        let path = temp_file("corrupt");
+        std::fs::write(&path, r#"{"values": {"PLANABRAIN_CODEX_MODEL": "#).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        for value in [Some("x"), None] {
+            let err = update_at(&path, change("PLANABRAIN_CODEX_MODEL", value))
+                .await
+                .expect_err("save must be refused");
+            assert!(err.is::<Unreadable>());
+        }
+        assert!(load_at(&path).is_err());
+        assert!(startup_file(&path).values.is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn missing_file_is_empty_and_saves_keep_other_values() {
+        let path = temp_file("missing");
+        assert!(load_at(&path).unwrap().values.is_empty());
+        assert!(startup_file(&path).values.is_empty());
+        update_at(&path, change("PLANABRAIN_CODEX_MODEL", Some("a")))
+            .await
+            .unwrap();
+        update_at(&path, change("PLANABRAIN_AUX_MODEL", Some("b")))
+            .await
+            .unwrap();
+        let file = startup_file(&path);
+        assert_eq!(file.values.len(), 2);
+        assert_eq!(file.values["PLANABRAIN_CODEX_MODEL"], "a");
     }
 }

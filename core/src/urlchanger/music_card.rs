@@ -1,10 +1,9 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use log::{info, warn};
-use once_cell::sync::Lazy;
 use resvg::tiny_skia;
 use resvg::usvg;
 use resvg::usvg::fontdb;
@@ -47,7 +46,7 @@ struct FontSetup {
     family: String,
 }
 
-static FONT_SETUP: Lazy<Option<FontSetup>> = Lazy::new(load_font_setup);
+static FONT_SETUP: LazyLock<Option<FontSetup>> = LazyLock::new(load_font_setup);
 
 pub struct CardContent {
     pub title: String,

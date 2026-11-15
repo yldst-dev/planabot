@@ -1,5 +1,6 @@
+use std::sync::LazyLock;
+
 use log::warn;
-use once_cell::sync::Lazy;
 use regex::Regex;
 use url::Url;
 
@@ -9,7 +10,7 @@ macro_rules! url_tail {
     };
 }
 
-static MUSIC_YOUTUBE_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
+static MUSIC_YOUTUBE_CAPTURE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(https?://(?:www\.|m\.)?youtu(?:\.be|be\.com)/",
         url_tail!(),
@@ -17,7 +18,7 @@ static MUSIC_YOUTUBE_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
     ))
     .unwrap()
 });
-static MUSIC_YOUTUBE_MUSIC_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
+static MUSIC_YOUTUBE_MUSIC_CAPTURE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(https?://(?:www\.)?music\.youtube\.com/",
         url_tail!(),
@@ -25,7 +26,7 @@ static MUSIC_YOUTUBE_MUSIC_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
     ))
     .unwrap()
 });
-static MUSIC_SPOTIFY_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
+static MUSIC_SPOTIFY_CAPTURE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(https?://(?:www\.)?open\.spotify\.com/",
         url_tail!(),
@@ -33,7 +34,7 @@ static MUSIC_SPOTIFY_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
     ))
     .unwrap()
 });
-static MUSIC_APPLE_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
+static MUSIC_APPLE_CAPTURE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(https?://(?:www\.)?music\.apple\.com/",
         url_tail!(),
@@ -41,14 +42,14 @@ static MUSIC_APPLE_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
     ))
     .unwrap()
 });
-static X_LINK_RE: Lazy<Regex> = Lazy::new(|| {
+static X_LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"\.?https?://(?:www\.)?(?:x|twitter)\.com/",
         url_tail!()
     ))
     .unwrap()
 });
-static X_LINK_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
+static X_LINK_CAPTURE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(\.?)(https?://(?:www\.)?(?:x|twitter)\.com/",
         url_tail!(),
@@ -56,9 +57,10 @@ static X_LINK_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
     ))
     .unwrap()
 });
-static INSTAGRAM_LINK_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(concat!(r"https?://(?:www\.)?instagram\.com/", url_tail!())).unwrap());
-static INSTAGRAM_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
+static INSTAGRAM_LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(r"https?://(?:www\.)?instagram\.com/", url_tail!())).unwrap()
+});
+static INSTAGRAM_CAPTURE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(https?://(?:www\.)?instagram\.com/",
         url_tail!(),
@@ -66,14 +68,14 @@ static INSTAGRAM_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
     ))
     .unwrap()
 });
-static THREADS_LINK_RE: Lazy<Regex> = Lazy::new(|| {
+static THREADS_LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"https?://(?:www\.)?threads\.(?:com|net)/(?:@[\w.]+/post|t)/",
         url_tail!()
     ))
     .unwrap()
 });
-static THREADS_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
+static THREADS_CAPTURE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(https?://(?:www\.)?threads\.(?:com|net)/(?:@[\w.]+/post|t)/",
         url_tail!(),
@@ -81,10 +83,10 @@ static THREADS_CAPTURE_RE: Lazy<Regex> = Lazy::new(|| {
     ))
     .unwrap()
 });
-static GOOGLE_SHARE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"https?://share\.google/[A-Za-z0-9_-]+").unwrap());
-static GOOGLE_SHARE_CAPTURE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(https?://share\.google/[A-Za-z0-9_-]+)").unwrap());
+static GOOGLE_SHARE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"https?://share\.google/[A-Za-z0-9_-]+").unwrap());
+static GOOGLE_SHARE_CAPTURE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(https?://share\.google/[A-Za-z0-9_-]+)").unwrap());
 
 const INSTAGRAM_PRIMARY_HOST: &str = "kirkstagram.com";
 

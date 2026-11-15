@@ -108,18 +108,10 @@ fn spawn_reboot_scheduler() {
     tokio::spawn(async {
         let offset = FixedOffset::east_opt(9 * 3600).expect("KST offset should be valid");
         let now = Utc::now().with_timezone(&offset);
-        let today = now.date_naive();
-        let today_midnight = offset
-            .from_local_datetime(&today.and_hms_opt(0, 0, 0).unwrap())
+        let tomorrow = now.date_naive().succ_opt().unwrap();
+        let next = offset
+            .from_local_datetime(&tomorrow.and_hms_opt(0, 0, 0).unwrap())
             .unwrap();
-        let next = if now < today_midnight {
-            today_midnight
-        } else {
-            let tomorrow = today.succ_opt().unwrap();
-            offset
-                .from_local_datetime(&tomorrow.and_hms_opt(0, 0, 0).unwrap())
-                .unwrap()
-        };
 
         let delay = (next - now).to_std().unwrap_or_default();
         info!(

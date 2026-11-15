@@ -2,16 +2,19 @@
 
 ## Project Structure & Modules
 - `src/main.rs`: entry point; loads config, builds bot state, launches dispatcher.
-- `src/bot.rs`: Telegram command/message/callback handlers and router setup.
-- `src/config.rs`: `.env` loading and template creation for `TELEGRAM_API_TOKEN`.
+- `src/bot/`: Telegram router (`mod.rs`), shared state (`state.rs`), and handlers split under `handlers/` (commands, planabrain chat, schedule, callbacks, plain messages).
+- `src/config.rs`: `TELEGRAM_API_TOKEN` loading and template `.env` creation.
 - `src/hitomi/`: Hitomi client and parser for gallery lookups.
-- `src/urlchanger/`: URL rewrite handlers plus `link_utils.rs` utilities and unit tests.
-- `target/`: build outputs; exclude from PRs. Docker assets: `Dockerfile`, `docker-compose.yml`.
+- `src/urlchanger/`: URL rewrite handlers, `link_utils.rs` utilities, music cards, Instagram previews, and shared HTTP helpers in `http.rs`.
+- `src/planabrain/`: calls into the TypeScript planabrain CLI and its resident server.
+- `src/dashboard/`: settings dashboard API (auth, credentials, catalog, store, static files).
+- `src/schedule.rs`, `src/persist.rs`, `src/health.rs`, `src/reboot.rs`, `src/time.rs`, `src/token.rs`: reminders, atomic JSON state, health server, scheduled restarts, KST time, token counting.
+- Build outputs go to the repository-root `target/`; exclude from PRs. Docker assets (`Dockerfile`, `docker-compose*.yml`) live at the repository root.
 
 ## Build, Test, Development
 - `cargo run --release`: run bot locally (requires `TELEGRAM_API_TOKEN` in `.env`).
 - `cargo run`: faster debug build during iteration.
-- `cargo test`: execute Rust tests (currently URL changer; add coverage with new code).
+- `cargo test`: execute Rust tests (add coverage with new code).
 - `cargo fmt`: apply rustfmt.
 - `cargo clippy -- -D warnings`: lint with warnings treated as errors.
 - `docker compose up --build -d`: build and run containerized bot using the mounted `.env`.

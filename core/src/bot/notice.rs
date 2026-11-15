@@ -9,7 +9,7 @@ use teloxide::types::{ChatId, MessageId};
 use teloxide::{ApiError, RequestError};
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::persist::{read_json_or_default, write_json_atomic};
+use crate::persist::{read_json_or_default, state_path, write_json_atomic};
 
 const MAX_TRACKED_NOTICES: usize = 100;
 
@@ -42,17 +42,10 @@ pub(crate) struct NoticeBoard {
 
 impl NoticeBoard {
     pub(crate) fn load() -> Self {
-        let raw = std::env::var("PLANABOT_NOTICE_PROGRESS_PATH")
-            .unwrap_or_else(|_| ".planabot/notice_progress.json".to_string());
-        let path = PathBuf::from(raw);
-        let path = if path.is_absolute() {
-            path
-        } else {
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(path)
-        };
-        Self::at(path)
+        Self::at(state_path(
+            "PLANABOT_NOTICE_PROGRESS_PATH",
+            ".planabot/notice_progress.json",
+        ))
     }
 
     fn at(path: PathBuf) -> Self {

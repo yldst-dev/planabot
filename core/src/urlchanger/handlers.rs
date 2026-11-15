@@ -11,12 +11,13 @@ use crate::urlchanger::music_card::build_music_card;
 use crate::urlchanger::music_metadata::{MusicMetadata, download_cover, fetch_music_metadata};
 use chrono::Utc;
 use log::{error, warn};
+use std::future::Future;
 use std::time::Duration;
 use teloxide::dispatching::DpHandlerDescription;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, InputFile, ParseMode};
 use teloxide::utils::html;
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout, timeout_at};
 
 const CAPTION_LIMIT: usize = 1024;
 const MUSIC_CARD_FILE_NAME: &str = "music_card.png";
@@ -24,6 +25,7 @@ const YOUTUBE_THUMBNAIL_FILE_NAME: &str = "youtube.jpg";
 const YOUTUBE_PREVIEW_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_GOOGLE_SHARE_LINKS: usize = 5;
 const MAX_INSTAGRAM_PREVIEWS: usize = 3;
+const INSTAGRAM_PREVIEW_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn is_recent_message(msg: &Message, seconds: i64) -> bool {
     let now = Utc::now().timestamp();
@@ -451,7 +453,7 @@ fn music_card_file(png: Vec<u8>) -> InputFile {
 }
 
 fn music_card_caption(username: &str) -> String {
-    format!("정리 완료. 선생님.\n{}:", username)
+    format!("정리 완료.\n선생님.\n{}:", username)
 }
 
 fn fits_caption(text: &str) -> bool {
@@ -571,11 +573,34 @@ fn is_youtube_only(links: &[MusicLink]) -> bool {
 async fn load_instagram_previews(
     links: &[LinkConversion],
 ) -> Vec<(LinkConversion, InstagramMedia)> {
+    load_previews_within(links, INSTAGRAM_PREVIEW_TIMEOUT, |url| async move {
+        fetch_instagram_media(&url).await
+    })
+    .await
+}
+
+async fn load_previews_within<F, Fut>(
+    links: &[LinkConversion],
+    budget: Duration,
+    fetch: F,
+) -> Vec<(LinkConversion, InstagramMedia)>
+where
+    F: Fn(String) -> Fut,
+    Fut: Future<Output = anyhow::Result<InstagramMedia>>,
+{
+    let deadline = Instant::now() + budget;
     let mut previews = Vec::new();
     for link in links.iter().take(MAX_INSTAGRAM_PREVIEWS) {
-        match fetch_instagram_media(&link.cleaned_original).await {
-            Ok(media) => previews.push((link.clone(), media)),
-            Err(e) => warn!("Instagram 미리보기 수집 실패: {:?}", e),
+        match timeout_at(deadline, fetch(link.cleaned_original.clone())).await {
+            Ok(Ok(media)) => previews.push((link.clone(), media)),
+            Ok(Err(e)) => warn!("Instagram 미리보기 수집 실패: {:?}", e),
+            Err(_) => {
+                warn!(
+                    "Instagram 미리보기 수집 시간 초과: {}",
+                    link.cleaned_original
+                );
+                break;
+            }
         }
     }
     previews
@@ -586,7 +611,7 @@ fn instagram_caption(kind: InstagramMediaKind) -> String {
         InstagramMediaKind::Video => "릴스 미리보기를 보내드리겠습니다.",
         InstagramMediaKind::Photo => "미리보기를 보내드리겠습니다.",
     };
-    format!("정리 완료. 선생님.\n{preview}")
+    format!("정리 완료.\n선생님.\n{preview}")
 }
 
 fn build_instagram_original_keyboard(link: &LinkConversion) -> Option<InlineKeyboardMarkup> {
@@ -639,7 +664,7 @@ fn google_share_message(username: &str, links: &[LinkConversion]) -> String {
         })
         .collect();
     format!(
-        "정리 완료. 선생님.\n{}: {}",
+        "정리 완료.\n선생님.\n{}: {}",
         html::escape(username),
         anchors.join(" ")
     )
@@ -929,6 +954,92 @@ mod tests {
                 text_of(reply).contains("<a href=\"https://www.yna.co.kr/view/AKR1\">Link</a>")
             );
         }
+    }
+
+    fn photo() -> InstagramMedia {
+        InstagramMedia {
+            kind: InstagramMediaKind::Photo,
+            bytes: vec![0xFF, 0xD8, 0xFF],
+            file_name: "instagram.jpg",
+            size: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn one_deadline_bounds_all_instagram_previews_and_keeps_earlier_ones() {
+        let links = convert_instagram_links(
+            "https://www.instagram.com/p/AAAAAAAAAAA/ https://www.instagram.com/p/BBBBBBBBBBB/ https://www.instagram.com/p/CCCCCCCCCCC/",
+        );
+        assert_eq!(links.len(), 3);
+        let first = links[0].cleaned_original.clone();
+        let started = std::time::Instant::now();
+        let previews = timeout(
+            Duration::from_secs(5),
+            load_previews_within(&links, Duration::from_millis(150), |url| {
+                let ready = url == first;
+                async move {
+                    if ready {
+                        Ok(photo())
+                    } else {
+                        std::future::pending().await
+                    }
+                }
+            }),
+        )
+        .await
+        .expect("the deadline must end the loop");
+        assert_eq!(previews.len(), 1);
+        assert_eq!(previews[0].0.cleaned_original, links[0].cleaned_original);
+        assert!(started.elapsed() < Duration::from_secs(2));
+
+        let none = timeout(
+            Duration::from_secs(5),
+            load_previews_within(&links, Duration::from_millis(50), |_| async {
+                std::future::pending().await
+            }),
+        )
+        .await
+        .expect("the deadline must end the loop");
+        assert!(none.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_instagram_preview_does_not_stop_the_next_link() {
+        let links = convert_instagram_links(
+            "https://www.instagram.com/p/AAAAAAAAAAA/ https://www.instagram.com/p/BBBBBBBBBBB/",
+        );
+        let first = links[0].cleaned_original.clone();
+        let previews = load_previews_within(&links, Duration::from_secs(5), |url| {
+            let broken = url == first;
+            async move {
+                if broken {
+                    Err(anyhow::anyhow!("mirror down"))
+                } else {
+                    Ok(photo())
+                }
+            }
+        })
+        .await;
+        assert_eq!(previews.len(), 1);
+        assert_eq!(previews[0].0.cleaned_original, links[1].cleaned_original);
+    }
+
+    #[test]
+    fn fixed_notices_put_the_honorific_on_its_own_line() {
+        assert_eq!(music_card_caption("sensei"), "정리 완료.\n선생님.\nsensei:");
+        assert_eq!(
+            instagram_caption(InstagramMediaKind::Photo),
+            "정리 완료.\n선생님.\n미리보기를 보내드리겠습니다."
+        );
+        let links = vec![LinkConversion {
+            original: "https://share.google/abc".into(),
+            converted: "https://www.yna.co.kr/view/AKR1".into(),
+            cleaned_original: "https://www.yna.co.kr/view/AKR1".into(),
+            disable_preview: false,
+        }];
+        assert!(
+            google_share_message("sensei", &links).starts_with("정리 완료.\n선생님.\nsensei: ")
+        );
     }
 
     #[test]

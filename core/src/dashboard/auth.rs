@@ -1,18 +1,17 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use axum::http::HeaderMap;
 use axum::http::header::COOKIE;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
 use super::credentials;
 use super::password::random_hex;
-use crate::persist::read_json_or_default;
+use crate::persist::{read_json_strict, write_private};
 
 pub(crate) const COOKIE_NAME: &str = "planabot_dashboard";
 pub(crate) const SESSION_TTL: Duration = Duration::from_secs(12 * 3600);
@@ -33,9 +32,10 @@ struct Limiter {
     last_attempt: Instant,
 }
 
-static SESSIONS: Lazy<Mutex<SessionFile>> =
-    Lazy::new(|| Mutex::new(read_json_or_default(&sessions_path())));
-static LIMITERS: Lazy<Mutex<HashMap<IpAddr, Limiter>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static SESSIONS: LazyLock<Mutex<SessionFile>> =
+    LazyLock::new(|| Mutex::new(read_json_strict(&sessions_path()).unwrap_or_default()));
+static LIMITERS: LazyLock<Mutex<HashMap<IpAddr, Limiter>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub(crate) fn is_enabled() -> bool {
     !matches!(
@@ -82,7 +82,7 @@ pub(crate) fn record_success(client: IpAddr) {
 
 pub(crate) fn create_session() -> Result<String> {
     let session = random_hex::<32>()?;
-    let current = credentials::credential_id();
+    let current = credentials::credential_id()?;
     let mut file = SESSIONS.lock().unwrap_or_else(|p| p.into_inner());
     if file.credential_id != current {
         file.credential_id = current;
@@ -113,7 +113,9 @@ pub(crate) fn is_authenticated(headers: &HeaderMap) -> bool {
     let Some(session) = session_from(headers) else {
         return false;
     };
-    let current = credentials::credential_id();
+    let Ok(current) = credentials::credential_id() else {
+        return false;
+    };
     if current.is_empty() {
         return false;
     }
@@ -145,8 +147,7 @@ fn save_sessions(file: &SessionFile) {
                 std::fs::create_dir_all(parent)?;
             }
             let tmp = path.with_extension("json.tmp");
-            std::fs::write(&tmp, payload)?;
-            restrict_permissions(&tmp);
+            write_private(&tmp, payload.as_bytes())?;
             std::fs::rename(&tmp, &path)
         });
     if let Err(err) = result {
@@ -165,15 +166,6 @@ fn session_from(headers: &HeaderMap) -> Option<String> {
         .map(|(_, value)| value.to_string())
         .filter(|value| !value.is_empty())
 }
-
-#[cfg(unix)]
-pub(crate) fn restrict_permissions(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-}
-
-#[cfg(not(unix))]
-pub(crate) fn restrict_permissions(_path: &std::path::Path) {}
 
 #[cfg(test)]
 mod tests {

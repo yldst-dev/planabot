@@ -112,6 +112,13 @@ where
                 .await
             {
                 error!("메시지 수정 실패 (ID {}): {}", gallery_id, err);
+                let _ = bot
+                    .edit_message_text(
+                        chat_id,
+                        initial.id,
+                        "오류.\n선생님.\n결과를 표시하지 못했습니다.\n잠시 후 다시 시도해 주십시오.",
+                    )
+                    .await;
             }
         }
         None => {
@@ -312,4 +319,139 @@ pub(super) fn build_notice_keyboard(state: &AppState) -> Option<InlineKeyboardMa
     Some(InlineKeyboardMarkup::new(vec![vec![
         InlineKeyboardButton::url("공지방 참여하기", url),
     ]]))
+}
+
+#[cfg(test)]
+mod gallery_lookup_tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::handle_message;
+    use crate::bot::gallery::telegram_text_len;
+
+    const LOOKUP_FAILED: &str =
+        "오류.\n선생님.\n갤러리 정보를 불러오지 못했습니다.\n잠시 후 다시 시도해 주십시오.";
+
+    async fn edits_after_lookup(
+        gallery_status: u16,
+        gallery_body: String,
+        reject_html: bool,
+    ) -> Vec<(serde_json::Value, bool)> {
+        let gallery = axum::Router::new().fallback(move || {
+            let body = gallery_body.clone();
+            async move {
+                (
+                    axum::http::StatusCode::from_u16(gallery_status).unwrap(),
+                    body,
+                )
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let gallery_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, gallery).await });
+
+        let edits = Arc::new(Mutex::new(Vec::new()));
+        let seen = edits.clone();
+        let telegram = axum::Router::new().fallback(move |uri: axum::http::Uri, body: String| {
+            let seen = seen.clone();
+            async move {
+                let request: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+                if uri
+                    .path()
+                    .to_ascii_lowercase()
+                    .ends_with("/editmessagetext")
+                {
+                    let html = request["parse_mode"] == "HTML";
+                    let text = request["text"].as_str().unwrap_or_default();
+                    let length = if html {
+                        telegram_text_len(text)
+                    } else {
+                        text.encode_utf16().count()
+                    };
+                    let accepted = length <= 4096 && !(html && reject_html);
+                    seen.lock().unwrap().push((request, accepted));
+                    if !accepted {
+                        return axum::Json(serde_json::json!({"ok": false, "error_code": 400,
+                            "description": "Bad Request: MESSAGE_TOO_LONG"}));
+                    }
+                }
+                axum::Json(
+                    serde_json::json!({"ok": true, "result": {"message_id": 5, "date": 0,
+                    "text": "x", "chat": {"id": 7, "first_name": "A", "type": "private"}}}),
+                )
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, telegram).await });
+        let bot = teloxide::Bot::new("1:test").set_api_url(url.parse().unwrap());
+
+        let state = crate::bot::AppState::new(
+            "bot".into(),
+            teloxide::types::UserId(1),
+            crate::hitomi::GalleryClient::with_base_url(&gallery_url),
+            None,
+            None,
+        );
+        let msg: teloxide::types::Message = serde_json::from_value(serde_json::json!({
+            "message_id": 1, "date": 4_102_444_800_i64, "text": "3723891",
+            "chat": {"id": 7, "first_name": "A", "type": "private"},
+            "from": {"id": 7, "is_bot": false, "first_name": "A"}
+        }))
+        .unwrap();
+        handle_message(bot, msg, state).await.unwrap();
+        edits.lock().unwrap().clone()
+    }
+
+    fn text_of(edit: &(serde_json::Value, bool)) -> &str {
+        edit.0["text"].as_str().unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_missing_gallery_is_reported_as_not_found() {
+        let edits = edits_after_lookup(404, "not found".into(), false).await;
+        assert_eq!(edits.len(), 1);
+        assert!(
+            text_of(&edits[0])
+                .starts_with("확인 필요.\n선생님.\nID 3723891 정보를 찾지 못했습니다.")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_lookup_is_reported_as_an_error_not_as_missing() {
+        for (status, body) in [(500, "oops"), (200, "<html>blocked</html>")] {
+            let edits = edits_after_lookup(status, body.into(), false).await;
+            assert_eq!(edits.len(), 1, "{status}");
+            assert_eq!(text_of(&edits[0]), LOOKUP_FAILED, "{status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_over_long_gallery_still_replaces_the_waiting_message() {
+        let body = format!(
+            "var galleryinfo = {};",
+            serde_json::json!({
+                "title": "&<>𝒜가".repeat(4000),
+                "artists": (0..2000).map(|n| format!("작가&<>{n}")).collect::<Vec<_>>(),
+                "tags": (0..4000).map(|n| format!("female:&<>{n}𝒜")).collect::<Vec<_>>(),
+                "language_localname": "한국어",
+            })
+        );
+        let edits = edits_after_lookup(200, body, false).await;
+        assert_eq!(edits.len(), 1);
+        assert!(edits[0].1);
+        assert!(text_of(&edits[0]).starts_with("<b>분석 완료.</b>\n선생님.\nID 3723891"));
+    }
+
+    #[tokio::test]
+    async fn a_rejected_result_is_replaced_by_an_error_notice() {
+        let body = r#"var galleryinfo = {"title":"Sample"};"#;
+        let edits = edits_after_lookup(200, body.into(), true).await;
+        assert_eq!(edits.len(), 2);
+        assert!(!edits[0].1);
+        assert!(edits[1].1);
+        assert_eq!(
+            text_of(&edits[1]),
+            "오류.\n선생님.\n결과를 표시하지 못했습니다.\n잠시 후 다시 시도해 주십시오."
+        );
+    }
 }

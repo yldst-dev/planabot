@@ -13,7 +13,7 @@ use super::super::gallery::{
     download_action_button, fetch_action_button, is_gallery_id, preparing_action_button,
     render_gallery_message, replace_gallery_action_button,
 };
-use super::super::{AppState, HandlerResult};
+use super::super::{AppState, HandlerResult, SENDER_CHAT_USER_BASE};
 use crate::schedule::{RESTORE_CALLBACK_PREFIX, render_schedule_restore_result};
 
 pub(crate) async fn handle_callback<B>(
@@ -143,9 +143,21 @@ where
             .await;
         return Ok(());
     };
+    let group_owner_id = SENDER_CHAT_USER_BASE | msg.chat.id.0.unsigned_abs();
+    let owner_user_id = if (msg.chat.is_group() || msg.chat.is_supergroup())
+        && state.schedule_store.owner_of(id) == Some(group_owner_id)
+        && bot
+            .get_chat_member(msg.chat.id, query.from.id)
+            .await
+            .is_ok_and(|member| member.kind.is_anonymous())
+    {
+        group_owner_id
+    } else {
+        query.from.id.0
+    };
     let result = state
         .schedule_store
-        .restore(query.from.id.0, msg.chat.id.0, id)
+        .restore(owner_user_id, msg.chat.id.0, id)
         .await?;
     if !result.ok {
         let _ = bot
@@ -276,20 +288,16 @@ where
             }
             Err(err) => {
                 error!("hiromi share 실패 (id {}): {}", gallery_id, err);
-                let busy = err.to_string().contains("already running")
-                    || err.to_string().contains("job already running");
-                if !busy {
-                    let keyboard = original_markup
-                        .as_ref()
-                        .map(|markup| {
-                            replace_gallery_action_button(markup, fetch_action_button(&gallery_id))
-                        })
-                        .unwrap_or_else(|| build_gallery_keyboard(&fallback_info, include_save));
-                    let _ = bot
-                        .edit_message_reply_markup(chat_id, message_id)
-                        .reply_markup(keyboard)
-                        .await;
-                }
+                let keyboard = original_markup
+                    .as_ref()
+                    .map(|markup| {
+                        replace_gallery_action_button(markup, fetch_action_button(&gallery_id))
+                    })
+                    .unwrap_or_else(|| build_gallery_keyboard(&fallback_info, include_save));
+                let _ = bot
+                    .edit_message_reply_markup(chat_id, message_id)
+                    .reply_markup(keyboard)
+                    .await;
                 if let Some(notice) = crate::hiromi_share::failure_notice(&err) {
                     let sent = bot
                         .send_message(chat_id, notice)
@@ -454,4 +462,162 @@ where
 {
     bot.send_message(chat_id, text).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::bot::SENDER_CHAT_USER_BASE;
+    use crate::schedule::{NewSchedule, ScheduleKind, ScheduleStore, now_ms};
+    use teloxide::types::{CallbackQuery, ChatId};
+
+    const GROUP_ADMIN: u64 = SENDER_CHAT_USER_BASE | 100;
+
+    fn member(status: &str, is_anonymous: bool) -> serde_json::Value {
+        let mut member = serde_json::json!({
+            "user": {"id": 7, "is_bot": false, "first_name": "A"},
+            "status": status,
+            "is_anonymous": is_anonymous,
+        });
+        if status == "administrator" {
+            for right in [
+                "can_manage_chat",
+                "can_change_info",
+                "can_delete_messages",
+                "can_manage_video_chats",
+                "can_invite_users",
+                "can_restrict_members",
+                "can_pin_messages",
+                "can_promote_members",
+            ] {
+                member[right] = serde_json::json!(true);
+            }
+            member["can_be_edited"] = serde_json::json!(false);
+        }
+        serde_json::from_value::<teloxide::types::ChatMember>(member.clone()).unwrap();
+        member
+    }
+
+    async fn restored_after_press(
+        owner_user_id: u64,
+        item_chat: i64,
+        press_chat: i64,
+        chat_member: Option<serde_json::Value>,
+    ) -> bool {
+        let api = axum::Router::new().fallback(move |uri: axum::http::Uri| {
+            let chat_member = chat_member.clone();
+            async move {
+                let path = uri.path().to_ascii_lowercase();
+                axum::Json(if path.ends_with("/getchatmember") {
+                    match chat_member {
+                        Some(member) => serde_json::json!({"ok": true, "result": member}),
+                        None => serde_json::json!({"ok": false, "error_code": 400,
+                            "description": "Bad Request: user not found"}),
+                    }
+                } else if path.ends_with("/editmessagetext") {
+                    serde_json::json!({"ok": true, "result": {"message_id": 5, "date": 1, "text": "x",
+                        "chat": {"id": press_chat, "title": "g", "type": "supergroup"}}})
+                } else {
+                    serde_json::json!({"ok": true, "result": true})
+                })
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, api).await });
+        let bot = teloxide::Bot::new("1:test").set_api_url(url.parse().unwrap());
+
+        let mut state = crate::bot::AppState::new(
+            "bot".into(),
+            teloxide::types::UserId(1),
+            crate::hitomi::GalleryClient::new(),
+            None,
+            None,
+        );
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "planabot_restore_press_{}_{}.json",
+            now_ms(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        state.schedule_store = ScheduleStore::with_items(path.clone(), Vec::new());
+        let item = state
+            .schedule_store
+            .add(NewSchedule {
+                owner_user_id,
+                chat_id: ChatId(item_chat),
+                message_thread_id: None,
+                source_message_id: None,
+                kind: ScheduleKind::Schedule,
+                title: "율무차".to_string(),
+                due_at_ms: now_ms() + 60_000,
+            })
+            .await
+            .unwrap()
+            .item
+            .unwrap();
+        assert!(
+            state
+                .schedule_store
+                .cancel(owner_user_id, item_chat, "율무차")
+                .await
+                .unwrap()
+                .ok
+        );
+
+        let chat_type = if press_chat > 0 {
+            serde_json::json!({"id": press_chat, "first_name": "A", "type": "private"})
+        } else {
+            serde_json::json!({"id": press_chat, "title": "g", "type": "supergroup"})
+        };
+        let query: CallbackQuery = serde_json::from_value(serde_json::json!({
+            "id": "q1",
+            "from": {"id": 7, "is_bot": false, "first_name": "A"},
+            "chat_instance": "c",
+            "data": format!("sundo_{}", item.id),
+            "message": {"message_id": 5, "date": 1_700_000_000, "text": "취소 완료.",
+                "chat": chat_type, "from": {"id": 1, "is_bot": true, "first_name": "bot"}}
+        }))
+        .unwrap();
+        assert!(query.regular_message().is_some());
+        super::handle_restore_callback(&bot, &query, &state, &item.id)
+            .await
+            .unwrap();
+        let restored = !state
+            .schedule_store
+            .list_user_pending(owner_user_id, item_chat)
+            .is_empty();
+        let _ = std::fs::remove_file(path);
+        restored
+    }
+
+    #[tokio::test]
+    async fn an_anonymous_admin_restores_the_reminder_they_set_as_the_group() {
+        let admin = Some(member("administrator", true));
+        assert!(restored_after_press(GROUP_ADMIN, -100, -100, admin).await);
+        let owner = Some(member("creator", true));
+        assert!(restored_after_press(GROUP_ADMIN, -100, -100, owner).await);
+    }
+
+    #[tokio::test]
+    async fn only_anonymous_admins_of_that_group_restore_a_group_owned_reminder() {
+        for (press_chat, chat_member) in [
+            (-100, Some(member("administrator", false))),
+            (-100, Some(member("creator", false))),
+            (-100, Some(member("member", false))),
+            (-100, None),
+            (-200, Some(member("administrator", true))),
+            (7, Some(member("administrator", true))),
+        ] {
+            assert!(
+                !restored_after_press(GROUP_ADMIN, -100, press_chat, chat_member.clone()).await,
+                "{press_chat} {chat_member:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_anonymous_admin_cannot_restore_another_members_reminder() {
+        let admin = Some(member("administrator", true));
+        assert!(!restored_after_press(42, -100, -100, admin).await);
+    }
 }

@@ -1,29 +1,29 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::Deserialize;
 use url::Url;
 
+use super::http::{COMPAT_USER_AGENT, read_body_limited, unescape_html};
 use super::link_utils::{MusicLink, MusicPlatform};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(6);
 const MAX_PAGE_BYTES: usize = 3 * 1024 * 1024;
 const MAX_COVER_BYTES: usize = 5 * 1024 * 1024;
-const USER_AGENT: &str = "Mozilla/5.0 (compatible; planabot/0.1)";
 
-static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
-        .user_agent(USER_AGENT)
+        .user_agent(COMPAT_USER_AGENT)
         .build()
         .unwrap_or_default()
 });
-static META_TAG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?is)<meta\b[^>]*>").unwrap());
-static META_ATTR_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?is)\b(property|name|content)\s*=\s*"([^"]*)""#).unwrap());
+static META_TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<meta\b[^>]*>").unwrap());
+static META_ATTR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?is)\b(property|name|content)\s*=\s*"([^"]*)""#).unwrap());
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MusicMetadata {
@@ -60,21 +60,6 @@ fn is_allowed_cover_host(host: &str) -> bool {
         || host == "i.ytimg.com"
         || host.ends_with(".spotifycdn.com")
         || host.ends_with(".mzstatic.com")
-}
-
-async fn read_body_limited(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
-    let declared = response.content_length().unwrap_or(0);
-    if declared as usize > limit {
-        bail!("응답 크기 초과: {} bytes", declared);
-    }
-    let mut buf = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
-        if buf.len() + chunk.len() > limit {
-            bail!("응답 크기 초과: {} bytes 이상", limit);
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    Ok(buf)
 }
 
 async fn fetch_text(url: Url) -> Result<String> {
@@ -188,16 +173,6 @@ fn collect_og_meta(html: &str) -> HashMap<String, String> {
         }
     }
     meta
-}
-
-fn unescape_html(raw: &str) -> String {
-    raw.replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&#x27;", "'")
-        .replace("&apos;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
 }
 
 fn youtube_video_id(url: &Url) -> Option<String> {

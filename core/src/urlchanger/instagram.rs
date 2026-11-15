@@ -1,29 +1,41 @@
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use once_cell::sync::Lazy;
 use regex::Regex;
 use url::Url;
+
+use super::http::{read_body_limited, unescape_html};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_MEDIA_BYTES: usize = 45 * 1024 * 1024;
 const MAX_PAGE_BYTES: usize = 3 * 1024 * 1024;
+const MAX_REDIRECTS: usize = 10;
 const USER_AGENT: &str = "TelegramBot (like TwitterBot)";
 
-static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .user_agent(USER_AGENT)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= MAX_REDIRECTS {
+                attempt.error("리디렉션이 너무 많습니다")
+            } else if attempt.url().host_str().is_some_and(is_allowed_host) {
+                attempt.follow()
+            } else {
+                attempt.error("허용되지 않은 리디렉션 호스트입니다")
+            }
+        }))
         .build()
         .unwrap_or_default()
 });
-static OG_IMAGE_RE: Lazy<Regex> = Lazy::new(|| {
+static OG_IMAGE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?is)<meta\b[^>]*property\s*=\s*"og:image"[^>]*content\s*=\s*"([^"]+)""#).unwrap()
 });
-static OG_IMAGE_RE_REV: Lazy<Regex> = Lazy::new(|| {
+static OG_IMAGE_RE_REV: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?is)<meta\b[^>]*content\s*=\s*"([^"]+)"[^>]*property\s*=\s*"og:image""#).unwrap()
 });
-static OG_VIDEO_RE: Lazy<Regex> = Lazy::new(|| {
+static OG_VIDEO_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?is)<meta\b[^>]*property\s*=\s*"og:video(?:\:url|\:secure_url)?"[^>]*content\s*=\s*"([^"]+)""#).unwrap()
 });
 
@@ -66,21 +78,28 @@ pub fn instagram_shortcode(url: &str) -> Option<String> {
 }
 
 pub async fn fetch_instagram_media(original_url: &str) -> Result<InstagramMedia> {
-    if let Some(code) = instagram_shortcode(original_url) {
+    let is_post = if let Some(code) = instagram_shortcode(original_url) {
         for candidate in video_candidates(&code) {
             if let Some(media) = download_if_kind(&candidate, InstagramMediaKind::Video).await {
                 return Ok(media);
             }
         }
-        if let Ok(Some(video_url)) = crawler_og_video(original_url).await {
-            let media = download_if_kind(&video_url, InstagramMediaKind::Video).await;
-            if let Some(media) = media {
-                return Ok(media);
-            }
+        true
+    } else {
+        false
+    };
+
+    let page = fetch_text(original_url).await;
+    let video_url = page.as_deref().ok().filter(|_| is_post).and_then(og_video);
+    if let Some(video_url) = video_url {
+        let media = download_if_kind(&video_url, InstagramMediaKind::Video).await;
+        if let Some(media) = media {
+            return Ok(media);
         }
     }
 
-    if let Some(image_url) = crawler_og_image(original_url).await? {
+    let html = page?;
+    if let Some(image_url) = og_image(&html) {
         let media = download_media(&image_url).await?;
         if media.kind == InstagramMediaKind::Photo {
             return Ok(media);
@@ -106,27 +125,23 @@ fn video_candidates(code: &str) -> Vec<String> {
     ]
 }
 
-async fn crawler_og_image(original_url: &str) -> Result<Option<String>> {
-    let html = fetch_text(original_url).await?;
-    if let Some(cap) = OG_IMAGE_RE.captures(&html) {
-        return Ok(Some(unescape_html(&cap[1])));
-    }
-    if let Some(cap) = OG_IMAGE_RE_REV.captures(&html) {
-        return Ok(Some(unescape_html(&cap[1])));
-    }
-    Ok(None)
+fn og_image(html: &str) -> Option<String> {
+    OG_IMAGE_RE
+        .captures(html)
+        .or_else(|| OG_IMAGE_RE_REV.captures(html))
+        .map(|cap| unescape_html(&cap[1]))
 }
 
-async fn crawler_og_video(original_url: &str) -> Result<Option<String>> {
-    let html = fetch_text(original_url).await?;
-    if let Some(cap) = OG_VIDEO_RE.captures(&html) {
-        return Ok(Some(unescape_html(&cap[1])));
-    }
-    Ok(None)
+fn og_video(html: &str) -> Option<String> {
+    OG_VIDEO_RE.captures(html).map(|cap| unescape_html(&cap[1]))
 }
 
 async fn fetch_text(url: &str) -> Result<String> {
     let parsed = Url::parse(url).context("Instagram URL 파싱 실패")?;
+    let host = parsed.host_str().unwrap_or_default();
+    if !is_allowed_host(host) {
+        bail!("허용되지 않은 호스트: {host}");
+    }
     let response = CLIENT.get(parsed).send().await?.error_for_status()?;
     let bytes = read_body_limited(response, MAX_PAGE_BYTES).await?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
@@ -134,12 +149,11 @@ async fn fetch_text(url: &str) -> Result<String> {
 
 async fn download_media(url: &str) -> Result<InstagramMedia> {
     let parsed = Url::parse(url).context("미디어 URL 파싱 실패")?;
-    let response = CLIENT.get(parsed).send().await?.error_for_status()?;
-    let final_url = response.url().clone();
-    let host = final_url.host_str().unwrap_or_default();
+    let host = parsed.host_str().unwrap_or_default();
     if !is_allowed_media_host(host) {
         bail!("허용되지 않은 미디어 호스트: {host}");
     }
+    let response = CLIENT.get(parsed).send().await?.error_for_status()?;
     let content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -147,6 +161,9 @@ async fn download_media(url: &str) -> Result<InstagramMedia> {
         .unwrap_or("")
         .to_string();
     let bytes = read_body_limited(response, MAX_MEDIA_BYTES).await?;
+    if bytes.is_empty() {
+        bail!("미디어 응답이 비어 있습니다");
+    }
     let kind = sniff_kind(&content_type, &bytes)
         .ok_or_else(|| anyhow!("미디어 형식을 확인하지 못했습니다"))?;
     let (file_name, size) = match kind {
@@ -247,6 +264,10 @@ fn sniff_kind(content_type: &str, bytes: &[u8]) -> Option<InstagramMediaKind> {
     None
 }
 
+fn is_allowed_host(host: &str) -> bool {
+    matches!(host, "instagram.com" | "www.instagram.com") || is_allowed_media_host(host)
+}
+
 fn is_allowed_media_host(host: &str) -> bool {
     matches!(
         host,
@@ -261,36 +282,27 @@ fn is_allowed_media_host(host: &str) -> bool {
         || host.ends_with(".fbcdn.net")
 }
 
-fn unescape_html(value: &str) -> String {
-    value
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-}
-
-async fn read_body_limited(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
-    let declared = response.content_length().unwrap_or(0);
-    if declared as usize > limit {
-        bail!("응답 크기 초과: {} bytes", declared);
-    }
-    let mut buf = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
-        if buf.len() + chunk.len() > limit {
-            bail!("응답 크기 초과: {} bytes 이상", limit);
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    if buf.is_empty() {
-        bail!("미디어 응답이 비어 있습니다");
-    }
-    Ok(buf)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_instagram_and_its_media_hosts_may_be_fetched_or_redirected_to() {
+        assert!(is_allowed_host("www.instagram.com"));
+        assert!(is_allowed_host("scontent-ssn1-1.cdninstagram.com"));
+        assert!(is_allowed_host("scontent.xx.fbcdn.net"));
+        assert!(!is_allowed_host("192.168.0.6"));
+        assert!(!is_allowed_host("instagram.com.evil.example"));
+        assert!(!is_allowed_media_host("www.instagram.com"));
+    }
+
+    #[test]
+    fn og_tags_are_read_in_either_attribute_order_and_unescaped() {
+        let html = r#"<meta content="https://a/b?x=1&amp;y=2" property="og:image"><meta property="og:video" content="https://v/c.mp4">"#;
+        assert_eq!(og_image(html).as_deref(), Some("https://a/b?x=1&y=2"));
+        assert_eq!(og_video(html).as_deref(), Some("https://v/c.mp4"));
+        assert_eq!(og_image("<html></html>"), None);
+    }
 
     #[test]
     fn oversized_mp4_boxes_are_ignored_instead_of_panicking() {

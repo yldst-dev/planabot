@@ -23,6 +23,7 @@ use crate::urlchanger;
 
 pub(crate) use gallery::extract_gallery_id_from_url;
 pub use state::AppState;
+pub(crate) use state::SENDER_CHAT_USER_BASE;
 pub(crate) use telegram::{
     SendOptions, send_in_thread, send_photo_in_thread, send_photo_reply_with_fallback,
     send_reply_with_fallback, send_video_in_thread, send_video_reply_with_fallback,
@@ -62,7 +63,7 @@ pub(crate) fn request_shutdown() -> bool {
     accepted
 }
 
-fn is_shutting_down() -> bool {
+pub(crate) fn is_shutting_down() -> bool {
     SHUTDOWN_REQUESTED.load(Ordering::SeqCst)
 }
 

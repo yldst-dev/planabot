@@ -7,11 +7,14 @@ pub(crate) mod store;
 mod web;
 
 use std::collections::BTreeMap;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use axum::http::header::CACHE_CONTROL;
+use axum::extract::Request;
+use axum::http::header::{CACHE_CONTROL, HOST};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -20,6 +23,8 @@ use serde::{Deserialize, Serialize};
 use catalog::{Group, Kind};
 
 const CSRF_HEADER: &str = "x-planabot-dashboard";
+const ALLOWED_HOSTS_KEY: &str = "PLANABOT_DASHBOARD_ALLOWED_HOSTS";
+const MAX_HOST_BYTES: usize = 255;
 
 static BOT_USERNAME: OnceLock<String> = OnceLock::new();
 
@@ -28,7 +33,8 @@ pub(crate) fn set_bot_username(username: &str) {
 }
 
 pub(crate) fn router() -> Router {
-    if auth::is_enabled() {
+    let enabled = auth::is_enabled();
+    if enabled {
         log::info!(
             "설정 대시보드 사용: / 경로, 화면 파일 {}",
             web::dist_dir().display()
@@ -37,10 +43,19 @@ pub(crate) fn router() -> Router {
     } else {
         log::info!("설정 대시보드 비활성: PLANABOT_DASHBOARD_ENABLED=0");
     }
-    Router::new()
-        .route("/", get(web::index))
-        .route("/favicon.svg", get(web::favicon))
-        .route("/assets/{name}", get(web::asset))
+    routes(enabled)
+}
+
+fn routes(enabled: bool) -> Router {
+    let pages = if enabled {
+        Router::new()
+            .route("/", get(web::index))
+            .route("/favicon.svg", get(web::favicon))
+            .route("/assets/{name}", get(web::asset))
+    } else {
+        Router::new()
+    };
+    pages
         .route("/api/session", get(account::session))
         .route("/api/setup", post(account::setup))
         .route("/api/login", post(account::login))
@@ -52,6 +67,63 @@ pub(crate) fn router() -> Router {
         .route("/api/settings", get(settings).put(save_settings))
         .route("/api/settings/import-env", post(import_env))
         .route("/api/restart", post(restart))
+        .route_layer(middleware::from_fn(require_allowed_host))
+}
+
+async fn require_allowed_host(request: Request, next: Next) -> Response {
+    let allowlist = std::env::var(ALLOWED_HOSTS_KEY).unwrap_or_default();
+    let host = single_host(request.headers());
+    if host.is_some_and(|host| host_allowed(host, &allowlist)) {
+        return next.run(request).await;
+    }
+    let shown: String = host.unwrap_or_default().chars().take(80).collect();
+    log::warn!(
+        "대시보드 접속 거부: Host {shown:?}. 이 주소로 열려면 {ALLOWED_HOSTS_KEY}에 호스트 이름을 포트 없이 추가하십시오."
+    );
+    error(StatusCode::FORBIDDEN, "허용되지 않은 접속 주소.")
+}
+
+fn single_host(headers: &HeaderMap) -> Option<&str> {
+    let mut values = headers.get_all(HOST).iter();
+    match (values.next(), values.next()) {
+        (Some(value), None) => value.to_str().ok(),
+        _ => None,
+    }
+}
+
+fn host_allowed(host: &str, allowlist: &str) -> bool {
+    if host.len() > MAX_HOST_BYTES {
+        return false;
+    }
+    if let Some(rest) = host.strip_prefix('[') {
+        let Some((addr, tail)) = rest.split_once(']') else {
+            return false;
+        };
+        return addr.parse::<Ipv6Addr>().is_ok() && is_port_suffix(tail);
+    }
+    let (name, tail) = host.split_at(host.find(':').unwrap_or(host.len()));
+    if !is_port_suffix(tail) {
+        return false;
+    }
+    name.parse::<Ipv4Addr>().is_ok()
+        || name.eq_ignore_ascii_case("localhost")
+        || (!name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.'))
+            && allowlist
+                .split(',')
+                .map(str::trim)
+                .any(|entry| !entry.is_empty() && entry.eq_ignore_ascii_case(name)))
+}
+
+fn is_port_suffix(tail: &str) -> bool {
+    tail.is_empty()
+        || tail.strip_prefix(':').is_some_and(|port| {
+            !port.is_empty()
+                && port.bytes().all(|b| b.is_ascii_digit())
+                && port.parse::<u16>().is_ok()
+        })
 }
 
 fn apply_security_headers(headers: &mut HeaderMap) {
@@ -142,7 +214,10 @@ async fn overview(headers: HeaderMap) -> Response {
     if let Some(response) = reject(&headers, false) {
         return response;
     }
-    let file = store::load();
+    let file = match store::load() {
+        Ok(file) => file,
+        Err(err) => return store_failed(&err),
+    };
     let anthropic = running("PLANABRAIN_AI_PROVIDER")
         .map(|provider| provider.to_ascii_lowercase())
         .is_some_and(|provider| provider == "anthropic" || provider == "claude");
@@ -274,8 +349,8 @@ fn field_view(
     }
 }
 
-fn settings_view() -> SettingsView {
-    let file = store::load();
+fn settings_view() -> anyhow::Result<SettingsView> {
+    let file = store::load()?;
     let pending = store::pending_keys(&file);
     let is_pending = |key: &str| pending.iter().any(|item| item == key);
     let mut fields: Vec<FieldView> = catalog::FIELDS
@@ -303,10 +378,17 @@ fn settings_view() -> SettingsView {
             .iter()
             .map(|key| field_view(key, None, file.values.get(key), is_pending(key))),
     );
-    SettingsView {
+    Ok(SettingsView {
         groups: catalog::GROUPS,
         fields,
         pending,
+    })
+}
+
+fn settings_response() -> Response {
+    match settings_view() {
+        Ok(view) => json(StatusCode::OK, &view),
+        Err(err) => store_failed(&err),
     }
 }
 
@@ -314,7 +396,7 @@ async fn settings(headers: HeaderMap) -> Response {
     if let Some(response) = reject(&headers, false) {
         return response;
     }
-    json(StatusCode::OK, &settings_view())
+    settings_response()
 }
 
 #[derive(Deserialize)]
@@ -327,26 +409,32 @@ async fn save_settings(headers: HeaderMap, Json(body): Json<SaveRequest>) -> Res
         return response;
     }
     if body.changes.is_empty() {
-        return json(StatusCode::OK, &settings_view());
+        return settings_response();
     }
     let keys: Vec<String> = body.changes.keys().cloned().collect();
     match store::update(body.changes).await {
         Ok(_) => {
             log::info!("대시보드 설정 저장: {}", keys.join(", "));
-            json(StatusCode::OK, &settings_view())
+            settings_response()
         }
         Err(err) => match err.downcast_ref::<store::EntryError>() {
             Some(entry) => json(
                 StatusCode::BAD_REQUEST,
                 &serde_json::json!({ "error": entry.message, "key": entry.key }),
             ),
-            None => write_failed(&err),
+            None => store_failed(&err),
         },
     }
 }
 
-fn write_failed(err: &anyhow::Error) -> Response {
-    log::error!("대시보드 설정 파일 저장 실패: {err}");
+fn store_failed(err: &anyhow::Error) -> Response {
+    log::error!("대시보드 설정 파일 오류: {err:#}");
+    if err.is::<store::Unreadable>() {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &store::Unreadable.to_string(),
+        );
+    }
     error(
         StatusCode::INTERNAL_SERVER_ERROR,
         "설정 파일을 저장하지 못했습니다.",
@@ -402,22 +490,29 @@ async fn import_env(headers: HeaderMap, Json(body): Json<ImportRequest>) -> Resp
     if let Some(response) = reject(&headers, true) {
         return response;
     }
-    let (changes, skipped) = importable_env(&body.keys, &store::load(), store::baseline_value);
+    let file = match store::load() {
+        Ok(file) => file,
+        Err(err) => return store_failed(&err),
+    };
+    let (changes, skipped) = importable_env(&body.keys, &file, store::baseline_value);
     let imported: Vec<String> = changes.keys().cloned().collect();
     if !changes.is_empty() {
         if let Err(err) = store::update(changes).await {
-            return write_failed(&err);
+            return store_failed(&err);
         }
         log::info!("대시보드로 env 값 가져오기: {}", imported.join(", "));
     }
-    json(
-        StatusCode::OK,
-        &ImportView {
-            imported,
-            skipped,
-            settings: settings_view(),
-        },
-    )
+    match settings_view() {
+        Ok(settings) => json(
+            StatusCode::OK,
+            &ImportView {
+                imported,
+                skipped,
+                settings,
+            },
+        ),
+        Err(err) => store_failed(&err),
+    }
 }
 
 async fn restart(headers: HeaderMap) -> Response {
@@ -434,7 +529,13 @@ async fn restart(headers: HeaderMap) -> Response {
 }
 
 pub(crate) fn reset_password() -> anyhow::Result<()> {
-    let code = credentials::reset()?;
+    let (code, backup) = credentials::reset()?;
+    if let Some(backup) = backup {
+        println!(
+            "읽을 수 없던 인증 파일을 따로 보관했습니다: {}",
+            backup.display()
+        );
+    }
     println!("대시보드 비밀번호를 지웠습니다. 기존 로그인 세션도 모두 끊겼습니다.");
     println!("설정 코드: {code}");
     println!("대시보드에 접속해 이 코드와 새 비밀번호를 입력하십시오.");
@@ -444,7 +545,15 @@ pub(crate) fn reset_password() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{field_view, importable_env, mask, secret_hint, store::OverrideFile};
+    use axum::Router;
+    use axum::http::header::HOST;
+    use axum::http::{HeaderMap, HeaderValue};
+    use axum::routing::get;
+
+    use super::{
+        field_view, host_allowed, importable_env, mask, routes, secret_hint, single_host,
+        store::OverrideFile,
+    };
 
     #[test]
     fn masks_secrets_without_leaking_short_values() {
@@ -535,6 +644,122 @@ mod tests {
         );
         assert!(view.env_only);
         assert!(!view.custom);
+    }
+
+    #[test]
+    fn host_guard_accepts_ip_literals_and_localhost_with_or_without_port() {
+        for host in [
+            "127.0.0.1",
+            "127.0.0.1:18080",
+            "192.168.0.6:18080",
+            "[::1]",
+            "[::1]:18080",
+            "[fe80::1]:8080",
+            "localhost",
+            "LocalHost:18080",
+        ] {
+            assert!(host_allowed(host, ""), "{host}");
+        }
+    }
+
+    #[test]
+    fn host_guard_rejects_lookalikes_and_malformed_hosts() {
+        for host in [
+            "",
+            "evil.com",
+            "127.0.0.1.evil.com",
+            "localhost.evil.com",
+            "evil.com#@127.0.0.1",
+            "user@127.0.0.1",
+            "user:pw@localhost",
+            "localhost.",
+            "127.0.0.1.",
+            "localhost:",
+            "localhost:+80",
+            "localhost:99999",
+            "localhost:80:80",
+            "::1",
+            "[::1",
+            "[::1]x",
+            "[::1]:",
+            "[127.0.0.1]",
+            "127.1",
+            "127.0.0.1 ",
+        ] {
+            assert!(!host_allowed(host, ""), "{host:?}");
+        }
+        assert!(!host_allowed(&"a".repeat(300), &"a".repeat(300)));
+    }
+
+    #[test]
+    fn host_guard_uses_the_allowlist_exactly() {
+        let allowlist = " Plana.Example.com , ,,bot.local ";
+        assert!(host_allowed("plana.example.com", allowlist));
+        assert!(host_allowed("PLANA.example.COM:443", allowlist));
+        assert!(host_allowed("bot.local", allowlist));
+        assert!(!host_allowed("example.com", allowlist));
+        assert!(!host_allowed("plana.example.com.", allowlist));
+        assert!(!host_allowed("plana.example.com.evil.com", allowlist));
+        assert!(!host_allowed("evil.plana.example.com", allowlist));
+        assert!(!host_allowed("evil.com", ",, ,"));
+    }
+
+    #[test]
+    fn host_guard_needs_exactly_one_host_header() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(single_host(&headers), None);
+        headers.append(HOST, HeaderValue::from_static("localhost"));
+        assert_eq!(single_host(&headers), Some("localhost"));
+        headers.append(HOST, HeaderValue::from_static("evil.com"));
+        assert_eq!(single_host(&headers), None);
+    }
+
+    async fn status(addr: std::net::SocketAddr, path: &str, host: &str) -> u16 {
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://{addr}{path}"))
+            .header("host", host)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
+    }
+
+    async fn serve(app: Router) -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn host_guard_covers_dashboard_routes_but_not_health() {
+        let app = Router::new()
+            .route("/health", get(|| async { "ok" }))
+            .merge(routes(true));
+        let addr = serve(app).await;
+        assert_eq!(status(addr, "/health", "evil.com").await, 200);
+        assert_eq!(status(addr, "/", "evil.com").await, 403);
+        assert_eq!(status(addr, "/api/session", "evil.com").await, 403);
+        assert_ne!(status(addr, "/", "127.0.0.1").await, 403);
+        assert_eq!(status(addr, "/api/overview", "localhost").await, 401);
+    }
+
+    #[tokio::test]
+    async fn disabled_dashboard_serves_no_page() {
+        let app = Router::new()
+            .route("/health", get(|| async { "ok" }))
+            .merge(routes(false));
+        let addr = serve(app).await;
+        assert_eq!(status(addr, "/health", "127.0.0.1").await, 200);
+        assert_eq!(status(addr, "/", "127.0.0.1").await, 404);
+        assert_eq!(status(addr, "/favicon.svg", "127.0.0.1").await, 404);
+        assert_eq!(status(addr, "/assets/index.js", "127.0.0.1").await, 404);
     }
 
     #[test]

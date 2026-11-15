@@ -3,7 +3,6 @@ use std::time::Instant;
 use log::error;
 use teloxide::prelude::*;
 use teloxide::types::{InputFile, Message, ParseMode};
-use teloxide::utils::html;
 
 use super::super::commands::Command;
 use super::super::state::{conversation_reply, requester_user_id};
@@ -18,7 +17,7 @@ use crate::{planabrain, token};
 
 pub(super) static DONATION_QR: &[u8] = include_bytes!("../assets/donation_qr.png");
 
-pub(super) const DONATION_CAPTION: &str = "선생님. 후원을 해 주시려는 것인가요.\n선생님의 따뜻한 마음에 감동했습니다.\n\n후원 방식은 USDT를 통해 하실 수 있습니다.\n아래에 주소를 보내드리겠습니다. 네트워크는 TRC20 이니, 헷갈리지 않게 주의해 주십시오.\n(선생님의 소매를 잡고 살짝 미소지으며 고개를 끄덕입니다.)\n\n<code>TFZuvEU4UjYYmMZont2EwVtZ61weqEFHD9</code>";
+pub(super) const DONATION_CAPTION: &str = "선생님.\n후원을 해 주시려는 것인가요.\n선생님의 따뜻한 마음에 감동했습니다.\n\n후원 방식은 USDT를 통해 하실 수 있습니다.\n아래에 주소를 보내드리겠습니다. 네트워크는 TRC20 이니, 헷갈리지 않게 주의해 주십시오.\n(선생님의 소매를 잡고 살짝 미소지으며 고개를 끄덕입니다.)\n\n<code>TFZuvEU4UjYYmMZont2EwVtZ61weqEFHD9</code>";
 
 #[allow(clippy::collapsible_if)]
 pub(crate) async fn handle_command<B>(
@@ -84,7 +83,7 @@ where
             let _ = send_reply_with_fallback(
                 &bot,
                 &msg,
-                html::escape(&text),
+                text,
                 SendOptions {
                     reply_markup: build_notice_keyboard(&state),
                     ..SendOptions::default()
@@ -94,11 +93,18 @@ where
         }
         Command::Ping => {
             let started = Instant::now();
-            let elapsed = started.elapsed();
-            let ms = elapsed.as_secs_f64() * 1000.0;
-
-            bot.send_message(msg.chat.id, format!("응답 확인.\n선생님.\n{:.6} ms", ms))
-                .await?;
+            let reply = match bot.get_me().await {
+                Ok(_) => format!(
+                    "응답 확인.\n선생님.\nTelegram 응답 시간은 {} ms 입니다.",
+                    started.elapsed().as_millis()
+                ),
+                Err(err) => {
+                    error!("핑 측정 실패: {:?}", err);
+                    "오류.\n선생님.\nTelegram 응답을 확인하지 못했습니다.\n잠시 후 다시 시도해 주십시오."
+                        .to_string()
+                }
+            };
+            send_reply_with_fallback(&bot, &msg, reply, SendOptions::default()).await?;
         }
         Command::Version => {
             send_reply_with_fallback(
@@ -342,39 +348,13 @@ where
     B: Requester + ?Sized,
     B::Err: std::error::Error + Send + Sync + 'static,
 {
-    if !planabrain::is_planabrain_enabled() {
-        send_reply_with_fallback(
-            bot,
-            msg,
-            "불가.\n선생님.\n프라나브레인 기능이 비활성화 상태입니다.",
-            SendOptions::default(),
-        )
-        .await?;
-        return Ok(());
-    }
-
-    let Some(user_id) = requester_user_id(msg) else {
-        send_reply_with_fallback(
-            bot,
-            msg,
-            "확인 불가.\n선생님.\n사용자 정보를 확인하지 못했습니다.",
-            SendOptions::default(),
-        )
-        .await?;
-        return Ok(());
+    let user_id = match planabrain_requester(msg) {
+        Ok(user_id) => user_id,
+        Err(text) => {
+            send_reply_with_fallback(bot, msg, text, SendOptions::default()).await?;
+            return Ok(());
+        }
     };
-
-    let user_id_i64 = i64::try_from(user_id).ok();
-    if !planabrain::is_planabrain_allowed(msg.chat.id.0, user_id_i64, msg.chat.is_private()) {
-        send_reply_with_fallback(
-            bot,
-            msg,
-            "접근 불가.\n선생님.\n프라나브레인 기능은 베타입니다.\n허용된 채팅만 지원합니다.",
-            SendOptions::default(),
-        )
-        .await?;
-        return Ok(());
-    }
 
     let payload = command_payload(msg, mode, &state.bot_username);
     if payload.trim().is_empty() {
@@ -474,9 +454,7 @@ fn planabrain_requester(msg: &Message) -> Result<u64, &'static str> {
         i64::try_from(user_id).ok(),
         msg.chat.is_private(),
     ) {
-        return Err(
-            "접근 불가.\n선생님.\n프라나브레인 기능은 베타입니다.\n허용된 채팅만 지원합니다.",
-        );
+        return Err("접근 불가.\n선생님.\n프라나 AI 기능은 베타입니다.\n허용된 채팅만 지원합니다.");
     }
     Ok(user_id)
 }
@@ -534,5 +512,92 @@ mod memory_list_tests {
         );
         assert!(rendered.contains("외 2건."));
         assert!(rendered.ends_with("삭제: /forget 번호"));
+    }
+}
+
+#[cfg(test)]
+mod ping_tests {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use super::handle_command;
+    use crate::bot::commands::Command;
+
+    async fn ping(get_me_delay: Duration, get_me_fails: bool) -> serde_json::Value {
+        let sent = Arc::new(Mutex::new(serde_json::Value::Null));
+        let seen = sent.clone();
+        let api = axum::Router::new().fallback(move |uri: axum::http::Uri, body: String| {
+            let seen = seen.clone();
+            async move {
+                let path = uri.path().to_ascii_lowercase();
+                if path.ends_with("/getme") {
+                    tokio::time::sleep(get_me_delay).await;
+                    return axum::Json(if get_me_fails {
+                        serde_json::json!({"ok": false, "error_code": 500,
+                            "description": "Internal Server Error"})
+                    } else {
+                        serde_json::json!({"ok": true, "result": {"id": 1, "is_bot": true,
+                            "first_name": "bot", "username": "bot", "can_join_groups": true,
+                            "can_read_all_group_messages": false, "supports_inline_queries": false,
+                            "can_connect_to_business": false, "has_main_web_app": false}})
+                    });
+                }
+                *seen.lock().unwrap() = serde_json::from_str(&body).unwrap_or_default();
+                axum::Json(
+                    serde_json::json!({"ok": true, "result": {"message_id": 5, "date": 0,
+                    "text": "x", "chat": {"id": -100, "title": "g", "type": "supergroup"}}}),
+                )
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, api).await });
+        let bot = teloxide::Bot::new("1:test").set_api_url(url.parse().unwrap());
+        let msg: teloxide::types::Message = serde_json::from_value(serde_json::json!({
+            "message_id": 9, "date": 0, "text": "/ping", "message_thread_id": 3,
+            "is_topic_message": true,
+            "chat": {"id": -100, "title": "g", "type": "supergroup", "is_forum": true},
+            "from": {"id": 42, "is_bot": false, "first_name": "A"}
+        }))
+        .unwrap();
+        let state = crate::bot::AppState::new(
+            "bot".into(),
+            teloxide::types::UserId(1),
+            crate::hitomi::GalleryClient::new(),
+            None,
+            None,
+        );
+        handle_command(bot, msg, Command::Ping, state)
+            .await
+            .unwrap();
+        sent.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn ping_reports_the_measured_telegram_round_trip() {
+        let request = ping(Duration::from_millis(150), false).await;
+        let text = request["text"].as_str().unwrap();
+        let ms: u64 = text
+            .trim_start_matches("응답 확인.\n선생님.\nTelegram 응답 시간은 ")
+            .trim_end_matches(" ms 입니다.")
+            .parse()
+            .unwrap();
+        assert!((150..2000).contains(&ms), "{text}");
+    }
+
+    #[tokio::test]
+    async fn ping_replies_inside_the_topic_it_was_asked_in() {
+        let request = ping(Duration::ZERO, false).await;
+        assert_eq!(request["message_thread_id"], 3);
+        assert_eq!(request["reply_parameters"]["message_id"], 9);
+    }
+
+    #[tokio::test]
+    async fn ping_says_so_when_telegram_does_not_answer() {
+        let request = ping(Duration::ZERO, true).await;
+        assert_eq!(
+            request["text"],
+            "오류.\n선생님.\nTelegram 응답을 확인하지 못했습니다.\n잠시 후 다시 시도해 주십시오."
+        );
     }
 }

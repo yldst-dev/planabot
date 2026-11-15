@@ -23,11 +23,7 @@ pub(crate) async fn count_text_tokens(text: &str) -> Result<TokenCount> {
 
     let mut command = crate::planabrain::build_planabrain_command(&root)?;
     command.current_dir(&root);
-    let repo_root = root.parent().unwrap_or(&root);
-    let dotenv_path = repo_root.join(".env");
-    if dotenv_path.exists() {
-        command.env("DOTENV_CONFIG_PATH", dotenv_path);
-    }
+    crate::planabrain::apply_dotenv_path(&mut command, &root);
 
     let mut text_file = None;
     command.arg("tokens").arg(&model);

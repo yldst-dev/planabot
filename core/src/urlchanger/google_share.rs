@@ -1,21 +1,21 @@
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use once_cell::sync::Lazy;
 use reqwest::StatusCode;
 use reqwest::header::LOCATION;
 use url::Url;
 
+use super::http::COMPAT_USER_AGENT;
 use super::link_utils::clean_tracking_params;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(6);
 const MAX_HOPS: usize = 5;
-const USER_AGENT: &str = "Mozilla/5.0 (compatible; planabot/0.1)";
 
-static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
-        .user_agent(USER_AGENT)
+        .user_agent(COMPAT_USER_AGENT)
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_default()

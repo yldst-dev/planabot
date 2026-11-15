@@ -1,10 +1,10 @@
 use std::process::{ExitStatus, Stdio};
-use std::sync::{Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, Mutex, RwLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use log::{error, info, warn};
-use once_cell::sync::Lazy;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -21,6 +21,9 @@ const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const RESTART_MIN_BACKOFF: Duration = Duration::from_secs(2);
 const RESTART_MAX_BACKOFF: Duration = Duration::from_secs(60);
 const STOP_WAIT: Duration = Duration::from_secs(20);
+const HEALTH_INTERVAL: Duration = Duration::from_secs(20);
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(10);
+const HEALTH_MAX_FAILURES: u32 = 3;
 const TOKEN_HEADER: &str = "x-planabrain-token";
 
 #[derive(Clone, Debug)]
@@ -29,12 +32,14 @@ struct ServerEndpoint {
     token: String,
 }
 
-static ENDPOINT: Lazy<RwLock<Option<ServerEndpoint>>> = Lazy::new(|| RwLock::new(None));
+static ENDPOINT: LazyLock<RwLock<Option<ServerEndpoint>>> = LazyLock::new(|| RwLock::new(None));
 static STOP: Notify = Notify::const_new();
+static STOPPING: AtomicBool = AtomicBool::new(false);
 static SUPERVISOR: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
-static HTTP: Lazy<reqwest::Client> = Lazy::new(|| {
+static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .no_proxy()
+        .pool_idle_timeout(Duration::from_secs(4))
         .build()
         .unwrap_or_default()
 });
@@ -73,7 +78,7 @@ pub(crate) fn spawn_supervisor() {
         let mut backoff = RESTART_MIN_BACKOFF;
         loop {
             match launch().await {
-                Ok((mut child, stdin)) => {
+                Ok((mut child, stdin, endpoint)) => {
                     backoff = RESTART_MIN_BACKOFF;
                     let status = tokio::select! {
                         status = child.wait() => status,
@@ -82,6 +87,15 @@ pub(crate) fn spawn_supervisor() {
                             let status = close_and_wait(&mut child, stdin).await;
                             info!("planabrain 서버 종료: {:?}", status);
                             return;
+                        }
+                        () = watch_health(&endpoint, HEALTH_INTERVAL, HEALTH_TIMEOUT, is_stopping) => {
+                            clear_endpoint();
+                            warn!(
+                                "planabrain 서버가 상태 확인에 {}번 연속 응답하지 않아 다시 시작합니다",
+                                HEALTH_MAX_FAILURES
+                            );
+                            let _ = child.kill().await;
+                            child.wait().await
                         }
                     };
                     drop(stdin);
@@ -105,6 +119,7 @@ pub(crate) fn spawn_supervisor() {
 }
 
 pub(crate) async fn stop() {
+    STOPPING.store(true, Ordering::SeqCst);
     STOP.notify_one();
     let supervisor = SUPERVISOR.lock().ok().and_then(|mut slot| slot.take());
     let Some(supervisor) = supervisor else {
@@ -118,12 +133,62 @@ pub(crate) async fn stop() {
     }
 }
 
+fn is_stopping() -> bool {
+    STOPPING.load(Ordering::SeqCst) || crate::bot::is_shutting_down()
+}
+
+async fn watch_health(
+    endpoint: &ServerEndpoint,
+    interval: Duration,
+    timeout: Duration,
+    stopping: fn() -> bool,
+) {
+    let url = format!("{}/v1/health", endpoint.base_url);
+    let mut failures = 0;
+    loop {
+        tokio::time::sleep(interval).await;
+        if stopping() {
+            failures = 0;
+            continue;
+        }
+        let reason = match HTTP
+            .get(&url)
+            .header(TOKEN_HEADER, &endpoint.token)
+            .timeout(timeout)
+            .send()
+            .await
+        {
+            Ok(_) => {
+                failures = 0;
+                continue;
+            }
+            Err(err) if err.is_timeout() => format!("{}초 안에 응답 없음", timeout.as_secs_f32()),
+            Err(err) => err.to_string(),
+        };
+        failures += 1;
+        warn!(
+            "planabrain 서버 상태 확인 실패 ({}/{}): {}",
+            failures, HEALTH_MAX_FAILURES, reason
+        );
+        if failures >= HEALTH_MAX_FAILURES && !stopping() {
+            return;
+        }
+    }
+}
+
+fn own_process_group(command: &mut std::process::Command) {
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(command, 0);
+    #[cfg(not(unix))]
+    let _ = command;
+}
+
 async fn close_and_wait(child: &mut Child, stdin: ChildStdin) -> std::io::Result<ExitStatus> {
     drop(stdin);
     child.wait().await
 }
 
-async fn launch() -> Result<(Child, ChildStdin)> {
+async fn launch() -> Result<(Child, ChildStdin, ServerEndpoint)> {
     let root = find_planabrain_root().context("planabrain 디렉터리를 찾지 못했습니다")?;
     let token = generate_token();
     let mut command = build_planabrain_command(&root)?;
@@ -132,6 +197,7 @@ async fn launch() -> Result<(Child, ChildStdin)> {
         .arg("serve")
         .env("PLANABRAIN_SERVER_TOKEN", &token);
     apply_dotenv_path(&mut command, &root);
+    own_process_group(&mut command);
     let mut command = TokioCommand::from(command);
     command
         .kill_on_drop(true)
@@ -171,12 +237,13 @@ async fn launch() -> Result<(Child, ChildStdin)> {
         }
     });
 
-    set_endpoint(ServerEndpoint {
+    let endpoint = ServerEndpoint {
         base_url: format!("http://127.0.0.1:{}", ready.port),
         token,
-    });
+    };
+    set_endpoint(endpoint.clone());
     info!("planabrain 서버 준비 완료: 포트 {}", ready.port);
-    Ok((child, stdin))
+    Ok((child, stdin, endpoint))
 }
 
 fn parse_ready_line(line: &str) -> Option<ReadyLine> {
@@ -273,7 +340,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn server_roundtrip_against_real_cli() {
-        let (child, stdin) = super::launch().await.expect("launch");
+        let (child, stdin, _) = super::launch().await.expect("launch");
         let input = crate::planabrain::TurnPrepareInput {
             request_id: "server-test-request".into(),
             deadline_ms: crate::schedule::now_ms() + 60_000,
@@ -334,6 +401,119 @@ mod tests {
             "done\n"
         );
         let _ = std::fs::remove_file(&marker);
+    }
+
+    #[tokio::test]
+    async fn a_child_started_like_the_server_leads_its_own_process_group() {
+        let probe = |own_group: bool| {
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", "kill -0 -$$"]);
+            if own_group {
+                super::own_process_group(&mut command);
+            }
+            tokio::process::Command::from(command).status()
+        };
+        assert!(probe(true).await.expect("spawn").success());
+        assert!(!probe(false).await.expect("spawn").success());
+    }
+
+    async fn health_server(script: fn(usize) -> &'static str) -> ServerEndpoint {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            for index in 0.. {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let step = script(index);
+                if step == "hang" {
+                    held.push(socket);
+                    continue;
+                }
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+                    if step == "slow" {
+                        tokio::time::sleep(Duration::from_millis(150)).await;
+                    }
+                    let body = r#"{"ok":true}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        ServerEndpoint {
+            base_url: format!("http://127.0.0.1:{port}"),
+            token: "t".into(),
+        }
+    }
+
+    async fn restarts_within(
+        script: fn(usize) -> &'static str,
+        stopping: fn() -> bool,
+        window: Duration,
+    ) -> bool {
+        let endpoint = health_server(script).await;
+        tokio::time::timeout(
+            window,
+            super::watch_health(
+                &endpoint,
+                Duration::from_millis(20),
+                Duration::from_millis(400),
+                stopping,
+            ),
+        )
+        .await
+        .is_ok()
+    }
+
+    #[tokio::test]
+    async fn a_slow_but_answering_server_is_not_restarted() {
+        assert!(!restarts_within(|_| "slow", || false, Duration::from_millis(1500)).await);
+    }
+
+    #[tokio::test]
+    async fn a_server_that_never_answers_is_restarted_after_three_failures() {
+        let started = std::time::Instant::now();
+        assert!(restarts_within(|_| "hang", || false, Duration::from_secs(5)).await);
+        assert!(started.elapsed() >= Duration::from_millis(1200));
+    }
+
+    #[tokio::test]
+    async fn a_server_that_recovers_on_the_second_poll_is_not_restarted() {
+        assert!(
+            !restarts_within(
+                |index| if index == 0 { "hang" } else { "ok" },
+                || false,
+                Duration::from_millis(1500)
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn a_success_resets_the_failure_count() {
+        assert!(
+            !restarts_within(
+                |index| if matches!(index, 0 | 1 | 3 | 4) {
+                    "hang"
+                } else {
+                    "ok"
+                },
+                || false,
+                Duration::from_millis(2500)
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hung_server_is_not_restarted_while_core_is_stopping() {
+        assert!(!restarts_within(|_| "hang", || true, Duration::from_millis(1500)).await);
     }
 
     #[test]
@@ -406,6 +586,43 @@ mod tests {
             .expect("structured");
         assert_eq!(structured.kind, PlanabrainErrorKind::RateLimited);
         assert_eq!(structured.status, Some(429));
+
+        let port = serve_once(
+            "200 OK",
+            r#"{"handled":true,"action":"add","kind":"timer","title":"알림","dueAtMs":1788800600000}"#,
+        )
+        .await;
+        set_endpoint(ServerEndpoint {
+            base_url: format!("http://127.0.0.1:{port}"),
+            token: "t".into(),
+        });
+        let schedule = crate::planabrain::interpret_schedule_request("10분 뒤 알림")
+            .await
+            .expect("served schedule");
+        assert_eq!(schedule.due_at_ms, Some(1_788_800_600_000));
+
+        for todo in [false, true] {
+            let port = serve_once(
+                "500 Internal Server Error",
+                r#"{"error":{"kind":"unknown","message":"boom"}}"#,
+            )
+            .await;
+            set_endpoint(ServerEndpoint {
+                base_url: format!("http://127.0.0.1:{port}"),
+                token: "t".into(),
+            });
+            let failed = if todo {
+                crate::planabrain::list_user_todos("1").await.map(|_| ())
+            } else {
+                crate::planabrain::interpret_schedule_request("10분 뒤 알림")
+                    .await
+                    .map(|_| ())
+            };
+            assert!(
+                failed.is_err(),
+                "server error must not rerun through the CLI"
+            );
+        }
         clear_endpoint();
     }
 }

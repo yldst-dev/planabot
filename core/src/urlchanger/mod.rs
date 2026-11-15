@@ -1,6 +1,7 @@
 mod delivery;
 mod google_share;
 mod handlers;
+mod http;
 mod instagram;
 mod link_utils;
 mod music_card;

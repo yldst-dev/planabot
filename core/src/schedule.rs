@@ -16,12 +16,14 @@ use teloxide::types::{
 use teloxide::utils::html;
 use tokio::time::{self, Duration};
 
+use crate::bot::SENDER_CHAT_USER_BASE;
+use crate::persist::state_path;
+
 const MAX_SCHEDULE_ITEMS: usize = 500;
 const MAX_USER_PENDING_ITEMS: usize = 100;
 const SCHEDULE_POLL_SECONDS: u64 = 15;
 const MAX_SEND_ATTEMPTS: u32 = 5;
 const RETRY_BASE_MS: i64 = 30_000;
-const SYNTHETIC_OWNER_ID_START: u64 = 1 << 52;
 const DEFAULT_SCHEDULE_TITLE: &str = "요청하신 내용";
 pub(crate) const RESTORE_CALLBACK_PREFIX: &str = "sundo_";
 
@@ -100,18 +102,26 @@ pub(crate) struct ScheduleMutation {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct ScheduleFile {
-    items: Vec<ScheduleItem>,
+#[serde(untagged)]
+enum ScheduleFile {
+    Versioned { items: Vec<ScheduleItem> },
+    Bare(Vec<ScheduleItem>),
+}
+
+impl Default for ScheduleFile {
+    fn default() -> Self {
+        Self::Bare(Vec::new())
+    }
 }
 
 impl ScheduleStore {
     pub(crate) fn new() -> Self {
-        let path = resolve_schedule_path();
+        let path = state_path("PLANABOT_SCHEDULES_PATH", ".planabot/schedules.json");
         let items = load_schedule_items(&path);
         Self::with_items(path, items)
     }
 
-    fn with_items(path: PathBuf, items: Vec<ScheduleItem>) -> Self {
+    pub(crate) fn with_items(path: PathBuf, items: Vec<ScheduleItem>) -> Self {
         Self {
             path,
             items: Arc::new(Mutex::new(items)),
@@ -192,6 +202,13 @@ impl ScheduleStore {
         list_pending_for_user(&items, owner_user_id, chat_id)
     }
 
+    pub(crate) fn owner_of(&self, id: &str) -> Option<u64> {
+        lock_items(&self.items)
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| item.owner_user_id)
+    }
+
     pub(crate) async fn cancel(
         &self,
         owner_user_id: u64,
@@ -261,7 +278,7 @@ impl ScheduleStore {
                 || items.iter().filter(|item| is_active(item)).count() >= MAX_SCHEDULE_ITEMS;
             let error = match items
                 .iter()
-                .find(|item| item.id == id && item.chat_id == chat_id)
+                .find(|item| item.id == id && (chat_id > 0 || item.chat_id == chat_id))
             {
                 None => Some("되돌릴 항목을 찾지 못했습니다."),
                 Some(item) if item.owner_user_id != owner_user_id => {
@@ -538,7 +555,7 @@ pub(crate) fn now_ms() -> i64 {
 }
 
 fn render_due_message(item: &ScheduleItem) -> String {
-    let owner = if item.owner_user_id >= SYNTHETIC_OWNER_ID_START {
+    let owner = if item.owner_user_id >= SENDER_CHAT_USER_BASE {
         "선생님".to_string()
     } else {
         format!("<a href=\"tg://user?id={}\">선생님</a>", item.owner_user_id)
@@ -588,27 +605,9 @@ where
     }
 }
 
-fn resolve_schedule_path() -> PathBuf {
-    let raw = std::env::var("PLANABOT_SCHEDULES_PATH")
-        .unwrap_or_else(|_| ".planabot/schedules.json".to_string());
-    let path = PathBuf::from(raw);
-    if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(path)
-    }
-}
-
 fn load_schedule_items(path: &Path) -> Vec<ScheduleItem> {
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    let parsed = serde_json::from_str::<ScheduleFile>(&raw)
-        .map(|file| file.items)
-        .or_else(|_| serde_json::from_str::<Vec<ScheduleItem>>(&raw))
-        .unwrap_or_default();
+    let (ScheduleFile::Versioned { items: parsed } | ScheduleFile::Bare(parsed)) =
+        crate::persist::read_json_or_default::<ScheduleFile>(path);
     let now = now_ms();
     let mut items = normalize_items(parsed, now);
     prune_history(&mut items, now);
@@ -1069,6 +1068,51 @@ mod tests {
     }
 
     #[test]
+    fn schedule_file_loads_both_formats_and_backs_up_anything_else() {
+        let dir =
+            std::env::temp_dir().join(format!("planabot_schedule_load_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let item = pending_item("s1", 1, 10, now_ms() + 3_600_000);
+        let versioned = dir.join("versioned.json");
+        std::fs::write(
+            &versioned,
+            serde_json::json!({ "version": 1, "items": [&item] }).to_string(),
+        )
+        .unwrap();
+        let bare = dir.join("bare.json");
+        std::fs::write(&bare, serde_json::json!([&item]).to_string()).unwrap();
+        for path in [&versioned, &bare] {
+            let loaded = super::load_schedule_items(path);
+            assert_eq!(loaded.len(), 1, "{}", path.display());
+            assert_eq!(loaded[0].id, "s1");
+        }
+        let empty = dir.join("empty.json");
+        std::fs::write(&empty, "[]").unwrap();
+        assert!(super::load_schedule_items(&empty).is_empty());
+        assert!(super::load_schedule_items(&dir.join("missing.json")).is_empty());
+
+        let one_bad_item = dir.join("one_bad_item.json");
+        let original =
+            serde_json::json!({ "version": 1, "items": [&item, { "id": "broken" }] }).to_string();
+        std::fs::write(&one_bad_item, &original).unwrap();
+        let truncated = dir.join("truncated.json");
+        std::fs::write(&truncated, r#"{"version": 1, "items": [{"id": "s"#).unwrap();
+        for path in [&one_bad_item, &truncated] {
+            assert!(super::load_schedule_items(path).is_empty());
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.join("one_bad_item.json.corrupt")).unwrap(),
+            original
+        );
+        assert!(dir.join("truncated.json.corrupt").exists());
+        for clean in ["versioned.json", "bare.json", "empty.json", "missing.json"] {
+            assert!(!dir.join(format!("{clean}.corrupt")).exists(), "{clean}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn cancel_target_must_name_exactly_one_reminder() {
         let titled = |id: &str, title: &str| super::ScheduleItem {
             title: title.to_string(),
@@ -1227,7 +1271,7 @@ mod tests {
         );
         let add = |title: &str, due_at_ms: i64| NewSchedule {
             owner_user_id: 1,
-            chat_id: ChatId(10),
+            chat_id: ChatId(-10),
             message_thread_id: None,
             source_message_id: None,
             kind: ScheduleKind::Schedule,
@@ -1246,30 +1290,67 @@ mod tests {
             .unwrap()
             .item
             .unwrap();
-        assert!(store.cancel(1, 10, "보리차").await.unwrap().ok);
-        assert!(store.cancel(1, 10, "율무차").await.unwrap().ok);
+        assert!(store.cancel(1, -10, "보리차").await.unwrap().ok);
+        assert!(store.cancel(1, -10, "율무차").await.unwrap().ok);
 
         let refused = |result: super::ScheduleMutation| result.error.unwrap();
         assert_eq!(
-            refused(store.restore(2, 10, &later.id).await.unwrap()),
+            refused(store.restore(2, -10, &later.id).await.unwrap()),
             "요청하신 분만 되돌릴 수 있습니다."
         );
         assert_eq!(
-            refused(store.restore(1, 11, &later.id).await.unwrap()),
+            refused(store.restore(1, -11, &later.id).await.unwrap()),
             "되돌릴 항목을 찾지 못했습니다."
         );
-        let restored = store.restore(1, 10, &later.id).await.unwrap();
+        let restored = store.restore(1, -10, &later.id).await.unwrap();
         assert_eq!(restored.item.unwrap().title, "보리차");
-        assert_eq!(store.list_user_pending(1, 10).len(), 1);
+        assert_eq!(store.list_user_pending(1, -10).len(), 1);
         assert_eq!(
-            refused(store.restore(1, 10, &later.id).await.unwrap()),
+            refused(store.restore(1, -10, &later.id).await.unwrap()),
             "이미 되돌렸거나 처리된 항목입니다."
         );
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         assert_eq!(
-            refused(store.restore(1, 10, &soon.id).await.unwrap()),
+            refused(store.restore(1, -10, &soon.id).await.unwrap()),
             "이미 지난 시각이라 되돌릴 수 없습니다."
         );
+        let _ = std::fs::remove_file(store.path);
+    }
+
+    #[tokio::test]
+    async fn the_owner_restores_from_a_private_chat_a_group_reminder_canceled_there() {
+        let store = ScheduleStore::with_items(
+            std::env::temp_dir().join(format!("planabot_schedule_dm_restore_{}.json", now_ms())),
+            Vec::new(),
+        );
+        let item = store
+            .add(NewSchedule {
+                owner_user_id: 1,
+                chat_id: ChatId(-100),
+                message_thread_id: None,
+                source_message_id: None,
+                kind: ScheduleKind::Schedule,
+                title: "율무차".to_string(),
+                due_at_ms: now_ms() + 60_000,
+            })
+            .await
+            .unwrap()
+            .item
+            .unwrap();
+        assert!(store.cancel(1, 1, "율무차").await.unwrap().ok);
+
+        let refused = |result: super::ScheduleMutation| result.error.unwrap();
+        assert_eq!(
+            refused(store.restore(2, 2, &item.id).await.unwrap()),
+            "요청하신 분만 되돌릴 수 있습니다."
+        );
+        assert_eq!(
+            refused(store.restore(1, -200, &item.id).await.unwrap()),
+            "되돌릴 항목을 찾지 못했습니다."
+        );
+        let restored = store.restore(1, 1, &item.id).await.unwrap();
+        assert_eq!(restored.item.unwrap().chat_id, -100);
+        assert_eq!(store.list_user_pending(1, -100).len(), 1);
         let _ = std::fs::remove_file(store.path);
     }
 

@@ -2,7 +2,6 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
-use dotenvy::dotenv;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -13,9 +12,6 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Self> {
-        // .env 있으면 로드 (없어도 오류 아님)
-        let _ = dotenv();
-
         match std::env::var("TELEGRAM_API_TOKEN") {
             Ok(token) if is_valid(&token) => Ok(Self {
                 telegram_api_token: token,

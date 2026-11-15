@@ -16,7 +16,7 @@ use super::media::{ImageSource, MediaGroupCache, extract_image_source};
 use super::notice::NoticeBoard;
 use crate::hiromi_share::ShareClaim;
 use crate::hitomi::GalleryClient;
-use crate::persist::{read_json_or_default, write_json_atomic};
+use crate::persist::{read_json_or_default, state_path, write_json_atomic};
 use crate::schedule::ScheduleStore;
 
 #[derive(Debug)]
@@ -26,13 +26,6 @@ struct PlanabrainReplyTracker {
 }
 
 impl PlanabrainReplyTracker {
-    fn new(max: usize) -> Self {
-        Self {
-            max,
-            items: VecDeque::new(),
-        }
-    }
-
     fn contains(&self, chat_id: ChatId, message_id: MessageId) -> bool {
         self.get(chat_id, message_id).is_some()
     }
@@ -178,16 +171,20 @@ impl AppState {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-        let booted_at = boot_cutoff(now, read_json_or_default(&resolve_shutdown_mark_path()));
+        let booted_at = boot_cutoff(now, read_json_or_default(&shutdown_mark_path()));
 
-        let group_registry_path = resolve_group_registry_path();
+        let group_registry_path = state_path("PLANABOT_GROUPS_PATH", ".planabot/groups.json");
         let group_registry = load_group_registry(&group_registry_path);
-        let planabrain_replies_path = resolve_planabrain_replies_path();
+        let planabrain_replies_path = state_path(
+            "PLANABOT_PLANABRAIN_REPLIES_PATH",
+            ".planabot/planabrain_replies.json",
+        );
         let planabrain_replies = load_planabrain_replies(&planabrain_replies_path);
         let image_rate_limiter = ImageRateLimiter::new(2, Duration::from_secs(60));
         let schedule_store = ScheduleStore::new();
         let hiromi_bin = crate::hiromi_share::hiromi_bin();
-        let share_claims_path = resolve_share_claims_path();
+        let share_claims_path =
+            state_path("PLANABOT_SHARE_CLAIMS_PATH", ".planabot/share_claims.json");
         let share_claims = load_share_claims(&share_claims_path, unix_now_ms());
 
         Self {
@@ -515,7 +512,7 @@ impl ImageRateLimiter {
     }
 }
 
-const SENDER_CHAT_USER_BASE: u64 = 1 << 60;
+pub(crate) const SENDER_CHAT_USER_BASE: u64 = 1 << 60;
 
 pub(crate) fn requester_user_id(msg: &Message) -> Option<u64> {
     match msg.sender_chat.as_ref() {
@@ -570,14 +567,14 @@ pub(crate) fn note_shutdown_start() -> Instant {
 
 pub(crate) async fn record_shutdown_mark() {
     let started_at = shutdown_started().1;
-    if let Err(err) = write_json_atomic(&resolve_shutdown_mark_path(), &started_at).await {
+    if let Err(err) = write_json_atomic(&shutdown_mark_path(), &started_at).await {
         warn!("종료 시각 저장 실패: {}", err);
     }
 }
 
 pub(crate) fn consume_shutdown_mark() {
     if !SHUTDOWN_MARK_CONSUMED.swap(true, Ordering::SeqCst) {
-        let _ = std::fs::remove_file(resolve_shutdown_mark_path());
+        let _ = std::fs::remove_file(shutdown_mark_path());
     }
 }
 
@@ -590,43 +587,11 @@ fn boot_cutoff(now: i64, mark: Option<i64>) -> i64 {
     }
 }
 
-fn resolve_shutdown_mark_path() -> PathBuf {
-    let raw = std::env::var("PLANABOT_SHUTDOWN_MARK_PATH")
-        .unwrap_or_else(|_| ".planabot/shutdown_mark.json".to_string());
-    let path = PathBuf::from(raw);
-    if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(path)
-    }
-}
-
-fn resolve_group_registry_path() -> PathBuf {
-    let raw = std::env::var("PLANABOT_GROUPS_PATH")
-        .unwrap_or_else(|_| ".planabot/groups.json".to_string());
-    let path = PathBuf::from(raw);
-    if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(path)
-    }
-}
-
-fn resolve_share_claims_path() -> PathBuf {
-    let raw = std::env::var("PLANABOT_SHARE_CLAIMS_PATH")
-        .unwrap_or_else(|_| ".planabot/share_claims.json".to_string());
-    let path = PathBuf::from(raw);
-    if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(path)
-    }
+fn shutdown_mark_path() -> PathBuf {
+    state_path(
+        "PLANABOT_SHUTDOWN_MARK_PATH",
+        ".planabot/shutdown_mark.json",
+    )
 }
 
 fn keep_live_claim(stored: &StoredShareClaim, now_ms: i64) -> bool {
@@ -653,37 +618,15 @@ fn load_share_claims(path: &Path, now_ms: i64) -> HashMap<String, StoredShareCla
         .collect()
 }
 
-fn resolve_planabrain_replies_path() -> PathBuf {
-    let raw = std::env::var("PLANABOT_PLANABRAIN_REPLIES_PATH")
-        .unwrap_or_else(|_| ".planabot/planabrain_replies.json".to_string());
-    let path = PathBuf::from(raw);
-    if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(path)
-    }
-}
-
 fn load_group_registry(path: &Path) -> HashSet<ChatId> {
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return HashSet::new();
-    };
-    let Ok(ids) = serde_json::from_str::<Vec<i64>>(&raw) else {
-        return HashSet::new();
-    };
-    ids.into_iter().map(ChatId).collect()
+    read_json_or_default::<Vec<i64>>(path)
+        .into_iter()
+        .map(ChatId)
+        .collect()
 }
 
 fn load_planabrain_replies(path: &Path) -> PlanabrainReplyTracker {
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return PlanabrainReplyTracker::new(200);
-    };
-    let Ok(records) = serde_json::from_str::<Vec<PlanabrainReplyRecord>>(&raw) else {
-        return PlanabrainReplyTracker::new(200);
-    };
-    PlanabrainReplyTracker::from_records(200, records)
+    PlanabrainReplyTracker::from_records(200, read_json_or_default(path))
 }
 
 async fn persist_group_registry(path: &Path, ids: &[i64]) -> std::io::Result<()> {
@@ -704,7 +647,8 @@ async fn persist_planabrain_replies(
 mod tests {
     use super::{
         ImageSource, PlanabrainReplyRecord, PlanabrainReplyTracker, SHARE_CLAIM_TTL_MS,
-        StoredShareClaim, is_share_claim_live, load_share_claims,
+        StoredShareClaim, is_share_claim_live, load_group_registry, load_planabrain_replies,
+        load_share_claims,
     };
     use crate::hiromi_share::ShareClaim;
 
@@ -726,7 +670,7 @@ mod tests {
         let second = super::requester_user_id(&anonymous(-1002)).expect("second group");
         assert_ne!(first, second);
         assert_ne!(first, 1087968824);
-        assert!(first >= 1 << 52);
+        assert!(first >= super::SENDER_CHAT_USER_BASE);
         let person = message(serde_json::json!({
             "message_id": 2, "date": 0, "text": "안녕",
             "chat": {"id": -1001, "title": "g", "type": "supergroup"},
@@ -878,8 +822,43 @@ mod tests {
     }
 
     #[test]
+    fn group_registry_and_replies_keep_a_backup_when_the_file_is_corrupt() {
+        let dir = std::env::temp_dir().join(format!("planabot_state_load_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let groups = dir.join("groups.json");
+        std::fs::write(&groups, "[-1001, -1002").unwrap();
+        let replies = dir.join("replies.json");
+        std::fs::write(&replies, r#"[{"chat_id": "x"}]"#).unwrap();
+        assert!(load_group_registry(&groups).is_empty());
+        assert!(
+            load_planabrain_replies(&replies)
+                .get(ChatId(1), MessageId(1))
+                .is_none()
+        );
+        assert_eq!(
+            std::fs::read(dir.join("groups.json.corrupt")).unwrap(),
+            b"[-1001, -1002"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("replies.json.corrupt")).unwrap(),
+            br#"[{"chat_id": "x"}]"#
+        );
+
+        std::fs::write(&groups, "[-1002, -1001]").unwrap();
+        assert_eq!(load_group_registry(&groups).len(), 2);
+        assert!(load_group_registry(&dir.join("missing.json")).is_empty());
+        assert!(!dir.join("missing.json.corrupt").exists());
+        assert_eq!(
+            std::fs::read(dir.join("groups.json.corrupt")).unwrap(),
+            b"[-1001, -1002"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn tracker_returns_saved_conversation_scope() {
-        let mut tracker = PlanabrainReplyTracker::new(10);
+        let mut tracker = PlanabrainReplyTracker::from_records(10, Vec::new());
         tracker.insert(PlanabrainReplyRecord {
             chat_id: 100,
             message_id: 42,

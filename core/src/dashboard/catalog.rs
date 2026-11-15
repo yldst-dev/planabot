@@ -334,7 +334,7 @@ pub(crate) const FIELDS: &[Field] = &[
         "PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS",
         "model",
         "전달문 토큰 한도",
-        "전달문 재작성에 쓰는 최대 토큰입니다.",
+        "전달문 재작성에 쓰는 최대 토큰입니다. 비우거나 0이면 1024를 씁니다. 끄려면 전달문 재작성을 끄십시오.",
         Kind::Number,
         "1024",
     ),
@@ -346,13 +346,12 @@ pub(crate) const FIELDS: &[Field] = &[
         Kind::Bool,
         "1",
     ),
-    hinted(
+    field(
         "PLANABRAIN_AUX_MODEL",
         "model",
         "codex 보조 모델",
         "codex일 때 검색어 재작성, 전달문 재작성, 기억 작성에 쓸 모델입니다. 비우면 주 모델을 씁니다.",
         Kind::Text,
-        "gpt-5.6-sol",
     ),
     hinted(
         "PLANABRAIN_SEARCH_QUERY_REWRITE",
@@ -373,9 +372,9 @@ pub(crate) const FIELDS: &[Field] = &[
         "PLANABRAIN_HTTP_TIMEOUT_MS",
         "model",
         "HTTP 제한 시간",
-        "모델 호출 제한 시간(ms)입니다. codex는 180000을 권합니다.",
+        "모델과 검색 호출의 제한 시간(ms)입니다. 비우면 60000입니다. codex는 180000을 권합니다. 0이면 제한이 없고, 음수나 숫자가 아닌 값은 60000으로 처리합니다.",
         Kind::Number,
-        "180000",
+        "60000",
     ),
     field(
         "PLANABRAIN_SYSTEM_PROMPT",
@@ -631,13 +630,12 @@ pub(crate) const FIELDS: &[Field] = &[
         Kind::Number,
         "0",
     ),
-    hinted(
+    field(
         "PLANABRAIN_DATA_DIR",
         "system",
         "planabrain 데이터 루트",
-        ".planabrain 상대 경로의 기준 폴더입니다.",
+        ".planabrain 상대 경로의 기준 폴더입니다. 비우면 planabrain 폴더의 상위 폴더를 씁니다. 컨테이너 이미지는 /app으로 지정합니다.",
         Kind::Text,
-        "/app",
     ),
     hinted(
         "PLANABOT_SCHEDULES_PATH",
@@ -707,7 +705,7 @@ pub(crate) const FIELDS: &[Field] = &[
         "PLANABOT_TOKEN_MODEL",
         "system",
         "토큰 측정 모델",
-        "/token 명령이 토큰을 셀 때 기준으로 삼는 모델입니다. 비우면 codex 주 모델을 씁니다.",
+        "/token 명령이 토큰을 셀 때 쓰는 모델 이름입니다. 지금은 어느 모델이든 같은 방식으로 추정하므로 바꿔도 결과가 달라지지 않습니다.",
         Kind::Text,
     ),
     hinted(
@@ -744,6 +742,13 @@ pub(crate) const FIELDS: &[Field] = &[
         "system",
         "대시보드 화면 폴더",
         "대시보드 화면 파일이 있는 폴더입니다. env에서만 바꿉니다.",
+        Kind::Text,
+    ),
+    env_only(
+        "PLANABOT_DASHBOARD_ALLOWED_HOSTS",
+        "system",
+        "대시보드 허용 호스트",
+        "IP 주소와 localhost 말고 대시보드를 열 호스트 이름입니다. 쉼표로 나누고 포트는 빼고 적습니다. 접근 범위를 정하는 값이라 env에서만 바꿉니다.",
         Kind::Text,
     ),
     env_only(

@@ -1,11 +1,11 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::LazyLock;
 
 use axum::extract::ConnectInfo;
 use axum::http::header::SET_COOKIE;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::{Extension, Json};
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
@@ -54,7 +54,7 @@ struct RecoveryView {
 
 type Peer = Option<Extension<ConnectInfo<SocketAddr>>>;
 
-static VERIFY: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(1));
+static VERIFY: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(1));
 
 fn client_ip(peer: Peer) -> IpAddr {
     peer.map(|Extension(ConnectInfo(addr))| addr.ip())
@@ -80,7 +80,11 @@ fn log_setup_code(code: &str) {
 
 pub(crate) async fn session(headers: HeaderMap) -> Response {
     let enabled = auth::is_enabled();
-    let configured = blocking(credentials::is_configured).await.unwrap_or(false);
+    let configured = match blocking(credentials::is_configured).await {
+        Some(Ok(configured)) => configured,
+        Some(Err(err)) => return unreadable(&err),
+        None => false,
+    };
     let fresh = if enabled && !configured {
         blocking(credentials::ensure_setup_code).await
     } else {
@@ -140,14 +144,14 @@ pub(crate) async fn login(
         return response;
     }
     match verify(move || credentials::verify_password(&body.password)).await {
-        Some(true) => signed_in(
+        Some(Ok(true)) => signed_in(
             &headers,
             client,
             StatusCode::OK,
             &serde_json::json!({ "ok": true }),
         ),
-        Some(false) => failed("비밀번호 불일치."),
-        None => internal(),
+        Some(Ok(false)) => failed("비밀번호 불일치."),
+        _ => internal(),
     }
 }
 
@@ -253,7 +257,18 @@ fn precheck(headers: &HeaderMap, client: IpAddr) -> Option<Response> {
     if !auth::is_enabled() {
         return Some(error(StatusCode::NOT_FOUND, "대시보드 비활성."));
     }
+    if let Err(err) = credentials::is_configured() {
+        return Some(unreadable(&err));
+    }
     locked(client)
+}
+
+fn unreadable(err: &anyhow::Error) -> Response {
+    log::error!("대시보드 인증 파일 오류: {err:#}");
+    error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "인증 파일을 읽을 수 없습니다. 파일을 확인하거나 비밀번호 초기화 명령을 실행하십시오.",
+    )
 }
 
 fn locked(client: IpAddr) -> Option<Response> {

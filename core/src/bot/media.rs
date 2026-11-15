@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -245,7 +245,7 @@ where
     if u64::from(file.size) > MAX_IMAGE_BYTES {
         return Err(ImageSkip::TooLarge);
     }
-    let dir = image_dir().ok_or(ImageSkip::Failed)?;
+    let dir = planabrain::planabrain_image_dir().ok_or(ImageSkip::Failed)?;
     fs::create_dir_all(&dir).await.map_err(|err| {
         warn!("이미지 임시 디렉터리 생성 실패: {}", err);
         ImageSkip::Failed
@@ -297,7 +297,9 @@ pub(crate) fn own_image_first(
 }
 
 pub(crate) fn clear_image_dir() {
-    let Some(entries) = image_dir().and_then(|dir| std::fs::read_dir(dir).ok()) else {
+    let Some(entries) =
+        planabrain::planabrain_image_dir().and_then(|dir| std::fs::read_dir(dir).ok())
+    else {
         return;
     };
     let leftovers = entries
@@ -309,18 +311,6 @@ pub(crate) fn clear_image_dir() {
             warn!("남은 이미지 임시 파일 삭제 실패: {}", err);
         }
     }
-}
-
-fn image_dir() -> Option<PathBuf> {
-    let current_dir = std::env::current_dir()
-        .map_err(|err| warn!("현재 작업 디렉터리 조회 실패: {}", err))
-        .ok()?;
-    let data_root = std::env::var("PLANABRAIN_DATA_DIR")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| current_dir.join(value))
-        .unwrap_or(current_dir);
-    Some(data_root.join(".planabot/planabrain_images"))
 }
 
 fn temp_file_name() -> String {

@@ -1,5 +1,6 @@
+use std::sync::LazyLock;
+
 use log::warn;
-use once_cell::sync::Lazy;
 use reqwest::Url;
 use teloxide::types::{
     ChatKind, InlineKeyboardButton, InlineKeyboardButtonKind, InlineKeyboardMarkup, Message,
@@ -21,21 +22,31 @@ pub(crate) struct GalleryIdMatch {
     pub(crate) source: GalleryIdSource,
 }
 
-static HITOMI_READER_RE: Lazy<regex::Regex> = Lazy::new(|| {
+const TITLE_LIMIT: usize = 300;
+const ARTISTS_LIMIT: usize = 200;
+const LANGUAGE_LIMIT: usize = 50;
+const TAGS_LIMIT: usize = 2000;
+
+static HITOMI_READER_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"(?:https?://)?(?:www\.)?hitomi\.la/(?:reader|galleries)/(\d+)").unwrap()
 });
-static HITOMI_SLUG_RE: Lazy<regex::Regex> = Lazy::new(|| {
+static HITOMI_SLUG_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"(?:https?://)?(?:www\.)?hitomi\.la/[^\s#]*?(\d+)\.html").unwrap()
 });
-static K_HENTAI_URL_RE: Lazy<regex::Regex> =
-    Lazy::new(|| regex::Regex::new(r"(?:https?://)?(?:www\.)?k-hentai\.org/r/(\d+)").unwrap());
+static K_HENTAI_URL_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?:https?://)?(?:www\.)?k-hentai\.org/r/(\d+)").unwrap());
 
 pub(crate) fn extract_gallery_id(
     text: &str,
     msg: &Message,
     bot_username: &str,
 ) -> Option<GalleryIdMatch> {
-    static BANG_RE: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"^!(\d+)$").unwrap());
+    match_gallery_id(text, msg, bot_username).filter(|found| is_gallery_id(&found.id))
+}
+
+fn match_gallery_id(text: &str, msg: &Message, bot_username: &str) -> Option<GalleryIdMatch> {
+    static BANG_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"^!(\d+)$").unwrap());
     if let Some(id) = extract_gallery_id_from_url(text) {
         return Some(GalleryIdMatch {
             id,
@@ -65,9 +76,13 @@ pub(crate) fn extract_gallery_id(
                     return None;
                 }
 
+                let mentions_bot = text
+                    .strip_prefix('@')
+                    .is_some_and(|rest| rest.starts_with(bot_username));
                 let pattern = format!(r"^@{}\s+(\d+)", regex::escape(bot_username));
-                if let Some(gallery_id) = regex::Regex::new(&pattern)
-                    .ok()
+                if let Some(gallery_id) = mentions_bot
+                    .then(|| regex::Regex::new(&pattern).ok())
+                    .flatten()
                     .and_then(|re| re.captures(text).map(|cap| cap[1].to_string()))
                 {
                     return Some(GalleryIdMatch {
@@ -117,17 +132,13 @@ fn render_gallery_message_with_user(
     saved: bool,
     masked_user: Option<&str>,
 ) -> String {
-    let title = html::escape(&info.title);
-    let artists = html::escape(&info.artists);
-    let language = html::escape(&info.language);
+    let title = html::escape(&clip(&info.title, TITLE_LIMIT));
+    let artists = html::escape(&clip(&info.artists, ARTISTS_LIMIT));
+    let language = html::escape(&clip(&info.language, LANGUAGE_LIMIT));
     let tags = if info.tags.is_empty() {
         "태그 없음".to_string()
     } else {
-        info.tags
-            .iter()
-            .map(|t| html::escape(t))
-            .collect::<Vec<_>>()
-            .join(", ")
+        html::escape(&clip(&info.tags.join(", "), TAGS_LIMIT))
     };
 
     let saved_suffix = if saved { " (#저장됨)" } else { "" };
@@ -147,6 +158,22 @@ fn render_gallery_message_with_user(
     format!(
         "{header}\n\n<b>제목:</b> {title}\n<b>작가:</b> {artists}\n<b>언어:</b> {language}\n<b>태그:</b> {tags}"
     )
+}
+
+fn clip(text: &str, limit: usize) -> String {
+    if text.encode_utf16().count() <= limit {
+        return text.to_string();
+    }
+    let mut used = 1;
+    let mut clipped: String = text
+        .chars()
+        .take_while(|c| {
+            used += c.len_utf16();
+            used <= limit
+        })
+        .collect();
+    clipped.push('…');
+    clipped
 }
 
 fn mask_display_name(name: &str) -> String {
@@ -286,8 +313,28 @@ pub(crate) fn is_private_chat(msg: &Message) -> bool {
 }
 
 #[cfg(test)]
+pub(crate) fn telegram_text_len(rendered: &str) -> usize {
+    let text = rendered.replace("<b>", "").replace("</b>", "");
+    assert!(!text.contains(['<', '>']), "unescaped markup in {text}");
+    for (at, _) in text.match_indices('&') {
+        assert!(
+            ["&amp;", "&lt;", "&gt;"]
+                .iter()
+                .any(|entity| text[at..].starts_with(entity)),
+            "broken entity at {at}"
+        );
+    }
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .encode_utf16()
+        .count()
+}
+
+#[cfg(test)]
 mod tests {
-    use super::extract_gallery_id_from_url;
+    use super::{extract_gallery_id, extract_gallery_id_from_url, telegram_text_len};
+    use crate::hitomi::GalleryInfo;
 
     #[test]
     fn ready_keyboard_uses_download_callback() {
@@ -442,6 +489,91 @@ mod tests {
         let text = "https://k-hentai.org/r/3723891#1";
         let id = extract_gallery_id_from_url(text);
         assert_eq!(id.as_deref(), Some("3723891"));
+    }
+
+    fn message(chat: serde_json::Value, text: &str) -> teloxide::types::Message {
+        serde_json::from_value(serde_json::json!({
+            "message_id": 1, "date": 0, "text": text, "chat": chat,
+            "from": {"id": 42, "is_bot": false, "first_name": "A"}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn every_lookup_path_applies_the_gallery_id_rule() {
+        let private = serde_json::json!({"id": 7, "first_name": "A", "type": "private"});
+        let group = serde_json::json!({"id": -100, "title": "g", "type": "supergroup"});
+        let longest = "9".repeat(12);
+        let too_long = "9".repeat(13);
+        for (chat, text, expected) in [
+            (&private, "3723891".to_string(), Some("3723891".to_string())),
+            (&private, longest.clone(), Some(longest.clone())),
+            (&private, too_long.clone(), None),
+            (&private, format!("!{too_long}"), None),
+            (&private, "!٣٢١".to_string(), None),
+            (
+                &private,
+                format!("https://hitomi.la/reader/{too_long}.html"),
+                None,
+            ),
+            (&private, format!("k-hentai.org/r/{too_long}"), None),
+            (&group, format!("@bot {longest}"), Some(longest.clone())),
+            (&group, format!("@bot {too_long}"), None),
+            (
+                &group,
+                "@bot 3723891".to_string(),
+                Some("3723891".to_string()),
+            ),
+        ] {
+            let found = extract_gallery_id(&text, &message(chat.clone(), &text), "bot");
+            assert_eq!(found.map(|found| found.id), expected, "{text}");
+        }
+    }
+
+    fn overlong_info() -> GalleryInfo {
+        GalleryInfo {
+            id: "123".to_string(),
+            title: "&<>𝒜가".repeat(4000),
+            artists: "&<>작가, ".repeat(4000),
+            language: "&<>".repeat(4000),
+            tags: (0..4000).map(|n| format!("female:&<>{n}𝒜")).collect(),
+        }
+    }
+
+    #[test]
+    fn over_long_results_fit_telegram_without_broken_markup() {
+        let info = overlong_info();
+        for rendered in [
+            super::render_gallery_message(&info, true),
+            super::render_gallery_message_for_user(&info, true, &"가".repeat(64)),
+        ] {
+            assert!(telegram_text_len(&rendered) <= 4096);
+            assert!(rendered.contains("<b>제목:</b> &amp;&lt;&gt;𝒜가"));
+            assert!(rendered.contains('…'));
+        }
+    }
+
+    #[test]
+    fn short_results_are_rendered_whole() {
+        let info = GalleryInfo {
+            id: "123".to_string(),
+            title: "제목 & 부제".to_string(),
+            artists: "작가".to_string(),
+            language: "한국어".to_string(),
+            tags: vec!["a".to_string(), "b".to_string()],
+        };
+        let rendered = super::render_gallery_message(&info, false);
+        assert!(rendered.ends_with(
+            "<b>제목:</b> 제목 &amp; 부제\n<b>작가:</b> 작가\n<b>언어:</b> 한국어\n<b>태그:</b> a, b"
+        ));
+        assert!(!rendered.contains('…'));
+    }
+
+    #[test]
+    fn clip_counts_utf16_units_and_never_splits_a_character() {
+        assert_eq!(super::clip("가나다라", 3), "가나…");
+        assert_eq!(super::clip("𝒜𝒜𝒜", 4), "𝒜…");
+        assert_eq!(super::clip("가나다", 3), "가나다");
     }
 
     #[test]
