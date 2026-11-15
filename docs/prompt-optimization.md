@@ -1,5 +1,7 @@
 # 대화 아키텍처와 프라나 문체 개선
 
+> 이 문서는 작성 당시의 기록입니다. 이후 제공자 선택 구조와 일부 모듈이 바뀌거나 제거되어 지금 구조와 다를 수 있습니다. 현재 구조와 설정은 `README.md`와 `AGENTS.md`를 기준으로 합니다.
+
 확인일: 2026-09-14.
 
 아래 최적화 비교 수치는 v0.1.36 기준입니다. v0.1.37의 지시 복구 내역은 마지막 절에 기록했습니다.
@@ -112,9 +114,9 @@ npm run eval:prana
 실제 호출은 --live를 명시해야 합니다. 자격 증명은 지정한 환경 파일에서 읽으며 출력하지 않습니다. 다음 명령은 실제 호출 비용이 발생하는 평가입니다.
 
 ```sh
-npm run eval:prana -- --live --model z-ai/glm-5.3-flash --provider relace --repeats 2 --output /tmp/prana-evaluation.jsonl
-npm run eval:prana -- --live --pipeline --model z-ai/glm-5.3-flash --provider relace --history-turns 30 --limit 4 --output /tmp/prana-history.jsonl
-npm run eval:prana -- --live --model z-ai/glm-5.3-flash --provider relace --thinking low --limit 4 --output /tmp/prana-low.jsonl
+npm run eval:prana -- --live --model gpt-6-astra --repeats 2 --output /tmp/prana-evaluation.jsonl
+npm run eval:prana -- --live --pipeline --model gpt-6-astra --history-turns 30 --limit 4 --output /tmp/prana-history.jsonl
+npm run eval:prana -- --live --model gpt-6-astra --thinking low --limit 4 --output /tmp/prana-low.jsonl
 ```
 
 --holdout을 지정하면 프롬프트 예시에 없는 표현 10개를 사용합니다.

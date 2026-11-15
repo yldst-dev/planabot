@@ -25,6 +25,7 @@ coverage/
 
 # hiromi local artifacts
 /hiromi/downloads
+/downloads
 /hiromi/bin
 /hiromi/hiromi
 /hiromi/bot

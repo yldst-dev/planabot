@@ -30,13 +30,17 @@ jobs:
               - 'core/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - '.github/workflows/ci.yml'
             planabrain:
               - 'planabrain/**'
+              - '.github/workflows/ci.yml'
             dashboard:
               - 'dashboard/**'
+              - '.github/workflows/ci.yml'
             hiromi:
               - 'hiromi/**'
               - 'send-vis-ee-api/**'
+              - '.github/workflows/ci.yml'
             docker:
               - 'Dockerfile'
               - 'docker-compose*.yml'

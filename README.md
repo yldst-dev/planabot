@@ -105,10 +105,12 @@ npm run dev
   - `/memory`
   - `/forget`
   - `/memoryreset`
+  - `/todo`
   - `/schedule`
   - `/timer`
   - `/groupinfo` (그룹 전용)
   - `/chat_id` (개인 채팅 전용, 개인 채팅 명령 목록에만 표시)
+  - `/donation`
 - AI 호출
   - `프라나야`로 시작하는 메시지
   - 일반 텍스트, 캡션, 답장, 답장 이미지까지 함께 반영
@@ -176,12 +178,12 @@ npm run dev
 
 - codex에는 검색 도구가 없어서, 시의성 질문이면 Ollama 웹 검색 결과를 답변 전에 미리 넣습니다.
 - 필수: `PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH=1`, `OLLAMA_API_KEY` 또는 `OLLAMA_API_KEYS`
-- 키가 없으면 시의성 질문에 "확인 불가" 응답이 나옵니다. 검색 결과와 출처를 확인하지 못한 답변은 폐기하는 설계이기 때문입니다.
+- 키가 없거나 검색이 실패하거나 결과가 없으면 고정 안내문을 보내지 않고, 모델이 아는 범위에서 답하면서 최신 정보는 확인하지 못했다고 밝힙니다. 예보 범위를 벗어난 날씨 질문만 예외로 고정 안내문("확인 불가")을 보냅니다.
 
 ### 판단 모델 (OpenRouter Jev)
 
 - 턴 판단(할 일과 일정 경로, 최신 정보 필요 여부, 후속 질문, 인사, 기억 관련성)과 기억 저장 판단을 한 번의 호출로 처리합니다.
-- `PLANABRAIN_DECISION_PROVIDER=jev`와 `OPENROUTER_API_KEY`(또는 `PLANABRAIN_DECISION_API_KEY`)로 켭니다. 꺼져 있으면 규칙 판단을 씁니다.
+- `OPENROUTER_API_KEY`(또는 `PLANABRAIN_DECISION_API_KEY`)가 있으면 `PLANABRAIN_DECISION_PROVIDER`를 비워 두어도 Jev가 판단합니다. 키가 없으면 선택한 provider의 보조 모델(codex 또는 Claude)이 같은 형식으로 판단하고, `off`로 두면 규칙 판단만 씁니다.
 - OpenRouter는 이 판단 모델에만 씁니다.
 
 ```bash
@@ -204,11 +206,11 @@ OPENROUTER_API_KEY=YOUR_OPENROUTER_API_KEY_HERE
 - `PLANABRAIN_AI_PROVIDER` (`codex` 기본, `anthropic`)
 - `CODEX_GATEWAY_API_KEY`, `PLANABRAIN_CODEX_BASE_URL`, `PLANABRAIN_CODEX_MODEL`
 - `ANTHROPIC_API_KEY`, `PLANABRAIN_ANTHROPIC_MODEL`, `PLANABRAIN_ANTHROPIC_AUX_MODEL`
-- `PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS`
+- `PLANABRAIN_DELIVERY_MAX_OUTPUT_TOKENS` (양의 정수, 0이나 `false`나 빈 값이면 기본 1024. 끄려면 `PLANABRAIN_DELIVERY_REWRITE_ENABLED`)
 - `PLANABRAIN_DELIVERY_REWRITE_ENABLED`
 - `PLANABRAIN_CHAT_THINKING_MODE`
 - `PLANABRAIN_SYSTEM_PROMPT`
-- `PLANABRAIN_PERSONA_PROFILE` (`live` 기본, `original`은 동결 백업)
+- `PLANABRAIN_PERSONA_PROFILE` (`live` 기본, `original`은 말투 본문만 동결한 백업)
 - `PLANABRAIN_INTIMACY_ENABLED`
 - `PLANABRAIN_INTIMACY_FALLBACK_MODEL`
 - `PLANABRAIN_CONTINUOUS_CHAT` (기본 0, 1이면 지난 대화를 정리된 형태로 매번 다시 보냄)
@@ -217,19 +219,16 @@ OPENROUTER_API_KEY=YOUR_OPENROUTER_API_KEY_HERE
 - `PLANABRAIN_DATA_DIR` (planabrain 데이터 루트, 기본값은 저장소 루트이며 `.planabrain/*` 상대 경로의 기준)
 - `PLANABOT_PLANABRAIN_SERVER` (기본 1, planabrain 상주 서버 사용 여부)
 - `PLANABRAIN_SERVER_PORT` (기본 0, 상주 서버가 쓸 루프백 포트이며 0이면 자동 선택)
-- `PLANABRAIN_HTTP_TIMEOUT_MS` (전역 HTTP 타임아웃, 기본 60000. codex는 180000 권장)
+- `PLANABRAIN_HTTP_TIMEOUT_MS` (전역 HTTP 타임아웃, 기본 60000. codex는 180000 권장. 0이면 요청별 타임아웃 없음, 음수나 숫자가 아닌 값은 기본값)
 - `PLANABRAIN_WEB_FETCH_ENABLED`
-- `PLANABRAIN_WEB_FETCH_TIMEOUT_MS`
-- `PLANABRAIN_WEB_FETCH_MAX_BYTES`
-- `PLANABRAIN_WEB_FETCH_MAX_CHARS`
-- `PLANABRAIN_WEB_FETCH_MAX_TOTAL_CHARS`
-- `PLANABRAIN_ALLOWED_CHAT_IDS` (그룹은 이 목록에 있는 채팅에서만 응답)
+- `PLANABRAIN_WEB_FETCH_TIMEOUT_MS` (1000-30000), `PLANABRAIN_WEB_FETCH_MAX_BYTES` (1024-5000000), `PLANABRAIN_WEB_FETCH_MAX_CHARS` (500-50000), `PLANABRAIN_WEB_FETCH_MAX_TOTAL_CHARS` (500-100000). 범위를 벗어난 값은 읽기 기능이 켜져 있을 때만 오류이고, 꺼져 있으면 무시합니다
+- `PLANABRAIN_ALLOWED_CHAT_IDS` (그룹은 이 목록에 있는 채팅에서만 응답. 개인 채팅 ID를 넣으면 `PLANABRAIN_ALLOWED_USER_IDS`와 관계없이 허용)
 - `PLANABRAIN_ALLOWED_USER_IDS` (개인 채팅 허용 사용자. 비우면 모든 개인 채팅 허용)
 
 ### 웹 검색과 판단 모델
 
 - `PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH`, `OLLAMA_API_KEY`, `OLLAMA_API_KEYS`, `PLANABRAIN_OLLAMA_SEARCH_HOST`, `PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS`
-- `PLANABRAIN_DECISION_PROVIDER`, `OPENROUTER_API_KEY`, `PLANABRAIN_DECISION_API_KEY`, `PLANABRAIN_DECISION_BASE_URL`, `PLANABRAIN_DECISION_MODEL`, `PLANABRAIN_DECISION_TIMEOUT_MS`
+- `PLANABRAIN_DECISION_PROVIDER`, `OPENROUTER_API_KEY`, `PLANABRAIN_DECISION_API_KEY`, `PLANABRAIN_DECISION_BASE_URL`, `PLANABRAIN_DECISION_MODEL`, `PLANABRAIN_DECISION_TIMEOUT_MS`, `PLANABRAIN_DECISION_CODEX_TIMEOUT_MS`
 
 ### 장기 메모리
 
@@ -271,6 +270,8 @@ node dist/cli/index.js memory-reset-all
 
 Dokploy 배포(`docker-compose.dokploy.yml`)는 컨테이너 8080을 서버의 18080 포트로 공개하므로, 서버와 같은 로컬망에서 `http://<서버 로컬 IP>:18080/`으로 접속합니다. Docker가 공개한 포트는 ufw를 거치지 않으니 공유기에서 18080을 포워딩하거나 DMZ를 켜지 마십시오.
 
+대시보드는 요청의 `Host` 값이 IP 주소(IPv6는 대괄호 형식)나 `localhost`가 아니면 403으로 거부합니다. 방문한 웹 페이지가 DNS를 바꿔 내 브라우저로 대시보드 로그인 창구를 두드리는 공격을 막기 위해서입니다. 도메인이나 프록시 주소로 열려면 `PLANABOT_DASHBOARD_ALLOWED_HOSTS`에 호스트 이름을 쉼표로 적습니다(포트 제외, 대소문자 무시, 이름 전체가 같아야 함). 이 값은 env에서만 바꿀 수 있고 대시보드에서는 보여 주기만 합니다. 거부되면 봇 로그에 거부된 `Host` 값과 이 키 이름이 남습니다. `/health`에는 적용되지 않습니다.
+
 화면은 `dashboard/`의 React(TypeScript), shadcn/ui, Tailwind CSS 앱이고, 봇은 빌드 결과(`PLANABOT_DASHBOARD_DIR`, 기본 `dashboard/dist`)를 그대로 서빙합니다. Docker 이미지는 빌드 단계에서 함께 만듭니다.
 
 ```bash
@@ -300,6 +301,8 @@ docker exec -u planabot planabot planabot dashboard-reset-password
 로그인한 뒤에는 사이드바 아래 계정 메뉴에서 비밀번호 변경과 복구 코드 재발급을 할 수 있습니다. 비밀번호를 바꾸면 다른 기기의 로그인은 모두 끊깁니다.
 
 비밀번호, 복구 코드, 설정 코드는 PBKDF2-SHA256(비밀번호는 600,000회)으로 해시해 `.planabot/dashboard-auth.json`(권한 600)에만 남깁니다. 같은 접속 주소에서 로그인, 설정, 복구를 합쳐 5번 연속 실패하면 그 주소만 10분 동안 막습니다. 비밀번호 확인은 한 번에 하나씩만 합니다. 로그인 세션은 12시간 유지되고 재시작해도 살아 있습니다.
+
+인증 파일이나 설정 파일을 읽지 못하거나 해석하지 못하면 빈 값으로 보지 않고 오류로 멈추며, 그 파일을 덮어쓰지 않습니다. 인증 파일이 깨지면 누구도 첫 설정을 할 수 없고 화면에 오류가 보입니다. 위의 초기화 명령은 깨진 파일을 `dashboard-auth.json.corrupt-<시각>`으로 따로 보관한 뒤 새로 시작합니다. 설정 파일(`dashboard.json`)이 깨지면 봇은 env 값으로 시작하고, 저장과 되돌리기와 env 가져오기는 503으로 거부됩니다. 파일을 고치거나 지운 뒤 다시 시도하십시오.
 
 ### 설정 값
 
@@ -337,6 +340,10 @@ docker compose up --build -d
 docker compose exec planabot reset-local-memory
 ```
 
+root로 실행해도 스크립트가 데이터 폴더(`/app/.planabot`) 소유자 권한으로 바꿔 실행하므로 root 소유 파일이 남지 않습니다. 폴더 소유자가 root이면 초기화하지 않고 안내를 출력합니다.
+
+빌드에 쓰는 기본 이미지는 두 compose 파일이 다이제스트로 고정해 둔 값을 쓰며, 환경 변수 `PLANABOT_RUST_IMAGE`, `PLANABOT_RUNTIME_IMAGE`, `PLANABOT_NODE_IMAGE`, `PLANABOT_GO_IMAGE`로 바꿀 수 있습니다(각각 Rust 빌드, 실행, planabrain과 대시보드 빌드, hiromi 빌드 이미지). 바꾸지 않으면 `Dockerfile`의 기본값과 같은 이미지입니다.
+
 ## 운영 배포 (Dokploy)
 
 운영 서버는 Dokploy에서 소스를 직접 빌드하는 빌드-온-푸시 방식을 사용합니다.
@@ -366,7 +373,7 @@ docker exec -u planabot planabot reset-local-memory
 
 ## 릴리즈
 
-1. 버전을 올립니다 (`Cargo.toml`, `Cargo.lock`).
+1. 버전을 올립니다 (`Cargo.toml`, `Cargo.lock`, `planabrain/package.json`, `planabrain/package-lock.json`, `dashboard/package.json`, `dashboard/package-lock.json`).
 2. 커밋 후 `main`에 push합니다.
 3. Dokploy가 자동으로 빌드·배포합니다.
 
@@ -398,3 +405,11 @@ cd planabrain && npm run typecheck && npm run build
 - Threads 포스트 링크 추적 파라미터 정리
 - 구글 공유 링크(share.google)를 실제 주소로 변환
 - `/version` 명령으로 현재 실행 버전 확인
+
+## 참고 문서
+
+`docs/`의 아래 문서는 작성 당시의 기록이라 지금 구조와 다를 수 있습니다. 현재 동작은 이 README와 `AGENTS.md`를 기준으로 합니다.
+
+- [아키텍처 개선 계획](docs/architecture-improvement-plan.md)
+- [프라나브레인 구조 개선 및 검수 결과](docs/planabrain-architecture-review.md)
+- [대화 아키텍처와 프라나 문체 개선](docs/prompt-optimization.md): 평가 기록은 `docs/evaluations/`에 있습니다

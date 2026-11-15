@@ -31,7 +31,7 @@ WORKDIR /app/planabrain
 COPY planabrain/package.json planabrain/package-lock.json ./
 RUN npm ci
 
-COPY planabrain/tsconfig.json ./
+COPY planabrain/tsconfig.json planabrain/tsconfig.build.json ./
 COPY planabrain/src ./src
 RUN npm run build && npm prune --omit=dev
 
@@ -55,14 +55,7 @@ ENV RUST_LOG=info \
     PLANABRAIN_DATA_DIR=/app \
     PLANABOT_DASHBOARD_DIR=/app/dashboard/dist
 
-RUN if grep -q "VERSION_CODENAME=buster" /etc/os-release; then \
-        sed -i 's|deb.debian.org/debian|archive.debian.org/debian|g' /etc/apt/sources.list && \
-        sed -i 's|security.debian.org/debian-security|archive.debian.org/debian-security|g' /etc/apt/sources.list && \
-        sed -i '/buster-updates/d' /etc/apt/sources.list && \
-        apt-get -o Acquire::Check-Valid-Until=false update; \
-    else \
-        apt-get update; \
-    fi && \
+RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates fonts-noto-cjk && \
     rm -f /usr/share/fonts/opentype/noto/NotoSerifCJK-*.ttc && \
     rm -rf /var/lib/apt/lists/* && \
@@ -72,7 +65,7 @@ WORKDIR /app
 
 COPY --from=builder /app/target/release/planabot /usr/local/bin/planabot
 COPY --from=hiromi-builder /hiromi /usr/local/bin/hiromi
-COPY --from=planabrain-builder /usr/local/ /usr/local/
+COPY --from=planabrain-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=planabrain-builder /app/planabrain/package.json /app/planabrain/package.json
 COPY --from=planabrain-builder /app/planabrain/node_modules /app/planabrain/node_modules
 COPY --from=planabrain-builder /app/planabrain/dist /app/planabrain/dist

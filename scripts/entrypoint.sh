@@ -9,7 +9,7 @@ if [ "$(id -u)" = "0" ] && id planabot >/dev/null 2>&1; then
   fi
   run_uid="$(stat -c %u /app/.planabot)"
   run_gid="$(stat -c %g /app/.planabot)"
-  find /app/.planabot /app/.planabrain -uid 0 -exec chown "$run_uid:$run_gid" {} +
+  find /app/.planabot /app/.planabrain -uid 0 -exec chown -h "$run_uid:$run_gid" {} +
   chown "$run_uid:$run_gid" "$download_dir"
   export HOME=/tmp
   exec setpriv --reuid="$run_uid" --regid="$run_gid" --clear-groups /usr/local/bin/planabot

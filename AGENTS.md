@@ -45,7 +45,8 @@
 ## Testing Guidelines
 - Rust tests live alongside code (example: `core/src/urlchanger/link_utils.rs`).
 - Name tests by behavior, and cover happy path + malformed inputs for parsers.
-- Run with `cargo test`. There is no JS test runner currently.
+- Run with `cargo test`. In `planabrain/`, `npm test` runs the `node:test` suites through tsx.
+- Seven Rust tests are `#[ignore]` and run only on request with `cargo test -- --ignored` (or by name): four need the real network (`music_card::builds_cards_from_live_links`, `music_metadata::fetches_live_metadata_for_each_platform`, `google_share::resolves_live_google_share_link`, `instagram::fetch_public_reel_preview`), two need a built planabrain (`npm run build` in `planabrain/`: `planabrain::prepare_turn_runs_against_real_cli`, `server::server_roundtrip_against_real_cli`), and `music_card::renders_card_with_local_fonts` needs `PLANABOT_MUSIC_CARD_TEST_OUTPUT` and `PLANABOT_MUSIC_CARD_TEST_COVER`. The hiromi live check is `go test -tags live ./internal/infra/hitomi`.
 - For TypeScript changes, ensure `npm run typecheck` and `npm run build` pass.
 
 ## Commit & Pull Request Guidelines
@@ -54,22 +55,13 @@
 - Never commit secrets. Use `.env` locally; update `.env.example` for new config keys.
 
 ## Security & Configuration Tips
-- AI/planabrain calls are gated by `PLANABRAIN_ALLOWED_CHAT_IDS` in `.env`.
+- AI/planabrain calls are gated by `PLANABRAIN_ALLOWED_CHAT_IDS` and `PLANABRAIN_ALLOWED_USER_IDS` in `.env`: groups answer only in listed chats, a listed chat is always allowed, and private chats are allowed when the user list is empty or contains the user.
 - `TELEGRAM_API_TOKEN` is required and stays in the deployment env (it is env-only in the dashboard). The model key depends on `PLANABRAIN_AI_PROVIDER`: `CODEX_GATEWAY_API_KEY` for codex, `ANTHROPIC_API_KEY` for anthropic.
 
 ## CI/CD & Deployment
 - GitHub Actions 워크플로우: `.github/workflows/ci.yml`
-- PR/push 시 테스트 자동 실행 (Rust fmt/clippy/test + TypeScript typecheck/build)
+- PR/push 시 변경된 영역만 자동 실행 (Rust fmt/clippy/test, planabrain typecheck/test/build, dashboard lint/typecheck/build, Go 모듈 gofmt/vet/test/build, Docker 이미지 빌드)
 - `v*` 태그 push 시 변경 로그 기반 GitHub Release 생성
 - 프로덕션 배포: Dokploy 빌드-온-푸시 (`docker-compose.dokploy.yml`)
 - `main` push 시 Dokploy가 소스에서 직접 빌드 후 재배포 (GHCR 미사용)
 - 상태/메모리는 명명 볼륨(`planabot-state`, `planabrain-data`)으로 영속화
-
-## 오늘 작업 (2026-01-16)
-- 프라나 톤: 봇의 모든 사용자 메시지를 프라나 말투로 통일.
-- KST 인터넷 시간: worldtimeapi/timeapi/Date 헤더 기반 시간 조회 + 실패 시 로컬 fallback.
-- 플래너브레인 질문: 미디어 캡션/답장 메시지를 컨텍스트로 포함.
-- 플래너브레인 이미지: 캡션/답장 이미지 파일을 임시 저장 후 분석해 컨텍스트로 포함.
-- 유튜브 링크: 모바일(m.youtube.com)도 처리.
-- 추적 파라미터: 없는 링크에는 “제거” 메시지를 표시하지 않도록 조정.
-- 프록시: 초기 로드/헬스체크 결과를 콘솔 로그로 보고.

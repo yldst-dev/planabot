@@ -1,5 +1,7 @@
 # 아키텍처 개선 계획
 
+> 이 문서는 작성 당시의 기록입니다. 이후 제공자 선택 구조와 일부 모듈이 바뀌거나 제거되어 지금 구조와 다를 수 있습니다. 현재 구조와 설정은 `README.md`와 `AGENTS.md`를 기준으로 합니다.
+
 작성일: 2026-09-08. 대상은 Rust 봇 본체(`core/`)와 TypeScript planabrain(`planabrain/`)이다. Go 도구(`hiromi/`, `send-vis-ee-api/`)는 계층 분리가 이미 되어 있어 CI 게이트만 손본다.
 
 ## 목표

@@ -7,6 +7,7 @@ services:
         RUST_IMAGE: ${PLANABOT_RUST_IMAGE:-rust:1.86-slim-bookworm@sha256:57d415bbd61ce11e2d5f73de068103c7bd9f3188dc132c97cef4a8f62989e944}
         RUNTIME_IMAGE: ${PLANABOT_RUNTIME_IMAGE:-debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587}
         NODE_IMAGE: ${PLANABOT_NODE_IMAGE:-node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392}
+        GO_IMAGE: ${PLANABOT_GO_IMAGE:-golang:1.24-bookworm@sha256:1a6d4452c65dea36aac2e2d606b01b4a029ec90cc1ae53890540ce6173ea77ac}
     container_name: planabot
     restart: unless-stopped
     init: true
