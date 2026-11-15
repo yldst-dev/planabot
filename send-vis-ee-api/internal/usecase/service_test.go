@@ -180,3 +180,52 @@ func TestUploadTooLarge(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestForeignShareHostIsRejected(t *testing.T) {
+	var called bool
+	host := &mockHost{
+		host:   "https://send.vis.ee",
+		limits: domain.FallbackLimits(),
+		meta: func(string, []byte, string, string) (*RemoteMetadata, error) {
+			called = true
+			return &RemoteMetadata{Name: "a.txt", Size: 5}, nil
+		},
+	}
+	svc := New(host, history.NewMemory())
+	foreign := "https://other.example/download/0123456789abcdef/#c2VjcmV0c2VjcmV0MTIzNA"
+	own := "https://SEND.vis.ee/download/0123456789abcdef/#c2VjcmV0c2VjcmV0MTIzNA"
+	if _, _, err := svc.Inspect(context.Background(), foreign, ""); err != domain.ErrInvalidURL {
+		t.Fatalf("inspect %v", err)
+	}
+	if _, _, err := svc.Download(context.Background(), DownloadInput{URL: foreign}); err != domain.ErrInvalidURL {
+		t.Fatalf("download %v", err)
+	}
+	if _, err := svc.Import(context.Background(), ImportInput{URL: foreign}); err != domain.ErrInvalidURL {
+		t.Fatalf("import %v", err)
+	}
+	if _, err := svc.Exists(context.Background(), foreign); err != domain.ErrInvalidURL {
+		t.Fatalf("exists %v", err)
+	}
+	if called {
+		t.Fatal("host was asked about a foreign share")
+	}
+	if _, err := svc.Import(context.Background(), ImportInput{URL: own}); err != nil {
+		t.Fatalf("own host %v", err)
+	}
+}
+
+func TestImportKeepsAnExistingOwnerToken(t *testing.T) {
+	repo := history.NewMemory()
+	svc := New(&mockHost{host: "https://send.vis.ee", limits: domain.FallbackLimits()}, repo)
+	if err := repo.Save(context.Background(), &domain.ManagedFile{ID: "0123456789abcdef", OwnerToken: "owner", Secret: "c2VjcmV0c2VjcmV0MTIzNA"}); err != nil {
+		t.Fatal(err)
+	}
+	url := "https://send.vis.ee/download/0123456789abcdef/#c2VjcmV0c2VjcmV0MTIzNA"
+	if _, err := svc.Import(context.Background(), ImportInput{URL: url}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(context.Background(), "0123456789abcdef")
+	if err != nil || got.OwnerToken != "owner" {
+		t.Fatalf("%+v %v", got, err)
+	}
+}

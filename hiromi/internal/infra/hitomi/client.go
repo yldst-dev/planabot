@@ -27,6 +27,8 @@ type Config struct {
 	HTTPClient *http.Client
 }
 
+var maxBodyBytes int64 = 32 << 20
+
 func DefaultConfig() Config {
 	return Config{
 		Front:      "https://hitomi.la",
@@ -41,13 +43,17 @@ func DefaultConfig() Config {
 	}
 }
 
+const maxCachedNodes = 512
+
 type Client struct {
 	cfg    Config
 	http   *http.Client
 	mu     sync.Mutex
+	ggMu   sync.Mutex
 	gg     *routing
 	ggAt   time.Time
 	idxVer map[string]cachedString
+	nodes  map[string]*indexNode
 }
 
 type cachedString struct {
@@ -90,6 +96,7 @@ func New(cfg Config) *Client {
 		cfg:    cfg,
 		http:   httpClient,
 		idxVer: map[string]cachedString{},
+		nodes:  map[string]*indexNode{},
 	}
 }
 
@@ -128,7 +135,7 @@ func (c *Client) getBytes(ctx context.Context, rawURL, rangeHeader, referer stri
 	var last error
 	for attempt := 0; attempt < 3; attempt++ {
 		body, header, status, err := c.getBytesOnce(ctx, rawURL, rangeHeader, referer)
-		if err == nil || errors.Is(err, domain.ErrNotFound) {
+		if err == nil || errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrTooLarge) {
 			return body, header, status, err
 		}
 		if status >= 400 && status < 500 && status != http.StatusRequestTimeout && status != http.StatusTooManyRequests {
@@ -159,9 +166,12 @@ func (c *Client) getBytesOnce(ctx context.Context, rawURL, rangeHeader, referer 
 		return nil, nil, 0, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	if err != nil {
 		return nil, resp.Header, resp.StatusCode, fmt.Errorf("%w: read: %v", domain.ErrRemote, err)
+	}
+	if int64(len(body)) > maxBodyBytes {
+		return nil, resp.Header, resp.StatusCode, fmt.Errorf("%w: %w: response over %d bytes", domain.ErrRemote, domain.ErrTooLarge, maxBodyBytes)
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		return body, resp.Header, resp.StatusCode, domain.ErrNotFound
@@ -185,28 +195,39 @@ func (c *Client) tagIndexURL(path string) string {
 }
 
 func (c *Client) routing(ctx context.Context) (*routing, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.gg != nil && time.Since(c.ggAt) < c.cfg.GGTTL {
-		return c.gg, nil
+	if r, fresh := c.cachedRouting(); fresh {
+		return r, nil
+	}
+	c.ggMu.Lock()
+	defer c.ggMu.Unlock()
+	if r, fresh := c.cachedRouting(); fresh {
+		return r, nil
 	}
 	body, _, _, err := c.getBytes(ctx, c.ltnURL("/gg.js"), "", "")
 	if err != nil {
-		if c.gg != nil {
-			return c.gg, nil
+		if r, _ := c.cachedRouting(); r != nil {
+			return r, nil
 		}
 		return nil, err
 	}
 	r, err := parseGG(string(body))
 	if err != nil {
-		if c.gg != nil {
-			return c.gg, nil
+		if stale, _ := c.cachedRouting(); stale != nil {
+			return stale, nil
 		}
 		return nil, err
 	}
+	c.mu.Lock()
 	c.gg = r
 	c.ggAt = time.Now()
+	c.mu.Unlock()
 	return r, nil
+}
+
+func (c *Client) cachedRouting() (*routing, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gg, c.gg != nil && time.Since(c.ggAt) < c.cfg.GGTTL
 }
 
 func (c *Client) indexVersion(ctx context.Context, name string) (string, error) {

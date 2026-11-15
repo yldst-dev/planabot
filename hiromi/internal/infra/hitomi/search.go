@@ -61,6 +61,13 @@ func (c *Client) searchGalleriesIndex(ctx context.Context, term string) ([]uint6
 }
 
 func (c *Client) nodeAt(ctx context.Context, field, version string, address uint64) (*indexNode, error) {
+	key := fmt.Sprintf("%s/%s/%d", field, version, address)
+	c.mu.Lock()
+	cached, ok := c.nodes[key]
+	c.mu.Unlock()
+	if ok {
+		return cached, nil
+	}
 	start := address
 	end := address + maxNodeSize - 1
 	path := fmt.Sprintf("/%sindex/%s.%s.index", field, field, version)
@@ -71,7 +78,17 @@ func (c *Client) nodeAt(ctx context.Context, field, version string, address uint
 	if len(body) == 0 {
 		return nil, nil
 	}
-	return decodeNode(body)
+	node, err := decodeNode(body)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	if len(c.nodes) >= maxCachedNodes {
+		clear(c.nodes)
+	}
+	c.nodes[key] = node
+	c.mu.Unlock()
+	return node, nil
 }
 
 func (c *Client) binarySearch(ctx context.Context, field, version string, key []byte, node *indexNode) (*indexData, error) {

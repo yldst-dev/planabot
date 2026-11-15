@@ -33,7 +33,7 @@ func RunBot() error {
 	if err != nil {
 		return err
 	}
-	shares := usecase.NewShareService(galleries, downloads, uploader, store, jobstore.NewMemory())
+	shares := usecase.NewShareService(galleries, downloads, uploader, store, jobstore.NewMemory()).UploadOnly()
 	bot := telegram.NewBot(telegram.NewAPI(cfg.TelegramToken), shares)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

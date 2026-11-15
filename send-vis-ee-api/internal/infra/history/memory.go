@@ -24,6 +24,9 @@ func (m *Memory) Save(_ context.Context, file *domain.ManagedFile) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cp := *file
+	if prev, ok := m.files[file.ID]; ok && cp.OwnerToken == "" {
+		cp.OwnerToken = prev.OwnerToken
+	}
 	m.files[file.ID] = &cp
 	return nil
 }

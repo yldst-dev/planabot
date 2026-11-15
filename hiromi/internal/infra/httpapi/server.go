@@ -21,8 +21,6 @@ func NewMux(h *Handler) http.Handler {
 	mux.HandleFunc("GET /v1/media", h.ResolveMedia)
 	mux.HandleFunc("GET /v1/proxy/galleries/{id}/files/{index}", h.ProxyFile)
 	mux.HandleFunc("POST /v1/galleries/{id}/download", h.DownloadGallery)
-	mux.HandleFunc("GET /v1/galleries/{id}/download", h.DownloadGallery)
 	mux.HandleFunc("POST /v1/downloads", h.DownloadMany)
-	mux.HandleFunc("GET /v1/downloads", h.DownloadMany)
-	return withLog(withCORS(mux))
+	return withLog(withCORS(noBrowserPosts(mux)))
 }

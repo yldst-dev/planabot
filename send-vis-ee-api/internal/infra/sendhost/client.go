@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,15 +20,23 @@ import (
 	"github.com/yldst-dev/send.vis.ee-api/internal/usecase"
 )
 
-const defaultUA = "sendvis-unofficial/1.0"
+const (
+	defaultUA             = "sendvis-unofficial/1.0"
+	defaultRequestTimeout = 30 * time.Second
+	instanceTTL           = 5 * time.Minute
+)
 
 type Client struct {
-	base   string
-	http   *http.Client
-	dialer *websocket.Dialer
-	ua     string
-	origin string
-	nonces sync.Map
+	base    string
+	http    *http.Client
+	dialer  *websocket.Dialer
+	ua      string
+	origin  string
+	timeout time.Duration
+	nonces  sync.Map
+	instMu  sync.Mutex
+	inst    usecase.Instance
+	instAt  time.Time
 }
 
 type Option func(*Client)
@@ -44,6 +53,10 @@ func WithDialer(d *websocket.Dialer) Option {
 	return func(cl *Client) { cl.dialer = d }
 }
 
+func WithRequestTimeout(d time.Duration) Option {
+	return func(cl *Client) { cl.timeout = d }
+}
+
 func New(host string, opts ...Option) (*Client, error) {
 	normalized, err := domain.NormalizeHost(host)
 	if err != nil {
@@ -51,10 +64,10 @@ func New(host string, opts ...Option) (*Client, error) {
 	}
 	origin := normalized
 	c := &Client{
-		base:   normalized,
-		http:   &http.Client{Timeout: 0},
-		ua:     defaultUA,
-		origin: origin,
+		base:    normalized,
+		ua:      defaultUA,
+		origin:  origin,
+		timeout: defaultRequestTimeout,
 		dialer: &websocket.Dialer{
 			Proxy:             http.ProxyFromEnvironment,
 			HandshakeTimeout:  30 * time.Second,
@@ -66,14 +79,24 @@ func New(host string, opts ...Option) (*Client, error) {
 	for _, opt := range opts {
 		opt(c)
 	}
-	if c.http == nil {
-		c.http = &http.Client{Timeout: 0}
-	}
 	if c.dialer == nil {
 		c.dialer = websocket.DefaultDialer
 	}
-	if t, ok := c.http.Transport.(*http.Transport); ok && t != nil {
-		c.dialer.TLSClientConfig = t.TLSClientConfig
+	if c.http != nil {
+		if t, ok := c.http.Transport.(*http.Transport); ok && t != nil {
+			c.dialer.TLSClientConfig = t.TLSClientConfig
+		}
+	} else {
+		c.http = &http.Client{Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: time.Second,
+			ResponseHeaderTimeout: c.timeout,
+		}}
 	}
 	return c, nil
 }
@@ -83,6 +106,20 @@ func (c *Client) Host() string {
 }
 
 func (c *Client) Instance(ctx context.Context) (usecase.Instance, error) {
+	c.instMu.Lock()
+	defer c.instMu.Unlock()
+	if !c.instAt.IsZero() && time.Since(c.instAt) < instanceTTL {
+		return c.inst, nil
+	}
+	inst, err := c.fetchInstance(ctx)
+	if err != nil {
+		return usecase.Instance{}, err
+	}
+	c.inst, c.instAt = inst, time.Now()
+	return inst, nil
+}
+
+func (c *Client) fetchInstance(ctx context.Context) (usecase.Instance, error) {
 	var ver struct {
 		Commit  string `json:"commit"`
 		Source  string `json:"source"`

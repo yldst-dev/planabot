@@ -40,7 +40,7 @@ func (c *Client) Search(ctx context.Context, term string) ([]domain.TagCount, er
 		case '/':
 			path += "slash"
 		default:
-			path += string(r)
+			path += url.PathEscape(string(r))
 		}
 	}
 	body, _, _, err := c.getBytes(ctx, c.tagIndexURL(path+".json"), "", "")

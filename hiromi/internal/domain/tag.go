@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -51,10 +50,6 @@ func (t Tag) String() string {
 		prefix = "-"
 	}
 	return prefix + string(t.Type) + ":" + strings.ReplaceAll(t.Name, " ", "_")
-}
-
-func (t Tag) NormalizedName() string {
-	return strings.ReplaceAll(t.Name, "_", " ")
 }
 
 func NewTag(typ TagType, name string, negative bool) (Tag, error) {
@@ -138,18 +133,6 @@ func ParseNameInitial(s string) (NameInitial, error) {
 		return "", fmt.Errorf("%w: initial %q", ErrInvalidQuery, s)
 	}
 	return NameInitial(s), nil
-}
-
-func InitialOf(name string) NameInitial {
-	name = strings.TrimSpace(strings.ToLower(name))
-	if name == "" {
-		return Initial123
-	}
-	r, _ := utf8.DecodeRuneInString(name)
-	if unicode.IsLetter(r) && r < 128 {
-		return NameInitial(strings.ToLower(string(r)))
-	}
-	return Initial123
 }
 
 type TagCount struct {

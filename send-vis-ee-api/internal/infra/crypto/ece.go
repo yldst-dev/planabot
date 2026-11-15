@@ -13,13 +13,14 @@ import (
 )
 
 const (
-	RecordSize  = 64 * 1024
-	TagLength   = 16
-	KeyLength   = 16
-	NonceLength = 12
-	HeaderLen   = 21
-	PadDelimMid = 0x01
-	PadDelimEnd = 0x02
+	RecordSize    = 64 * 1024
+	maxRecordSize = 1 << 20
+	TagLength     = 16
+	KeyLength     = 16
+	NonceLength   = 12
+	HeaderLen     = 21
+	PadDelimMid   = 0x01
+	PadDelimEnd   = 0x02
 )
 
 var (
@@ -229,7 +230,7 @@ func decryptTo(w io.Writer, r io.Reader, ikm []byte) error {
 	salt := append([]byte(nil), hdr[0:16]...)
 	rs := int(binary.BigEndian.Uint32(hdr[16:20]))
 	idlen := int(hdr[20])
-	if rs <= TagLength+1 {
+	if rs <= TagLength+1 || rs > maxRecordSize {
 		return errHeader
 	}
 	if idlen > 0 {

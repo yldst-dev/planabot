@@ -222,3 +222,27 @@ func (g *gateFetch) Fetch(ctx context.Context, rawURL, referer string) (io.ReadC
 	_ = referer
 	return io.NopCloser(bytes.NewReader(g.payload)), "image/webp", nil
 }
+
+func TestShareUploadOnlyUploadsEvenSmallViewers(t *testing.T) {
+	g := testGallery()
+	fake := fakeRepo{g: g}
+	gs := NewGalleryService(fake, fake, fake)
+	store := newMemStore()
+	ds := NewDownloadService(fake, fake, &seqFetch{payload: []byte("IMG")}, store, "https://hitomi.la").WithViewer(stubViewer{})
+	instantSleep(ds)
+	up := &fakeUploader{url: "https://send.vis.ee/download/abc/#sec"}
+	svc := NewShareService(gs, ds, up, store, newMemClaims()).UploadOnly()
+	share, err := svc.Deliver(context.Background(), 1234567)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if share.URL != up.url || share.Path != "" || up.uploads != 1 {
+		t.Fatalf("%+v uploads %d", share, up.uploads)
+	}
+	if len(store.files) != 0 {
+		t.Fatalf("left files %v", keys(store.files))
+	}
+	if got, err := svc.Claim(share.Token); err != nil || got.URL != up.url || got.Path != "" {
+		t.Fatalf("claim %v %+v", err, got)
+	}
+}

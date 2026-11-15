@@ -5,12 +5,12 @@ import (
 	"errors"
 	"io"
 	"mime"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/yldst-dev/send.vis.ee-api/internal/domain"
-	scrypto "github.com/yldst-dev/send.vis.ee-api/internal/infra/crypto"
 )
 
 type Service struct {
@@ -78,7 +78,7 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (*domain.ManagedFi
 		return nil, err
 	}
 	if in.Password != "" {
-		secret, err := scrypto.Decode(file.Secret)
+		secret, err := domain.DecodeBase64(file.Secret)
 		if err != nil {
 			return nil, err
 		}
@@ -145,20 +145,6 @@ func (s *Service) Delete(ctx context.Context, idOrURL string) error {
 	return s.repo.Delete(ctx, file.ID)
 }
 
-func (s *Service) DeleteRemote(ctx context.Context, id, ownerToken string) error {
-	if !domain.ValidFileID(id) {
-		return domain.ErrInvalidID
-	}
-	if ownerToken == "" {
-		return domain.ErrOwnerTokenMissing
-	}
-	if err := s.host.Delete(ctx, id, ownerToken); err != nil {
-		return err
-	}
-	_ = s.repo.Delete(ctx, id)
-	return nil
-}
-
 func (s *Service) SetPassword(ctx context.Context, in PasswordInput) (*domain.ManagedFile, error) {
 	if in.Password == "" {
 		return nil, domain.ErrInvalidParameter
@@ -170,7 +156,7 @@ func (s *Service) SetPassword(ctx context.Context, in PasswordInput) (*domain.Ma
 	if file.OwnerToken == "" {
 		return nil, domain.ErrOwnerTokenMissing
 	}
-	secret, err := scrypto.Decode(file.Secret)
+	secret, err := domain.DecodeBase64(file.Secret)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +206,7 @@ func (s *Service) Inspect(ctx context.Context, idOrURL, password string) (*Remot
 	var id, shareURL string
 	if localErr == nil {
 		var err error
-		secret, err = scrypto.Decode(file.Secret)
+		secret, err = domain.DecodeBase64(file.Secret)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -237,12 +223,12 @@ func (s *Service) Inspect(ctx context.Context, idOrURL, password string) (*Remot
 		if ref.Secret == "" {
 			return nil, nil, domain.ErrSecretMissing
 		}
-		secret, err = scrypto.Decode(ref.Secret)
+		secret, err = domain.DecodeBase64(ref.Secret)
 		if err != nil {
 			return nil, nil, err
 		}
 		id = ref.ID
-		shareURL = domain.BuildShareURL(s.hostFor(ref), id, ref.Secret)
+		shareURL = domain.BuildShareURL(s.host.Host(), id, ref.Secret)
 	}
 	meta, err := s.host.Metadata(ctx, id, secret, password, shareURL)
 	if err != nil {
@@ -259,7 +245,7 @@ func (s *Service) Download(ctx context.Context, in DownloadInput) (io.ReadCloser
 	password = in.Password
 	if localErr == nil {
 		var err error
-		secret, err = scrypto.Decode(file.Secret)
+		secret, err = domain.DecodeBase64(file.Secret)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -273,12 +259,12 @@ func (s *Service) Download(ctx context.Context, in DownloadInput) (io.ReadCloser
 		if ref.Secret == "" {
 			return nil, nil, domain.ErrSecretMissing
 		}
-		secret, err = scrypto.Decode(ref.Secret)
+		secret, err = domain.DecodeBase64(ref.Secret)
 		if err != nil {
 			return nil, nil, err
 		}
 		id = ref.ID
-		shareURL = domain.BuildShareURL(s.hostFor(ref), id, ref.Secret)
+		shareURL = domain.BuildShareURL(s.host.Host(), id, ref.Secret)
 	}
 	meta, err := s.host.Metadata(ctx, id, secret, password, shareURL)
 	if err != nil {
@@ -292,18 +278,18 @@ func (s *Service) Download(ctx context.Context, in DownloadInput) (io.ReadCloser
 }
 
 func (s *Service) Import(ctx context.Context, in ImportInput) (*domain.ManagedFile, error) {
-	ref, err := domain.ParseShareURL(in.URL)
+	ref, err := s.parseRef(in.URL)
 	if err != nil {
 		return nil, err
 	}
 	if ref.Secret == "" {
 		return nil, domain.ErrSecretMissing
 	}
-	secret, err := scrypto.Decode(ref.Secret)
+	secret, err := domain.DecodeBase64(ref.Secret)
 	if err != nil {
 		return nil, err
 	}
-	host := s.hostFor(ref)
+	host := s.host.Host()
 	shareURL := domain.BuildShareURL(host, ref.ID, ref.Secret)
 	meta, err := s.host.Metadata(ctx, ref.ID, secret, in.Password, shareURL)
 	if err != nil {
@@ -319,7 +305,7 @@ func (s *Service) Import(ctx context.Context, in ImportInput) (*domain.ManagedFi
 		MIME:        meta.MIME,
 		Secret:      ref.Secret,
 		OwnerToken:  in.OwnerToken,
-		HasPassword: in.Password != "" || meta.RequiresPass,
+		HasPassword: in.Password != "",
 		Manifest:    meta.Manifest,
 		CreatedAt:   time.Now(),
 		ExpiresAt:   time.Now().Add(time.Duration(meta.TTLMillis) * time.Millisecond),
@@ -352,14 +338,20 @@ func (s *Service) parseRef(idOrURL string) (domain.ShareRef, error) {
 	if idOrURL == "" {
 		return domain.ShareRef{}, domain.ErrInvalidID
 	}
-	return domain.ParseShareURL(idOrURL)
+	ref, err := domain.ParseShareURL(idOrURL)
+	if err != nil {
+		return ref, err
+	}
+	if ref.Host != "" && !s.sameHost(ref.Host) {
+		return domain.ShareRef{}, domain.ErrInvalidURL
+	}
+	return ref, nil
 }
 
-func (s *Service) hostFor(ref domain.ShareRef) string {
-	if ref.Host != "" {
-		return ref.Host
-	}
-	return s.host.Host()
+func (s *Service) sameHost(refHost string) bool {
+	a, errA := url.Parse(refHost)
+	b, errB := url.Parse(s.host.Host())
+	return errA == nil && errB == nil && a.Scheme == b.Scheme && strings.EqualFold(a.Host, b.Host)
 }
 
 func firstNonEmpty(values ...string) string {

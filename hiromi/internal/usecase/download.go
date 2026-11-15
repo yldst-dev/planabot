@@ -33,6 +33,7 @@ type downloadLimits struct {
 	pages int
 	image int64
 	total int64
+	video int64
 }
 
 type fetchGate struct {
@@ -50,7 +51,7 @@ func NewDownloadService(g port.GalleryRepository, u port.URLResolver, f port.Med
 		front:     front,
 		gate:      &fetchGate{spacing: 200 * time.Millisecond},
 		sleep:     sleepCtx,
-		limits:    downloadLimits{pages: domain.MaxGalleryPages, image: domain.MaxImageBytes, total: domain.MaxGalleryBytes},
+		limits:    downloadLimits{pages: domain.MaxGalleryPages, image: domain.MaxImageBytes, total: domain.MaxGalleryBytes, video: domain.MaxVideoBytes},
 	}
 }
 
@@ -220,7 +221,7 @@ feed:
 			}
 		}
 		if !skip {
-			n, err := s.fetchToStore(ctx, rel, g.Video.URL, referer, 0)
+			n, err := s.fetchToStore(ctx, rel, g.Video.URL, referer, s.limits.video)
 			if err != nil {
 				result.Failed = append(result.Failed, domain.DownloadFailure{Name: "video.mp4", Error: err.Error()})
 			} else {
@@ -242,6 +243,9 @@ feed:
 func (s *DownloadService) DownloadMany(ctx context.Context, ids []uint64, opt domain.DownloadOptions) ([]domain.GalleryDownload, error) {
 	if len(ids) == 0 {
 		return nil, domain.ErrInvalidID
+	}
+	if len(ids) > domain.MaxDownloadBatch {
+		return nil, fmt.Errorf("%w: at most %d ids", domain.ErrInvalidQuery, domain.MaxDownloadBatch)
 	}
 	out := make([]domain.GalleryDownload, 0, len(ids))
 	for _, id := range ids {
@@ -304,7 +308,7 @@ func (s *DownloadService) fetchOnce(ctx context.Context, rel, rawURL, referer st
 	n, err := s.store.Write(rel, r)
 	if err == nil && limit > 0 && n > limit {
 		_ = s.store.RemoveAll(rel)
-		return 0, fmt.Errorf("%w: image over %d bytes", domain.ErrTooLarge, limit)
+		return 0, fmt.Errorf("%w: file over %d bytes", domain.ErrTooLarge, limit)
 	}
 	return n, err
 }

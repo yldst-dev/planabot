@@ -15,7 +15,6 @@ var (
 	ErrLimitExceeded     = errors.New("parameter exceeds host limit")
 	ErrInvalidParameter  = errors.New("invalid parameter")
 	ErrHost              = errors.New("send host error")
-	ErrAlreadyExists     = errors.New("file already in history")
 	ErrOwnerTokenMissing = errors.New("owner token required")
 	ErrSecretMissing     = errors.New("file secret required")
 )

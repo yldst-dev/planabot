@@ -19,7 +19,7 @@ type Config struct {
 
 func LoadConfig() Config {
 	cfg := Config{
-		Addr:          env("HIROMI_ADDR", ":8080"),
+		Addr:          env("HIROMI_ADDR", "127.0.0.1:8080"),
 		DownloadDir:   env("HIROMI_DOWNLOAD_DIR", "downloads"),
 		TelegramToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
 		SendHost:      env("SENDVIS_HOST", "https://send.vis.ee"),

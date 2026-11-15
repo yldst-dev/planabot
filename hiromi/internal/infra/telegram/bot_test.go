@@ -5,7 +5,9 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"hiromi/internal/domain"
 	"hiromi/internal/usecase"
@@ -195,5 +197,155 @@ func TestStartClaim(t *testing.T) {
 	}
 	if len(api.messages) != 1 || !strings.Contains(api.messages[0].text, share.URL) {
 		t.Fatalf("%+v", api.messages)
+	}
+}
+
+type failingAPI struct {
+	*fakeAPI
+	polls atomic.Int32
+}
+
+func (f *failingAPI) GetUpdates(context.Context, int) ([]Update, error) {
+	f.polls.Add(1)
+	return nil, errors.New("network down")
+}
+
+func TestRunWaitsBeforeRetryingAFailedPoll(t *testing.T) {
+	prev := retryDelay
+	retryDelay = func(int) time.Duration { return 40 * time.Millisecond }
+	defer func() { retryDelay = prev }()
+	api := &failingAPI{fakeAPI: &fakeAPI{}}
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	err := NewBot(api, fakeShare{}).Run(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("%v", err)
+	}
+	if n := api.polls.Load(); n < 2 || n > 10 {
+		t.Fatalf("polls %d", n)
+	}
+}
+
+func TestRetryDelayGrowsAndStops(t *testing.T) {
+	if retryDelay(0) != 2*time.Second || retryDelay(1) != 4*time.Second || retryDelay(50) != 30*time.Second {
+		t.Fatalf("%s %s %s", retryDelay(0), retryDelay(1), retryDelay(50))
+	}
+}
+
+type scriptedAPI struct {
+	*fakeAPI
+	once  sync.Once
+	batch []Update
+}
+
+func (s *scriptedAPI) GetUpdates(ctx context.Context, _ int) ([]Update, error) {
+	var out []Update
+	s.once.Do(func() { out = s.batch })
+	if out != nil {
+		return out, nil
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+type slowShare struct {
+	fakeShare
+	running atomic.Int32
+	peak    atomic.Int32
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *slowShare) Deliver(ctx context.Context, _ uint64) (*usecase.Share, error) {
+	n := s.running.Add(1)
+	defer s.running.Add(-1)
+	for {
+		peak := s.peak.Load()
+		if n <= peak || s.peak.CompareAndSwap(peak, n) {
+			break
+		}
+	}
+	s.started <- struct{}{}
+	select {
+	case <-s.release:
+		return s.share, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestRunAnswersOthersWhileDeliveriesRunAndCapsThem(t *testing.T) {
+	getCallback := func(id string) Update {
+		return Update{UpdateID: 1, CallbackQuery: &CallbackQuery{
+			ID:      "cb" + id,
+			From:    User{ID: 99},
+			Data:    "get:" + id,
+			Message: &Message{MessageID: 5, Chat: Chat{ID: 10, Type: "supergroup"}},
+		}}
+	}
+	api := &scriptedAPI{fakeAPI: &fakeAPI{}, batch: []Update{
+		getCallback("1"), getCallback("2"), getCallback("3"),
+		{UpdateID: 2, Message: &Message{Chat: Chat{ID: 7, Type: "private"}, Text: "/help"}},
+	}}
+	shares := &slowShare{
+		fakeShare: fakeShare{share: &usecase.Share{Token: "tok", Title: "sample", Pages: 2}},
+		started:   make(chan struct{}, 8),
+		release:   make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- NewBot(api, shares).Run(ctx) }()
+
+	for range 2 {
+		select {
+		case <-shares.started:
+		case <-time.After(3 * time.Second):
+			t.Fatal("deliveries did not start")
+		}
+	}
+	waitUntil(t, "help reply", func() bool {
+		api.mu.Lock()
+		defer api.mu.Unlock()
+		return len(api.messages) == 1
+	})
+	time.Sleep(50 * time.Millisecond)
+	if n := shares.running.Load(); n != 2 {
+		t.Fatalf("running %d", n)
+	}
+
+	close(shares.release)
+	waitUntil(t, "all deliveries", func() bool {
+		api.mu.Lock()
+		defer api.mu.Unlock()
+		ready := 0
+		for _, e := range api.edits {
+			if strings.HasPrefix(e.text, "준비되었습니다") {
+				ready++
+			}
+		}
+		return ready == 3
+	})
+	if peak := shares.peak.Load(); peak != 2 {
+		t.Fatalf("peak %d", peak)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("%v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return")
 	}
 }

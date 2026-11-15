@@ -136,9 +136,3 @@ type Video struct {
 	URL       string
 	PosterURL string
 }
-
-type MediaRequest struct {
-	Hash   string
-	Format ImageFormat
-	Thumb  ThumbSize
-}

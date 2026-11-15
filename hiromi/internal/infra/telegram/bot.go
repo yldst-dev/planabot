@@ -7,6 +7,8 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"hiromi/internal/domain"
 	"hiromi/internal/usecase"
@@ -26,14 +28,24 @@ type Sharer interface {
 	Claim(token string) (*usecase.Share, error)
 }
 
+const (
+	maxConcurrentDeliveries = 2
+	deliverTimeout          = 110 * time.Minute
+)
+
+var retryDelay = func(attempt int) time.Duration {
+	return min(2*time.Second<<min(attempt, 4), 30*time.Second)
+}
+
 type Bot struct {
 	api      Gateway
 	shares   Sharer
 	username string
+	slots    chan struct{}
 }
 
 func NewBot(api Gateway, shares Sharer) *Bot {
-	return &Bot{api: api, shares: shares}
+	return &Bot{api: api, shares: shares, slots: make(chan struct{}, maxConcurrentDeliveries)}
 }
 
 func (b *Bot) Run(ctx context.Context) error {
@@ -43,7 +55,9 @@ func (b *Bot) Run(ctx context.Context) error {
 	}
 	b.username = me.Username
 	log.Printf("telegram bot @%s", b.username)
-	offset := 0
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	offset, failures := 0, 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -54,13 +68,24 @@ func (b *Bot) Run(ctx context.Context) error {
 				return ctx.Err()
 			}
 			log.Printf("getUpdates: %v", err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(retryDelay(failures)):
+			}
+			failures++
 			continue
 		}
+		failures = 0
 		for _, u := range updates {
 			offset = u.UpdateID + 1
-			if err := b.Handle(ctx, u); err != nil {
-				log.Printf("update %d: %v", u.UpdateID, err)
-			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := b.Handle(ctx, u); err != nil {
+					log.Printf("update %d: %v", u.UpdateID, err)
+				}
+			}()
 		}
 	}
 }
@@ -153,7 +178,15 @@ func (b *Bot) runDeliver(ctx context.Context, cb *CallbackQuery, id uint64) erro
 	chatID := cb.Message.Chat.ID
 	msgID := cb.Message.MessageID
 	_ = b.api.EditMessageText(ctx, chatID, msgID, "내려받는 중입니다. 잠시만 기다려 주세요.", nil)
-	share, err := b.shares.Deliver(ctx, id)
+	select {
+	case b.slots <- struct{}{}:
+		defer func() { <-b.slots }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	deliverCtx, cancel := context.WithTimeout(ctx, deliverTimeout)
+	defer cancel()
+	share, err := b.shares.Deliver(deliverCtx, id)
 	if err != nil {
 		text := "준비에 실패했습니다."
 		if errors.Is(err, domain.ErrBusy) {

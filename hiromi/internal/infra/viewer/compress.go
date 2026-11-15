@@ -1,20 +1,43 @@
 package viewer
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"sync"
+	"time"
 
 	"hiromi/internal/domain"
 )
 
 const viewerMaxHeight = 1280
 
+type toolPaths struct {
+	avifenc string
+	magick  string
+	cwebp   string
+}
+
+var lookupTools = sync.OnceValue(func() toolPaths {
+	var t toolPaths
+	t.avifenc, _ = exec.LookPath("avifenc")
+	t.magick, _ = exec.LookPath("magick")
+	t.cwebp, _ = exec.LookPath("cwebp")
+	return t
+})
+
+var encodeTimeout = 2 * time.Minute
+
 func shrink(format domain.ImageFormat, data []byte) (domain.ImageFormat, []byte) {
-	if len(data) == 0 {
+	tools := lookupTools()
+	canAVIF := tools.avifenc != "" && tools.magick != ""
+	if len(data) == 0 || (!canAVIF && tools.cwebp == "") {
 		return format, data
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), encodeTimeout)
+	defer cancel()
 	dir, err := os.MkdirTemp("", "hiromi-view-*")
 	if err != nil {
 		return format, data
@@ -24,27 +47,26 @@ func shrink(format domain.ImageFormat, data []byte) (domain.ImageFormat, []byte)
 	if err := os.WriteFile(in, data, 0o600); err != nil {
 		return format, data
 	}
-	if avif, ok := encodeAVIF(dir, in); ok {
-		return domain.FormatAVIF, avif
+	if canAVIF {
+		if avif, ok := encodeAVIF(ctx, tools, dir, in); ok {
+			return domain.FormatAVIF, avif
+		}
 	}
-	if webp, ok := encodeWebP(dir, in); ok {
-		return domain.FormatWebP, webp
+	if tools.cwebp != "" {
+		if webp, ok := encodeWebP(ctx, tools.cwebp, dir, in); ok {
+			return domain.FormatWebP, webp
+		}
 	}
 	return format, data
 }
 
-func encodeAVIF(dir, in string) ([]byte, bool) {
-	avifenc, err1 := exec.LookPath("avifenc")
-	magick, err2 := exec.LookPath("magick")
-	if err1 != nil || err2 != nil {
-		return nil, false
-	}
+func encodeAVIF(ctx context.Context, tools toolPaths, dir, in string) ([]byte, bool) {
 	png := filepath.Join(dir, "in.png")
 	out := filepath.Join(dir, "out.avif")
-	if err := exec.Command(magick, in, "-resize", "x"+strconv.Itoa(viewerMaxHeight)+">", png).Run(); err != nil {
+	if err := exec.CommandContext(ctx, tools.magick, in, "-resize", "x"+strconv.Itoa(viewerMaxHeight)+">", png).Run(); err != nil {
 		return nil, false
 	}
-	if err := exec.Command(avifenc, "-s", "8", "-q", "40", png, out).Run(); err != nil {
+	if err := exec.CommandContext(ctx, tools.avifenc, "-s", "8", "-q", "40", png, out).Run(); err != nil {
 		return nil, false
 	}
 	b, err := os.ReadFile(out)
@@ -54,13 +76,9 @@ func encodeAVIF(dir, in string) ([]byte, bool) {
 	return b, true
 }
 
-func encodeWebP(dir, in string) ([]byte, bool) {
-	cwebp, err := exec.LookPath("cwebp")
-	if err != nil {
-		return nil, false
-	}
+func encodeWebP(ctx context.Context, cwebp, dir, in string) ([]byte, bool) {
 	out := filepath.Join(dir, "out.webp")
-	if err := exec.Command(cwebp, "-quiet", "-resize", "0", strconv.Itoa(viewerMaxHeight), "-q", "70", in, "-o", out).Run(); err != nil {
+	if err := exec.CommandContext(ctx, cwebp, "-quiet", "-resize", "0", strconv.Itoa(viewerMaxHeight), "-q", "70", in, "-o", out).Run(); err != nil {
 		return nil, false
 	}
 	b, err := os.ReadFile(out)

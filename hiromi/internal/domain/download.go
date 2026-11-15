@@ -10,6 +10,8 @@ const (
 	MaxGalleryPages        = 2000
 	MaxImageBytes          = 32 << 20
 	MaxGalleryBytes        = 1 << 30
+	MaxVideoBytes          = 1 << 30
+	MaxDownloadBatch       = 20
 )
 
 type DownloadOptions struct {

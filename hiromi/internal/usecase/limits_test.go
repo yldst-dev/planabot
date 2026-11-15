@@ -150,3 +150,41 @@ func TestShareReportsSavedPagesAndFailsWhenTheJobEnds(t *testing.T) {
 		t.Fatalf("ended job %v files=%v", err, keys(store.files))
 	}
 }
+
+func TestDownloadCapsAVideoAndKeepsTheImages(t *testing.T) {
+	g := testGallery()
+	g.Video = &domain.Video{URL: "https://cdn.test/clip.mp4"}
+	fake := fakeRepo{g: g}
+	store := newMemStore()
+	svc := NewDownloadService(fake, fake, &seqFetch{payload: []byte("IMG")}, store, "https://hitomi.la")
+	instantSleep(svc)
+	svc.limits = downloadLimits{pages: 10, image: 10, total: 100, video: 2}
+	res, err := svc.Download(context.Background(), 1234567, domain.DefaultDownloadOptions())
+	if err != nil || len(res.Saved) != 2 || len(res.Failed) != 1 {
+		t.Fatalf("%v saved=%d failed=%+v", err, len(res.Saved), res.Failed)
+	}
+	if res.Failed[0].Name != "video.mp4" || !strings.Contains(res.Failed[0].Error, domain.ErrTooLarge.Error()) {
+		t.Fatalf("%+v", res.Failed[0])
+	}
+	if _, ok := store.files["1234567/video.mp4"]; ok {
+		t.Fatal("oversized video kept")
+	}
+}
+
+func TestDownloadManyRefusesALongList(t *testing.T) {
+	store := newMemStore()
+	svc := limitedService(store, downloadLimits{pages: 10, image: 10, total: 100})
+	ids := make([]uint64, domain.MaxDownloadBatch+1)
+	for i := range ids {
+		ids[i] = 1234567
+	}
+	if _, err := svc.DownloadMany(context.Background(), ids, domain.DefaultDownloadOptions()); !errors.Is(err, domain.ErrInvalidQuery) {
+		t.Fatalf("%v", err)
+	}
+	if len(store.files) != 0 {
+		t.Fatalf("started downloads %v", keys(store.files))
+	}
+	if res, err := svc.DownloadMany(context.Background(), ids[:2], domain.DefaultDownloadOptions()); err != nil || len(res) != 2 {
+		t.Fatalf("%v %d", err, len(res))
+	}
+}

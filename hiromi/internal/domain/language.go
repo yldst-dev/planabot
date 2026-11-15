@@ -89,16 +89,6 @@ func KnownLanguage(name string) bool {
 	return ok
 }
 
-func LanguageLabel(name string) string {
-	if name == "" {
-		return ""
-	}
-	if lang, ok := LookupLanguage(name); ok {
-		return lang.LocalName
-	}
-	return name
-}
-
 func LanguagesFromMask(mask uint64) []Language {
 	out := make([]Language, 0, 8)
 	for i, e := range orderedLanguages {

@@ -3,6 +3,8 @@ package crypto
 import (
 	"encoding/base64"
 	"strings"
+
+	"github.com/yldst-dev/send.vis.ee-api/internal/domain"
 )
 
 func Encode(b []byte) string {
@@ -10,25 +12,7 @@ func Encode(b []byte) string {
 }
 
 func Decode(s string) ([]byte, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil, nil
-	}
-	encodings := []*base64.Encoding{
-		base64.RawURLEncoding,
-		base64.URLEncoding,
-		base64.StdEncoding,
-		base64.RawStdEncoding,
-	}
-	var last error
-	for _, enc := range encodings {
-		out, err := enc.DecodeString(s)
-		if err == nil {
-			return out, nil
-		}
-		last = err
-	}
-	return nil, last
+	return domain.DecodeBase64(s)
 }
 
 func DecodeNonce(s string) ([]byte, error) {

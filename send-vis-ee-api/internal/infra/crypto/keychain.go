@@ -136,16 +136,3 @@ func (k *Keychain) DecryptMetadata(ciphertext []byte) (Metadata, error) {
 	}
 	return meta, nil
 }
-
-func DeriveAuthKey(secret []byte, password, shareURL string) ([]byte, error) {
-	kc, err := FromSecret(secret)
-	if err != nil {
-		return nil, err
-	}
-	if password != "" {
-		if err := kc.SetPassword(password, shareURL); err != nil {
-			return nil, err
-		}
-	}
-	return kc.AuthKey(), nil
-}

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -151,14 +153,14 @@ func (a *API) call(ctx context.Context, method string, payload any, dest any) er
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.base+"/bot"+a.token+"/"+method, body)
 	if err != nil {
-		return err
+		return stripURL(method, err)
 	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := a.http.Do(req)
 	if err != nil {
-		return err
+		return stripURL(method, err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
@@ -179,4 +181,12 @@ func (a *API) call(ctx context.Context, method string, payload any, dest any) er
 		return nil
 	}
 	return json.Unmarshal(envelope.Result, dest)
+}
+
+func stripURL(method string, err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%w: %s: %w", domain.ErrRemote, method, ue.Err)
+	}
+	return err
 }

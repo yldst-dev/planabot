@@ -3,6 +3,7 @@ package history
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -13,7 +14,6 @@ import (
 type JSONStore struct {
 	path string
 	mu   sync.Mutex
-	mem  *Memory
 }
 
 type diskFormat struct {
@@ -24,16 +24,48 @@ func OpenJSON(path string) (*JSONStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	s := &JSONStore{path: path, mem: NewMemory()}
-	raw, err := os.ReadFile(path)
+	s := &JSONStore{path: path}
+	if _, err := s.load(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *JSONStore) Save(ctx context.Context, file *domain.ManagedFile) error {
+	return s.update(ctx, func(m *Memory) error { return m.Save(ctx, file) })
+}
+
+func (s *JSONStore) Get(ctx context.Context, id string) (*domain.ManagedFile, error) {
+	m, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	return m.Get(ctx, id)
+}
+
+func (s *JSONStore) List(ctx context.Context) ([]*domain.ManagedFile, error) {
+	m, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	return m.List(ctx)
+}
+
+func (s *JSONStore) Delete(ctx context.Context, id string) error {
+	return s.update(ctx, func(m *Memory) error { return m.Delete(ctx, id) })
+}
+
+func (s *JSONStore) load() (*Memory, error) {
+	m := NewMemory()
+	raw, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return s, nil
+			return m, nil
 		}
 		return nil, err
 	}
 	if len(raw) == 0 {
-		return s, nil
+		return m, nil
 	}
 	var disk diskFormat
 	if err := json.Unmarshal(raw, &disk); err != nil {
@@ -41,40 +73,28 @@ func OpenJSON(path string) (*JSONStore, error) {
 	}
 	for _, f := range disk.Files {
 		if f != nil {
-			_ = s.mem.Save(context.Background(), f)
+			_ = m.Save(context.Background(), f)
 		}
 	}
-	return s, nil
+	return m, nil
 }
 
-func (s *JSONStore) Save(ctx context.Context, file *domain.ManagedFile) error {
+func (s *JSONStore) update(ctx context.Context, mutate func(*Memory) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.mem.Save(ctx, file); err != nil {
+	unlock, err := lockFile(s.path + ".lock")
+	if err != nil {
 		return err
 	}
-	return s.flush(ctx)
-}
-
-func (s *JSONStore) Get(ctx context.Context, id string) (*domain.ManagedFile, error) {
-	return s.mem.Get(ctx, id)
-}
-
-func (s *JSONStore) List(ctx context.Context) ([]*domain.ManagedFile, error) {
-	return s.mem.List(ctx)
-}
-
-func (s *JSONStore) Delete(ctx context.Context, id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.mem.Delete(ctx, id); err != nil {
+	defer unlock()
+	m, err := s.load()
+	if err != nil {
 		return err
 	}
-	return s.flush(ctx)
-}
-
-func (s *JSONStore) flush(ctx context.Context) error {
-	files, err := s.mem.List(ctx)
+	if err := mutate(m); err != nil {
+		return err
+	}
+	files, err := m.List(ctx)
 	if err != nil {
 		return err
 	}
@@ -82,9 +102,18 @@ func (s *JSONStore) flush(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(s.path), filepath.Base(s.path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	_, writeErr := tmp.Write(raw)
+	if err := errors.Join(writeErr, tmp.Close()); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Rename(tmp.Name(), s.path); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	return nil
 }

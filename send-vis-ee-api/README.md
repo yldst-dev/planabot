@@ -68,7 +68,7 @@ go run ./cmd/api
 go run ./cmd/sendvis instance
 ```
 
-기본 수신 주소는 `127.0.0.1:8080`입니다. 이력 파일은 사용자 설정 폴더의 `sendvis/history.json`입니다. 여기에는 공유 비밀과 `owner_token`이 들어 있으니 저장소에 넣지 마십시오.
+기본 수신 주소는 `127.0.0.1:8080`입니다. 이력 파일은 사용자 설정 폴더의 `sendvis/history.json`입니다. 여기에는 공유 비밀과 `owner_token`이 들어 있으니 저장소에 넣지 마십시오. CLI와 서버가 이 파일을 함께 쓸 수 있도록 쓸 때마다 파일을 다시 읽어 합치고, `history.json.lock`으로 잠급니다(macOS, Linux, BSD. 그 밖의 운영체제는 잠그지 않습니다).
 
 환경 변수:
 
@@ -77,10 +77,14 @@ go run ./cmd/sendvis instance
 | `SENDVIS_HOST` | `https://send.vis.ee` | Send 인스턴스 |
 | `SENDVIS_LISTEN` | `127.0.0.1:8080` | 로컬 API 주소 |
 | `SENDVIS_HISTORY` | 사용자 설정 폴더 | 업로드 이력 JSON |
-| `SENDVIS_API_KEY` | 비움 | 설정하면 `X-API-Key` 필요 |
+| `SENDVIS_API_KEY` | 비움 | 설정하면 `X-API-Key` 필요. 비우면 아래 로컬 전용 규칙을 적용 |
 | `SENDVIS_USER_AGENT` | `sendvis-unofficial/1.0` | 원격 요청 UA |
 
 로컬 REST를 `127.0.0.1` 밖으로 열면 `SENDVIS_API_KEY`를 켜십시오. 응답에 복호화 비밀과 소유 토큰이 포함됩니다.
+
+CORS 헤더는 보내지 않으므로 브라우저 페이지는 이 API의 응답을 읽을 수 없습니다. 키를 비워 두면 `Origin` 헤더가 있는 요청과 `localhost`나 루프백 주소가 아닌 `Host` 요청(DNS 리바인딩)은 403으로 거절합니다. `/healthz`는 예외입니다. 브라우저나 다른 호스트 이름에서 쓰려면 키를 설정하십시오.
+
+원격 요청은 응답 헤더를 30초 안에 받지 못하면 실패합니다. 본문 스트림에는 시간 제한이 없습니다. 다른 호스트의 공유 주소를 넘기면 `invalid share url`로 거절합니다.
 
 ## CLI
 
@@ -118,7 +122,7 @@ curl -sS --data-binary @./hello.txt \
 | 메서드 | 경로 | 설명 |
 | --- | --- | --- |
 | GET | `/healthz` | 생존 확인 |
-| GET | `/v1/instance` | 원격 한도와 버전 |
+| GET | `/v1/instance` | 원격 한도와 버전. 5분 동안 캐시 |
 | POST | `/v1/files` | 업로드 |
 | GET | `/v1/files` | 로컬 이력 |
 | GET | `/v1/files/{id}` | 상세, 기본으로 원격 새로고침 |

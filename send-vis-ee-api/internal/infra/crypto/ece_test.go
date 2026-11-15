@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"testing"
 )
@@ -82,5 +83,18 @@ func TestDecryptRejectsTamper(t *testing.T) {
 	_, err := io.ReadAll(Decrypt(bytes.NewReader(buf), ikm))
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestDecryptRejectsOversizedRecordSize(t *testing.T) {
+	ikm := bytes.Repeat([]byte{0x55}, 16)
+	for _, rs := range []uint32{maxRecordSize + 1, 1 << 31, 0xFFFFFFFF} {
+		header := make([]byte, HeaderLen)
+		binary.BigEndian.PutUint32(header[16:20], rs)
+		stream := append(header, bytes.Repeat([]byte{0xAA}, 64)...)
+		_, err := io.ReadAll(Decrypt(bytes.NewReader(stream), ikm))
+		if err != errHeader {
+			t.Fatalf("record size %d: got %v", rs, err)
+		}
 	}
 }

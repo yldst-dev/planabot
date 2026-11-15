@@ -276,3 +276,60 @@ func TestDownloadGalleryHTTP(t *testing.T) {
 		t.Fatalf("saved %+v failed %+v", body.Saved, body.Failed)
 	}
 }
+
+func TestDownloadsAreNotReachableWithGET(t *testing.T) {
+	srv := httptest.NewServer(testHandler())
+	defer srv.Close()
+	for _, path := range []string{"/v1/galleries/123/download", "/v1/downloads?ids=123"} {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("%s: status %d", path, resp.StatusCode)
+		}
+	}
+}
+
+func TestBrowserPagesCannotStartDownloads(t *testing.T) {
+	srv := httptest.NewServer(testHandler())
+	defer srv.Close()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/galleries/123/download", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", "https://attacker.example")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodOptions, srv.URL+"/v1/galleries/123/download", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", "https://attacker.example")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if methods := resp.Header.Get("Access-Control-Allow-Methods"); strings.Contains(methods, "POST") {
+		t.Fatalf("preflight allows %q", methods)
+	}
+
+	resp, err = http.Get(srv.URL + "/v1/galleries/123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatal("read-only endpoints stay open to pages")
+	}
+}

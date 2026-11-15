@@ -53,6 +53,11 @@ func NewShareService(g *GalleryService, d *DownloadService, u port.ShareUploader
 	}
 }
 
+func (s *ShareService) UploadOnly() *ShareService {
+	s.telegramLimit = 0
+	return s
+}
+
 func (s *ShareService) Preview(ctx context.Context, id uint64) (*SharePreview, error) {
 	g, err := s.galleries.Get(ctx, id)
 	if err != nil {

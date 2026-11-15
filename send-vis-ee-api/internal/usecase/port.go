@@ -42,7 +42,6 @@ type RemoteMetadata struct {
 	Manifest      domain.Manifest
 	TTLMillis     int64
 	FinalDownload bool
-	RequiresPass  bool
 }
 
 type OwnerInfo struct {
@@ -76,7 +75,6 @@ type DownloadInput struct {
 	ID       string
 	URL      string
 	Password string
-	DestHint string
 }
 
 type PasswordInput struct {

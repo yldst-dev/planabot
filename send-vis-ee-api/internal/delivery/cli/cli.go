@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/yldst-dev/send.vis.ee-api/internal/config"
+	"github.com/yldst-dev/send.vis.ee-api/internal/domain"
 	"github.com/yldst-dev/send.vis.ee-api/internal/infra/history"
 	"github.com/yldst-dev/send.vis.ee-api/internal/infra/sendhost"
 	"github.com/yldst-dev/send.vis.ee-api/internal/usecase"
@@ -23,7 +24,7 @@ func Run(args []string) error {
 		return fmt.Errorf("command required")
 	}
 	cfg := config.FromEnv()
-	host, err := sendhost.New(cfg.Host, sendhost.WithUserAgent(cfg.UserAgent))
+	host, err := sendhost.New(cfg.Host, sendhost.WithUserAgent(cfg.UserAgent), sendhost.WithRequestTimeout(cfg.RequestTimeout))
 	if err != nil {
 		return err
 	}
@@ -147,7 +148,7 @@ func download(ctx context.Context, svc *usecase.Service, args []string) error {
 	defer body.Close()
 	dest := *out
 	if st, err := os.Stat(dest); err == nil && st.IsDir() {
-		dest = filepath.Join(dest, meta.Name)
+		dest = filepath.Join(dest, domain.ManagedFile{Name: meta.Name}.BaseName())
 	}
 	f, err := os.Create(dest)
 	if err != nil {

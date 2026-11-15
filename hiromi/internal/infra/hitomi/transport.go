@@ -63,30 +63,37 @@ func newHTTPClient(timeout time.Duration, disableSNI bool) *http.Client {
 			if err != nil {
 				return nil, err
 			}
-			if len(ips) == 0 {
-				return nil, &net.DNSError{Err: "no records", Name: host, IsNotFound: true}
-			}
-			raw, err := dialer.DialContext(ctx, network, net.JoinHostPort(ips[0], port))
-			if err != nil {
-				return nil, err
-			}
-			cfg := &tls.Config{
-				InsecureSkipVerify: true,
-				MinVersion:         tls.VersionTLS12,
-				NextProtos:         []string{"h2", "http/1.1"},
-			}
-			c := tls.Client(raw, cfg)
-			if err := c.HandshakeContext(ctx); err != nil {
-				_ = raw.Close()
-				return nil, err
-			}
-			return c, nil
+			return dialEmptySNI(ctx, dialer, network, host, ips, port)
 		},
 	}
 	return &http.Client{
 		Transport: &hostSwitch{gold: gold, front: front},
 		Timeout:   timeout,
 	}
+}
+
+func dialEmptySNI(ctx context.Context, dialer *net.Dialer, network, host string, ips []string, port string) (net.Conn, error) {
+	cfg := &tls.Config{
+		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS12,
+		NextProtos:         []string{"h2", "http/1.1"},
+	}
+	var last error = &net.DNSError{Err: "no records", Name: host, IsNotFound: true}
+	for _, ip := range ips {
+		raw, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip, port))
+		if err != nil {
+			last = err
+			continue
+		}
+		c := tls.Client(raw, cfg)
+		if err := c.HandshakeContext(ctx); err != nil {
+			_ = raw.Close()
+			last = err
+			continue
+		}
+		return c, nil
+	}
+	return nil, last
 }
 
 type hostSwitch struct {

@@ -89,16 +89,3 @@ func (c *Client) posterURL(hash string) string {
 	}
 	return fmt.Sprintf("https://a.%s/videos/posters/%s/%s.webp", c.cfg.CDN, dir, hash)
 }
-
-func (c *Client) absolute(path string) string {
-	if path == "" {
-		return ""
-	}
-	if len(path) >= 4 && (path[:4] == "http") {
-		return path
-	}
-	if path[0] != '/' {
-		path = "/" + path
-	}
-	return c.cfg.Front + path
-}

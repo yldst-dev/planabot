@@ -1,9 +1,10 @@
+//go:build live
+
 package hitomi
 
 import (
 	"context"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
@@ -11,12 +12,6 @@ import (
 )
 
 func TestLiveGalleryAndIndex(t *testing.T) {
-	if os.Getenv("HIROMI_LIVE") == "" && testing.Short() {
-		t.Skip("set HIROMI_LIVE=1")
-	}
-	if os.Getenv("HIROMI_LIVE") == "" {
-		t.Skip("set HIROMI_LIVE=1 to run live checks")
-	}
 	c := New(DefaultConfig())
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()

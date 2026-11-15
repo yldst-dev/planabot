@@ -14,7 +14,7 @@ import (
 
 func main() {
 	cfg := config.FromEnv()
-	host, err := sendhost.New(cfg.Host, sendhost.WithUserAgent(cfg.UserAgent))
+	host, err := sendhost.New(cfg.Host, sendhost.WithUserAgent(cfg.UserAgent), sendhost.WithRequestTimeout(cfg.RequestTimeout))
 	if err != nil {
 		log.Fatalf("host: %v", err)
 	}
