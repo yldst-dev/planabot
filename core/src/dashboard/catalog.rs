@@ -546,6 +546,14 @@ pub(crate) const FIELDS: &[Field] = &[
         Kind::Bool,
     ),
     hinted(
+        "PLANABRAIN_ANTHROPIC_WEB_SEARCH",
+        "search",
+        "Claude 내장 웹 검색",
+        "Claude 응답 제공자에서 모델이 Anthropic 내장 웹 검색을 직접 씁니다. 켜면 Ollama 선검색은 건너뜁니다. 검색 1,000회당 10달러가 듭니다.",
+        Kind::Bool,
+        "1",
+    ),
+    hinted(
         "PLANABRAIN_OLLAMA_SEARCH_HOST",
         "search",
         "검색 호스트",
