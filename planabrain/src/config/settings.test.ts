@@ -104,6 +104,12 @@ test("ollama pre-search needs the flag, a key and a valid host", () => {
   assert.throws(() => withEnv({ ...CODEX_ENV, OLLAMA_API_KEY: "k", PLANABRAIN_OLLAMA_SEARCH_HOST: "ftp://x" }, loadSettings), /PLANABRAIN_OLLAMA_SEARCH_HOST/);
 });
 
+test("the claude server search flag is on by default and must be a boolean", () => {
+  assert.equal(withEnv(CODEX_ENV, loadSettings).anthropicWebSearchEnabled, true);
+  assert.equal(withEnv({ ...CODEX_ENV, PLANABRAIN_ANTHROPIC_WEB_SEARCH: "0" }, loadSettings).anthropicWebSearchEnabled, false);
+  assert.throws(() => withEnv({ ...CODEX_ENV, PLANABRAIN_ANTHROPIC_WEB_SEARCH: "maybe" }, loadSettings), /PLANABRAIN_ANTHROPIC_WEB_SEARCH/);
+});
+
 test("thinking mode accepts known levels and rejects others", () => {
   assert.equal(withEnv(CODEX_ENV, loadSettings).chatThinkingMode, "default");
   assert.equal(withEnv({ ...CODEX_ENV, PLANABRAIN_CHAT_THINKING_MODE: "none" }, loadSettings).chatThinkingMode, "off");

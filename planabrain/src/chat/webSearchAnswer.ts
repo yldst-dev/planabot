@@ -3,7 +3,7 @@ import { normalizeCurrentTurnText, isCurrentInformationRequest, isExplicitSearch
 import { normalizeQuestionForMemory, buildCurrentTurnReference, buildMemoryContextMessage, buildTurnMessages } from "./promptContext.js";
 import { buildLongRangeWeatherReply } from "./weatherPolicy.js";
 import { looksUserInitiatedIntimacy, invokeChatWithIntimacyRecovery } from "./intimacyMode.js";
-import { usesPreSearchContext, performPreSearch, type ChatInvocationMetadata, type ChatMessage, mergeWebCitations } from "../integrations/chat.js";
+import { usesPreSearchContext, usesServerSearch, performPreSearch, type ChatInvocationMetadata, type ChatMessage, mergeWebCitations } from "../integrations/chat.js";
 import { finalizeAnswerForDelivery } from "./deliveryRewrite.js";
 import { WEB_FETCH_DISABLED_NOTICE, buildReadableLinksContext, collectReadableLinks, createWebFetchRunner, isDirectLinkShown, readableTurnText } from "./linkContext.js";
 import { canFetchUrls } from "../integrations/webFetch.js";
@@ -45,7 +45,9 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
     ? signals.searchFollowUp && canFollowUpSearch(priorUserTexts.at(-1))
     : isSearchFollowUp(priorUserTexts.at(-1), currentTurnText));
   const searchFollowUp = !currentInfoRequired && !explicitSearch && followUpSignal;
+  const serverSearch = usesServerSearch(params.settings) && !socialTurn && !intimacyActive;
   const searchEnabled =
+    !serverSearch &&
     usesPreSearchContext(params.settings) &&
     !(intimacyActive && !explicitSearch && !currentInfoRequired && !searchFollowUp);
   const wantsPreSearch =
@@ -91,6 +93,7 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
     : undefined;
   const systemContent = buildChatSystemPrompt(params.settings, {
     searchEnabled: searchEnabled && !(wantsPreSearch && !preSearch),
+    searchTool: serverSearch,
     intimacyActive,
   });
   const replay = continuous
@@ -99,9 +102,10 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
   const epoch = replay.epoch;
   let invocation: ChatInvocationMetadata = await invokeChatWithIntimacyRecovery({
     settings: params.settings,
-    maxContinuations: deliveryEnabled && !searchEnabled ? 0 : 1,
+    maxContinuations: deliveryEnabled && !searchEnabled && !serverSearch ? 0 : 1,
     intimacyActive,
     webFetch: webFetch?.run,
+    webSearch: serverSearch,
     messages: buildTurnMessages({
       systemContent,
       history: replay.messages,
@@ -120,7 +124,9 @@ export async function answerTurn(params: AnswerTurnParams): Promise<TurnAnswer> 
     invocation = { ...invocation, citations: mergeWebCitations(preSearch.citations, invocation.citations), searchUsed: true };
   }
   const answeredAt = Date.now();
-  const selected = applySourceSelection(invocation.content, invocation.citations);
+  const selected = serverSearch
+    ? { content: invocation.content, citations: invocation.citations, selection: "picked" as const }
+    : applySourceSelection(invocation.content, invocation.citations);
   if (wantsPreSearch && selected.citations.length === 0) {
     console.error(
       `[planabrain] 검증된 출처 없이 답변: 검색결과=${preSearch?.citations.length ?? 0} 출처지정=${selected.selection}`,

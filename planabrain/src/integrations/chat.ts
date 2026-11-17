@@ -40,11 +40,14 @@ export async function invokeChatWithMetadata(
   };
 
   const provider = params.settings.aiProvider;
-  const providerInvoke = provider === "anthropic" ? invokeAnthropicChat : invokeCodexChat;
+  const providerInvoke: (settings: ChatInvocationParams["settings"], messages: ChatMessage[], toolMode?: ToolMode, webSearch?: boolean) => Promise<ChatInvocationResult> =
+    provider === "anthropic" ? invokeAnthropicChat : invokeCodexChat;
+  let webSearch = params.webSearch === true;
   const invoke = (messages: ChatMessage[], toolMode?: ToolMode): Promise<ChatInvocationResult> =>
-    measureStage(`provider:${provider}`, () => providerInvoke(params.settings, messages, toolMode));
+    measureStage(`provider:${provider}`, () => providerInvoke(params.settings, messages, toolMode, webSearch));
   let toolMode: ToolMode | undefined = params.webFetch ? "auto" : undefined;
   for (let attempt = 0; attempt <= maxContinuations; attempt += 1) {
+    webSearch = webSearch && attempt === 0;
     let result = await invoke(workingMessages, toolMode);
     for (let round = 1; params.webFetch && result.toolCalls?.length; round += 1) {
       const fitted = result.toolCalls.length > MAX_WEB_FETCH_CALLS
@@ -132,5 +135,5 @@ export function toWireMessage(message: ChatMessage): WireMessage {
 
 export { ProviderRateLimitError } from "./retry.js";
 export { type InputImage, type ChatMessage, type ToolCall, type WebCitation, type WireMessage, type ChatInvocationMetadata, type ChatInvocationParams, type PreSearchContext, type WebFetchRound, type WebFetchRunner } from "./contracts.js";
-export { usesPreSearchContext, buildSearchQuery, SOURCE_SELECTION_INSTRUCTION, performPreSearch } from "./search.js";
+export { usesPreSearchContext, usesServerSearch, buildSearchQuery, SOURCE_SELECTION_INSTRUCTION, performPreSearch } from "./search.js";
 export { parseWebSearchCitations, mergeWebCitations, normalizeCitationUrl, isSecretParam } from "./evidence.js";

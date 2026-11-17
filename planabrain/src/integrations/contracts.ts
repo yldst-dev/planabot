@@ -65,6 +65,7 @@ export type ChatInvocationParams = {
   messages: ChatMessage[];
   maxContinuations?: number;
   webFetch?: WebFetchRunner;
+  webSearch?: boolean;
 };
 
 export const WEB_FETCH_TOOL = {

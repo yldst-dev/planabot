@@ -102,7 +102,7 @@ async function main(): Promise<void> {
   const loaded = loadSettings();
   const mode = values.thinking ?? loaded.chatThinkingMode;
   if (!["default", "off", "minimal", "low", "medium", "high"].includes(mode)) throw new Error("지원하지 않는 추론 설정입니다.");
-  const settings: Settings = { ...loaded, chatModel: values.model ?? loaded.chatModel, chatThinkingMode: mode as Settings["chatThinkingMode"], systemPrompt: LIVE_DEFAULT_SYSTEM_PROMPT, deliveryRewriteEnabled: true, continuousChat: true, ollamaWebSearchEnabled: false, webFetchEnabled: false, intimacyEnabled: false };
+  const settings: Settings = { ...loaded, chatModel: values.model ?? loaded.chatModel, chatThinkingMode: mode as Settings["chatThinkingMode"], systemPrompt: LIVE_DEFAULT_SYSTEM_PROMPT, deliveryRewriteEnabled: true, continuousChat: true, ollamaWebSearchEnabled: false, anthropicWebSearchEnabled: false, webFetchEnabled: false, intimacyEnabled: false };
   let failures = 0;
   for (let repeat = 0; repeat < repeats; repeat += 1) {
     for (const entry of cases.slice(0, limit)) {

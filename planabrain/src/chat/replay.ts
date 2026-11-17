@@ -8,9 +8,10 @@ import { type Replay, type RecentTurnInput } from "./types.js";
 
 export const MAX_REPLAY_MESSAGES = 40;
 
-export function buildChatSystemPrompt(settings: Settings, options: { intimacyActive?: boolean; searchEnabled?: boolean; } = {}): string {
+export function buildChatSystemPrompt(settings: Settings, options: { intimacyActive?: boolean; searchEnabled?: boolean; searchTool?: boolean; } = {}): string {
   const basePrompt = buildSystemPrompt(settings, {
     searchEnabled: options.searchEnabled ?? usesPreSearchContext(settings),
+    searchTool: options.searchTool,
     intimacyActive: options.intimacyActive,
   });
   const deliveryRules = settings.deliveryRewriteEnabled

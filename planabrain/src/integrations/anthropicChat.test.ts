@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { answerTurn } from "../chat/webSearchAnswer.js";
 import { currentExecution, runExecution } from "../runtime/execution.js";
 import { installFetch, jsonResponse } from "../testing/codex.js";
 import { testSettings } from "../testing/settings.js";
@@ -126,5 +127,123 @@ test("anthropic continues an answer cut off by max_tokens", async () => {
     assert.match(result.content, /첫 문장\.[\s\S]*다음 문장\./u);
     const last = (mock.requests[1]?.body.messages as Array<{ role: string; }>).at(-1);
     assert.equal(last?.role, "user");
+  } finally { mock.restore(); }
+});
+
+const SEARCH_RESULT_BLOCK = {
+  type: "web_search_tool_result",
+  tool_use_id: "srvtoolu_1",
+  content: [{ type: "web_search_result", url: "https://weather.example/seoul", title: "서울 날씨", encrypted_content: "enc", page_age: null }],
+};
+
+function searchMessage(): Response {
+  return jsonResponse({
+    type: "message",
+    role: "assistant",
+    model: "claude-opus-5-5",
+    content: [
+      { type: "thinking", thinking: "", signature: "sig" },
+      { type: "text", text: "검색해 보겠습니다." },
+      { type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: { query: "서울 날씨" } },
+      SEARCH_RESULT_BLOCK,
+      { type: "text", text: "서울은 " },
+      {
+        type: "text",
+        text: "맑고 28도입니다.",
+        citations: [{ type: "web_search_result_location", url: "https://weather.example/seoul", title: "서울 날씨", encrypted_index: "idx", cited_text: "Seoul is clear and 28C." }],
+      },
+    ],
+    stop_reason: "end_turn",
+    usage: { input_tokens: 30, output_tokens: 6, server_tool_use: { web_search_requests: 1 } },
+  });
+}
+
+test("anthropic attaches the server search tool only when asked and keeps just the answer after the search", async () => {
+  const mock = installFetch(() => searchMessage());
+  try {
+    const result = await invokeChatWithMetadata({ settings, maxContinuations: 0, webSearch: true, messages: [{ role: "user", content: "서울 날씨 알려줘" }] });
+    assert.deepEqual(mock.requests[0]?.body.tools, [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }]);
+    assert.equal("tool_choice" in mock.requests[0]!.body, false);
+    assert.equal(result.content, "서울은 맑고 28도입니다.");
+    assert.equal(result.searchUsed, true);
+    assert.deepEqual(result.citations, [{ url: "https://weather.example/seoul", title: "서울 날씨", evidence: "Seoul is clear and 28C." }]);
+    await invokeChatWithMetadata({ settings, maxContinuations: 0, messages: [{ role: "user", content: "안녕" }] });
+    assert.equal("tools" in mock.requests[1]!.body, false);
+  } finally { mock.restore(); }
+});
+
+test("anthropic resumes a paused search turn with the paused blocks unchanged", async () => {
+  const paused = [{ type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: { query: "서울 날씨" } }];
+  const mock = installFetch((_request, index) => index === 1
+    ? jsonResponse({ type: "message", role: "assistant", model: "claude-opus-5-5", content: paused, stop_reason: "pause_turn", usage: { input_tokens: 10, output_tokens: 2 } })
+    : jsonResponse({ type: "message", role: "assistant", model: "claude-opus-5-5", content: [SEARCH_RESULT_BLOCK, { type: "text", text: "맑습니다." }], stop_reason: "end_turn", usage: { input_tokens: 12, output_tokens: 3 } }));
+  try {
+    const result = await runExecution("pause-test", async () => {
+      const answer = await invokeChatWithMetadata({ settings, maxContinuations: 0, webSearch: true, messages: [{ role: "user", content: "서울 날씨 알려줘" }] });
+      assert.equal(currentExecution()?.inputTokens, 22);
+      return answer;
+    });
+    assert.equal(mock.requests.length, 2);
+    const resumed = mock.requests[1]?.body.messages as Array<{ role: string; content: unknown; }>;
+    assert.deepEqual(resumed.at(-1), { role: "assistant", content: paused });
+    assert.equal(result.content, "맑습니다.");
+    assert.equal(result.searchUsed, true);
+  } finally { mock.restore(); }
+});
+
+test("anthropic sends the request again when a search turn stops with tool_use but nothing to run", async () => {
+  const stalled = [
+    { type: "thinking", thinking: "", signature: "sig" },
+    { type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: { query: "서울 날씨" } },
+    SEARCH_RESULT_BLOCK,
+    { type: "thinking", thinking: "", signature: "sig2" },
+  ];
+  const mock = installFetch((_request, index) => index === 1
+    ? jsonResponse({ type: "message", role: "assistant", model: "claude-opus-5-5", content: stalled, stop_reason: "tool_use", usage: { input_tokens: 10, output_tokens: 2 } })
+    : searchMessage());
+  try {
+    const result = await invokeChatWithMetadata({ settings, maxContinuations: 0, webSearch: true, messages: [{ role: "user", content: "서울 날씨 알려줘" }] });
+    assert.equal(mock.requests.length, 2);
+    assert.deepEqual(mock.requests[1]?.body, mock.requests[0]?.body);
+    assert.equal(result.content, "서울은 맑고 28도입니다.");
+  } finally { mock.restore(); }
+});
+
+test("anthropic retries without search only when the 400 names web search", async () => {
+  const rejected = (text: string): Response => jsonResponse({ type: "error", error: { type: "invalid_request_error", message: text } }, 400);
+  const disabled = installFetch((_request, index) => index === 1 ? rejected("web search is not enabled for this organization") : message("검색 없이 답합니다."));
+  try {
+    const result = await invokeChatWithMetadata({ settings, maxContinuations: 0, webSearch: true, messages: [{ role: "user", content: "서울 날씨 알려줘" }] });
+    assert.equal(result.content, "검색 없이 답합니다.");
+    assert.equal(disabled.requests.length, 2);
+    assert.equal("tools" in disabled.requests[1]!.body, false);
+  } finally { disabled.restore(); }
+
+  const unrelated = installFetch(() => rejected("max_tokens: too large"));
+  try {
+    await assert.rejects(invokeChatWithMetadata({ settings, maxContinuations: 0, webSearch: true, messages: [{ role: "user", content: "서울 날씨 알려줘" }] }), ProviderApiError);
+    assert.equal(unrelated.requests.length, 1);
+  } finally { unrelated.restore(); }
+});
+
+test("answerTurn lets the model search itself, skips the pre-search, and appends the cited sources", async () => {
+  const withSearch = { ...settings, anthropicWebSearchEnabled: true };
+  const mock = installFetch((request) => {
+    if (request.url === ANTHROPIC_MESSAGES_URL) return searchMessage();
+    throw new Error(`unexpected fetch: ${request.url}`);
+  });
+  try {
+    const { answer } = await answerTurn({ question: "서울 날씨 알려줘", currentTurnText: "서울 날씨 알려줘", settings: withSearch });
+    assert.equal(mock.requests.length, 1);
+    assert.deepEqual((mock.requests[0]?.body.tools as Array<{ name: string; }>).map((tool) => tool.name), ["web_search"]);
+    assert.match(JSON.stringify(mock.requests[0]?.body.system), /웹 검색 도구로 확인/u);
+    assert.doesNotMatch(JSON.stringify(mock.requests[0]?.body.system), /\[웹 검색 결과\]/u);
+    assert.doesNotMatch(answer, /검색해 보겠습니다/u);
+    assert.match(answer, /서울은 맑고 28도입니다\./u);
+    assert.match(answer, /출처: \[서울 날씨\]\(https:\/\/weather\.example\/seoul\)/u);
+
+    await answerTurn({ question: "안녕", currentTurnText: "안녕", settings: withSearch });
+    assert.equal("tools" in mock.requests[1]!.body, false);
+    assert.doesNotMatch(JSON.stringify(mock.requests[1]?.body.system), /웹 검색 도구로 확인/u);
   } finally { mock.restore(); }
 });

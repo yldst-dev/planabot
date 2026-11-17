@@ -11,6 +11,7 @@ export function testSettings(overrides: Partial<Settings> = {}): Settings {
     ollamaSearchHost: "https://ollama.example",
     ollamaWebSearchEnabled: true,
     ollamaWebSearchMaxResults: 3,
+    anthropicWebSearchEnabled: false,
     webFetchEnabled: false,
     webFetchTimeoutMs: 1000,
     webFetchMaxBytes: 100000,

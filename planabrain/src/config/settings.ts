@@ -11,6 +11,7 @@ export type Settings = {
   ollamaSearchHost?: string;
   ollamaWebSearchEnabled: boolean;
   ollamaWebSearchMaxResults: number;
+  anthropicWebSearchEnabled: boolean;
   webFetchEnabled: boolean;
   webFetchTimeoutMs: number;
   webFetchMaxBytes: number;
@@ -78,6 +79,7 @@ export function loadSettings(): Settings {
     ollamaSearchHost: ollamaApiKeys.length > 0 ? resolveOllamaSearchHost() : undefined,
     ollamaWebSearchEnabled,
     ollamaWebSearchMaxResults: Math.min(10, parseRequiredPositiveIntEnv("PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS", 5, searchActive)),
+    anthropicWebSearchEnabled: parseBooleanEnv("PLANABRAIN_ANTHROPIC_WEB_SEARCH", true),
     webFetchEnabled,
     webFetchTimeoutMs: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_TIMEOUT_MS", 10000, 1000, 30000, webFetchEnabled),
     webFetchMaxBytes: parseBoundedPositiveIntEnv("PLANABRAIN_WEB_FETCH_MAX_BYTES", 1000000, 1024, 5000000, webFetchEnabled),

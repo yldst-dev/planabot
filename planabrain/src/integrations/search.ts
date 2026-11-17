@@ -16,6 +16,10 @@ export function usesPreSearchContext(settings: Settings): boolean {
   return settings.ollamaWebSearchEnabled && settings.ollamaApiKeys.length > 0 && Boolean(settings.ollamaSearchHost);
 }
 
+export function usesServerSearch(settings: Settings): boolean {
+  return settings.aiProvider === "anthropic" && settings.anthropicWebSearchEnabled;
+}
+
 export function buildSearchQuery(text: string): string {
   const normalized = String(text ?? "").trim().replace(/\s+/gu, " ");
   const stripped = normalized

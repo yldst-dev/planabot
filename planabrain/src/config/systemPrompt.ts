@@ -28,6 +28,17 @@ const SEARCH_CONTEXT_PROMPT = [
   "[웹 검색 결과]를 받은 답변은 맨 마지막 줄에 실제로 참고한 결과 번호를 `출처번호: 1, 3`처럼 적고, 참고한 결과가 없으면 `출처번호: 없음`이라고 적습니다.",
 ].join("\n");
 
+const SEARCH_TOOL_PROMPT = [
+  "날짜, 시세, 환율, 금리, 뉴스, 날씨, 통계, 최근 소식, 사실 여부나 최신 여부를 묻는 질문처럼 시의성이 있거나 확실히 알지 못하는 최신 정보는 웹 검색 도구로 확인한 뒤 그 내용에 근거해 답합니다.",
+  "일반 상식, 계산, 잡담, 대화 안에 이미 있는 내용만으로 답할 수 있는 질문에는 검색하지 않습니다.",
+  "검색어에는 질문의 핵심 단어만 쓰고, 사용자의 개인 정보, 기억 내용, 다른 사용자의 발언, 비밀 값은 넣지 않습니다.",
+  "가격, 시세, 요금은 원화 기준 자료를 먼저 찾아 원화로 답하고, 원화 자료를 찾지 못했을 때만 다른 통화로 답하며 그 점을 밝힙니다.",
+  "web_search 같은 도구 호출문이나 도구 이름, 검색 질의 목록을 답변에 출력하지 않고, 검색하겠다는 말도 덧붙이지 않습니다.",
+  "검색 결과에서 확인하지 못한 최신 정보는 추측하지 말고, 확인하지 못했다고 밝힌 뒤 아는 범위에서 답합니다.",
+  "검색 결과에 날짜가 있으면 메타정보의 현재 시각과 비교하고, 날짜를 알 수 없거나 오래된 정보라면 그 점을 밝힙니다.",
+  "출처 줄은 쓰지 않습니다.",
+].join("\n");
+
 const SEARCH_DISABLED_PROMPT = [
   "이번 응답에서는 웹 검색 도구를 사용할 수 없습니다.",
   "web_search 같은 도구 호출문이나 도구 이름, 검색 질의 목록을 답변에 출력하지 않습니다.",
@@ -36,6 +47,7 @@ const SEARCH_DISABLED_PROMPT = [
 
 export type SystemPromptOptions = {
   searchEnabled?: boolean;
+  searchTool?: boolean;
   intimacyActive?: boolean;
   presenceRecovery?: boolean;
 };
@@ -44,7 +56,7 @@ export function buildSystemPrompt(
   settings: Pick<Settings, "systemPrompt" | "intimacyEnabled">,
   options: SystemPromptOptions = {},
 ): string {
-  const searchRules = options.searchEnabled ? SEARCH_CONTEXT_PROMPT : SEARCH_DISABLED_PROMPT;
+  const searchRules = options.searchTool ? SEARCH_TOOL_PROMPT : options.searchEnabled ? SEARCH_CONTEXT_PROMPT : SEARCH_DISABLED_PROMPT;
   const extra: string[] = [];
   if (settings.intimacyEnabled && options.intimacyActive) {
     extra.push(INTIMACY_REGISTER_PROMPT);
