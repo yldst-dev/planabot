@@ -180,6 +180,14 @@ npm run dev
 - 필수: `PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH=1`, `OLLAMA_API_KEY` 또는 `OLLAMA_API_KEYS`
 - 키가 없거나 검색이 실패하거나 결과가 없으면 고정 안내문을 보내지 않고, 모델이 아는 범위에서 답하면서 최신 정보는 확인하지 못했다고 밝힙니다. 예보 범위를 벗어난 날씨 질문만 예외로 고정 안내문("확인 불가")을 보냅니다.
 
+### 웹 검색 (Claude 내장)
+
+- `PLANABRAIN_AI_PROVIDER=anthropic`이면 기본으로 켜지고, `PLANABRAIN_ANTHROPIC_WEB_SEARCH=0`으로 끕니다. Anthropic Console에서 조직의 웹 검색이 켜져 있어야 합니다.
+- 켜면 답변을 만드는 호출에만 Anthropic 서버 도구 `web_search_20250305`(한 턴에 최대 3회)를 붙이고, 검색할지와 검색어는 모델이 정합니다. 질의 재작성, 판단, 전달문 재작성 같은 보조 호출에는 붙이지 않습니다.
+- 켜진 턴은 Ollama 선검색과 `출처번호` 줄을 쓰지 않고, 모델이 인용한 출처만 앱이 검증해 붙입니다. 가격과 시세는 원화 자료를 먼저 찾게 합니다. 인사 같은 단순 대화와 성인 대화 턴은 기존 방식 그대로입니다.
+- 검색 1,000회당 10달러에 결과 토큰 비용이 듭니다. 검색 횟수와 오류 코드는 로그의 `서버 검색 횟수=` 줄에 남습니다.
+- Anthropic이 웹 검색 도구를 거절하면(400에 web search 언급) 그 요청만 검색 없이 한 번 다시 보내고 로그에 남깁니다. 검색 결과 페이지는 같은 턴에 `web_fetch`로 읽을 수 없습니다.
+
 ### 판단 모델 (OpenRouter Jev)
 
 - 턴 판단(할 일과 일정 경로, 최신 정보 필요 여부, 후속 질문, 인사, 기억 관련성)과 기억 저장 판단을 한 번의 호출로 처리합니다.
@@ -227,7 +235,7 @@ OPENROUTER_API_KEY=YOUR_OPENROUTER_API_KEY_HERE
 
 ### 웹 검색과 판단 모델
 
-- `PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH`, `OLLAMA_API_KEY`, `OLLAMA_API_KEYS`, `PLANABRAIN_OLLAMA_SEARCH_HOST`, `PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS`
+- `PLANABRAIN_OLLAMA_ENABLE_WEB_SEARCH`, `OLLAMA_API_KEY`, `OLLAMA_API_KEYS`, `PLANABRAIN_OLLAMA_SEARCH_HOST`, `PLANABRAIN_OLLAMA_WEB_SEARCH_MAX_RESULTS`, `PLANABRAIN_ANTHROPIC_WEB_SEARCH`
 - `PLANABRAIN_DECISION_PROVIDER`, `OPENROUTER_API_KEY`, `PLANABRAIN_DECISION_API_KEY`, `PLANABRAIN_DECISION_BASE_URL`, `PLANABRAIN_DECISION_MODEL`, `PLANABRAIN_DECISION_TIMEOUT_MS`, `PLANABRAIN_DECISION_CODEX_TIMEOUT_MS`
 
 ### 장기 메모리
